@@ -33,6 +33,9 @@ def write_generation_outputs(
     routing_config: RoutingConfig,
 ) -> dict[str, object]:
     """Write outbounds, routes, and manifest artifacts for Phase 3 generation."""
+    if routing_config.mode != "dedicated_inbound":
+        raise ValueError("Only dedicated_inbound routing mode is supported in Phase 3b.")
+
     generated_nodes, rejected_candidates = _select_candidates(
         candidates,
         generation_config.tag_prefix,

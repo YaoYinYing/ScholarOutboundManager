@@ -97,6 +97,26 @@ def test_generation_outputs_do_not_expose_raw_uri(tmp_path) -> None:
     assert "vless://" not in rendered
 
 
+def test_write_generation_outputs_rejects_unsupported_routing_mode(tmp_path) -> None:
+    """Reject routing modes outside the Phase 3b boundary."""
+    import pytest
+
+    with pytest.raises(ValueError, match="Only dedicated_inbound routing mode is supported in Phase 3b"):
+        write_generation_outputs(
+            candidates=[_make_candidate(raw_name="node-1")],
+            output_config=_make_output_config(tmp_path),
+            generation_config=_make_generation_config(),
+            routing_config=RoutingConfig(
+                mode="domain_match",
+                inbound_tags=["scholar-in"],
+                fail_closed=True,
+            ),
+        )
+
+    assert not (tmp_path / "outbounds.json").exists()
+    assert not (tmp_path / "routes.json").exists()
+
+
 def _make_candidate(**overrides: object) -> CandidateProxy:
     """Construct one baseline candidate for generation tests."""
     candidate_data: dict[str, object] = {
