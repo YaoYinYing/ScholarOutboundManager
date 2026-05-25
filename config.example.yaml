@@ -1,0 +1,40 @@
+# Example configuration for ScholarOutboundManager.
+
+subscriptions:
+  - "https://example.invalid/subscription-1"
+  - "https://example.invalid/subscription-2"
+
+filters:
+  include_keywords:
+    - "scholar"
+    - "google"
+  exclude_keywords:
+    - "ipv6"
+    - "warp"
+
+probe:
+  timeout_seconds: 15
+  concurrency: 1
+  cache_ttl_hours: 24
+  failure_backoff_hours: 48
+  allow_network_probe: false
+
+xray:
+  binary_path: "/usr/local/bin/xray"
+  runtime_dir: ".runtime"
+  local_socks_host: "127.0.0.1"
+  local_socks_port: 0
+
+output:
+  outbounds_path: "generated/google_scholar_outbounds.json"
+  routes_path: "generated/google_scholar_routes.json"
+  manifest_path: "generated/google_scholar_manifest.json"
+  history_dir: "state_data/history"
+
+generation:
+  tag_prefix: "google-scholar-node-"
+  max_passed_nodes: 3
+  routing_mode: "dedicated_inbound"
+  fail_closed: true
+  fallback_blackhole_tag: "google-scholar-unavailable"
+  previous_output_max_age_hours: 168

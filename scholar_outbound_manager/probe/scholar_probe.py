@@ -1,0 +1,1 @@
+"""Google Scholar probe logic."""

@@ -1,0 +1,5 @@
+proxies:
+  - name: "sample-node"
+    type: "vless"
+    server: "example.invalid"
+    port: 443
