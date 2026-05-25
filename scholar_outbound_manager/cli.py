@@ -12,8 +12,12 @@ from scholar_outbound_manager.config import ConfigError
 from scholar_outbound_manager.config import load_config
 from scholar_outbound_manager.generation import write_generation_outputs
 from scholar_outbound_manager.io import load_candidates
+from scholar_outbound_manager.probe.batch_probe import BatchProbeOptions
+from scholar_outbound_manager.probe.batch_probe import probe_candidates_sequential
+from scholar_outbound_manager.probe.candidate_probe import CandidateProbeOptions
 from scholar_outbound_manager.runtime import prepare_candidate_runtime
 from scholar_outbound_manager.selection import select_candidate_by_index
+from scholar_outbound_manager.state.probe_state import write_probe_artifacts
 from scholar_outbound_manager.xray.process import test_xray_config
 
 UNIMPLEMENTED_MESSAGE = "Subcommand '{name}' is not implemented in Phase 0.5."
@@ -30,7 +34,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
 
-    for command_name in ("fetch", "probe"):
+    fetch_parser = subparsers.add_parser("fetch")
+    fetch_parser.add_argument("--config", default="config.yaml")
+    fetch_parser.set_defaults(handler=_handle_unimplemented)
+
+    probe_parser = subparsers.add_parser("probe")
+    probe_parser.add_argument("--config", default="config.yaml")
+    probe_parser.add_argument("--candidates", required=True)
+    probe_parser.add_argument("--summary-output", default="state_data/probe_summary.json")
+    probe_parser.add_argument("--passed-candidates-output", default="state_data/passed_candidates.json")
+    probe_parser.add_argument("--max-candidates", type=int)
+    probe_parser.add_argument("--max-passed", type=int)
+    probe_parser.add_argument("--include-unsupported", action="store_true")
+    probe_parser.add_argument("--no-stop-after-max-passed", action="store_true")
+    probe_parser.add_argument("--query", default="test")
+    probe_parser.add_argument("--skip-query", action="store_true")
+    probe_parser.add_argument("--startup-timeout", type=float, default=5.0)
+    probe_parser.add_argument("--request-timeout", type=float)
+    probe_parser.add_argument("--xray-test-timeout", type=float)
+    probe_parser.add_argument("--runtime-config-name", default="candidate_probe_runtime.json")
+    probe_parser.set_defaults(handler=_handle_probe)
+
+    for command_name in ():
         subparser = subparsers.add_parser(command_name)
         subparser.add_argument("--config", default="config.yaml")
         subparser.set_defaults(handler=_handle_unimplemented)
@@ -85,6 +110,62 @@ def _handle_generate(args: argparse.Namespace) -> int:
     print(f"routes_path: {summary['routes_path']}")
     print(f"manifest_path: {summary['manifest_path']}")
     return 0
+
+
+def _handle_probe(args: argparse.Namespace) -> int:
+    """Probe local candidates sequentially and write review-safe probe artifacts."""
+    try:
+        _validate_positive_int_or_none(args.max_candidates, "max-candidates")
+        _validate_positive_int_or_none(args.max_passed, "max-passed")
+        _validate_positive_float(args.startup_timeout, "startup-timeout")
+        if args.request_timeout is not None:
+            _validate_positive_float(args.request_timeout, "request-timeout")
+        if args.xray_test_timeout is not None:
+            _validate_positive_float(args.xray_test_timeout, "xray-test-timeout")
+        _validate_runtime_config_name(args.runtime_config_name)
+        _validate_distinct_output_paths(args.summary_output, args.passed_candidates_output)
+
+        config = load_config(args.config)
+        candidates = load_candidates(args.candidates)
+        candidate_options = CandidateProbeOptions(
+            query=args.query,
+            startup_timeout_seconds=args.startup_timeout,
+            request_timeout_seconds=(
+                config.probe.timeout_seconds if args.request_timeout is None else args.request_timeout
+            ),
+            xray_test_timeout_seconds=args.xray_test_timeout,
+            runtime_config_name=args.runtime_config_name,
+            probe_query=not args.skip_query,
+        )
+        batch_options = BatchProbeOptions(
+            candidate_options=candidate_options,
+            max_candidates=args.max_candidates,
+            max_passed=(
+                config.generation.max_passed_nodes if args.max_passed is None else args.max_passed
+            ),
+            stop_after_max_passed=not args.no_stop_after_max_passed,
+            include_unsupported=args.include_unsupported,
+        )
+        summary = probe_candidates_sequential(candidates, config.xray, batch_options)
+        artifacts = write_probe_artifacts(
+            summary_path=args.summary_output,
+            passed_candidates_path=args.passed_candidates_output,
+            candidates=candidates,
+            summary=summary,
+        )
+    except (ConfigError, FileNotFoundError, ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("Probed Scholar candidates.")
+    print(f"total_count: {summary.total_count}")
+    print(f"attempted_count: {summary.attempted_count}")
+    print(f"skipped_count: {summary.skipped_count}")
+    print(f"passed_count: {summary.passed_count}")
+    print(f"failed_count: {summary.failed_count}")
+    print(f"summary_path: {artifacts['summary_path']}")
+    print(f"passed_candidates_path: {artifacts['passed_candidates_path']}")
+    return 0 if summary.passed_count > 0 else 2
 
 
 def _handle_run(args: argparse.Namespace) -> int:
@@ -147,6 +228,24 @@ def _validate_xray_test_timeout(timeout_seconds: float) -> None:
     """Validate the Xray config test timeout value."""
     if timeout_seconds <= 0:
         raise ValueError("xray-test-timeout must be greater than 0.")
+
+
+def _validate_positive_int_or_none(value: int | None, name: str) -> None:
+    """Validate that an optional integer is positive when provided."""
+    if value is not None and value <= 0:
+        raise ValueError(f"{name} must be greater than 0.")
+
+
+def _validate_positive_float(value: float, name: str) -> None:
+    """Validate that a float argument is positive."""
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than 0.")
+
+
+def _validate_distinct_output_paths(summary_output: str, passed_candidates_output: str) -> None:
+    """Validate that probe output paths do not point to the same location."""
+    if Path(summary_output) == Path(passed_candidates_output):
+        raise ValueError("summary-output and passed-candidates-output must be different paths.")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

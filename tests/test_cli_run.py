@@ -224,7 +224,7 @@ def test_run_output_excludes_sensitive_values(tmp_path, capsys) -> None:
 
 def test_fetch_probe_and_inspect_remain_unimplemented(capsys) -> None:
     """Keep unrelated CLI subcommands in the placeholder state."""
-    for command_name in ("fetch", "probe", "inspect"):
+    for command_name in ("fetch", "inspect"):
         exit_code = cli.main([command_name])
         captured = capsys.readouterr()
         assert exit_code == 2
