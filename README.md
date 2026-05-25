@@ -1,65 +1,225 @@
 # ScholarOutboundManager
 
-ScholarOutboundManager is an independent Python project for conservatively generating Google Scholar-specific Xray/XrayR JSON fragments from third-party proxy subscriptions.
+ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager for offline candidate review, sequential probing, safe inspection, JSON fragment generation, and local runtime preparation.
 
-## Scope
+## Project Status
 
-This project is designed for personal use and intentionally avoids direct system mutation:
+- `fetch` is still not implemented.
+- Current inputs come from a local `candidates.json` file, not from live subscription fetching.
+- `probe` runs sequentially.
+- There is no concurrency.
+- There is no retry or cache layer in the current CLI workflow.
+- `generate` only writes JSON artifacts and does not start Xray.
+- `run` prepares one local runtime config and can optionally execute `xray run -test`, but it does not probe Google Scholar.
+- `inspect` only performs safe local review of existing artifacts.
 
-- It generates JSON fragments instead of overwriting existing XrayR configuration.
-- It does not reload XrayR automatically.
-- It does not modify system services automatically.
-- It does not commit secrets.
-- It redacts sensitive material from normal logs.
-- It is intended to fail closed when no Scholar-capable node is available.
+## Safety Model
 
-## Development Status
+### Review-safe artifacts
 
-The repository is being implemented in phases. Phase 0 only creates the project skeleton, packaging metadata, and configuration template. No network logic is implemented in this phase.
+- Probe summary JSON
+- Generated manifest JSON
+- `inspect` command output
 
-## Planned Layout
+These artifacts are intended for review and should avoid raw proxy credentials.
 
-```text
-ScholarOutboundManager/
-  pyproject.toml
-  README.md
-  config.example.yaml
-  scholar_outbound_manager/
-    __init__.py
-    cli.py
-    config.py
-    models.py
-    fetcher.py
-    parsers/
-      __init__.py
-      base64_subscription.py
-      clash_yaml.py
-      uri.py
-      vless.py
-    xray/
-      outbound_builder.py
-      route_builder.py
-      validator.py
-    probe/
-      scholar_probe.py
-      xray_runner.py
-      fingerprints.py
-    state/
-      cache.py
-      manifest.py
-      history.py
-    util/
-      redact.py
-      logging.py
-  tests/
-    test_vless_parser.py
-    test_outbound_builder.py
-    test_scholar_probe_classifier.py
-    fixtures/
-      vless_reality.txt
-      clash_sample.yaml
+### Sensitive local artifacts
+
+- `passed_candidates.json`
+- `candidates.json`
+- `config.yaml`
+- Runtime configs under `.runtime/`
+- Any file containing proxy URI, UUID, public key, token, or subscription material
+
+`passed_candidates.json` contains selected proxy credentials. It must not be committed.
+
+`config.yaml` must not be committed.
+
+`state_data/` and `generated/` should remain local.
+
+`inspect` never prints selected proxy credentials from sensitive artifacts.
+
+### Generated Xray artifacts
+
+- Generated outbounds JSON
+- Generated routes JSON
+- Generated manifest JSON
+
+These artifacts are produced locally from offline candidate input and are meant for controlled downstream use.
+
+## Typical Workflow
+
+### Step 1: prepare local config
+
+```bash
+cp config.example.yaml config.yaml
 ```
 
-## Usage
+### Step 2: prepare local candidates JSON
 
-Command-line entry points will be added in later phases.
+Prepare an offline `candidates.json` file from the Phase 2 parser output or from your own offline export. Do not use real proxy material in examples or shared documents.
+
+### Step 3: probe candidates
+
+```bash
+scholar-outbound-manager probe \
+  --config config.yaml \
+  --candidates candidates.json \
+  --summary-output state_data/probe_summary.json \
+  --passed-candidates-output state_data/passed_candidates.json
+```
+
+### Step 4: inspect probe result
+
+```bash
+scholar-outbound-manager inspect \
+  --probe-summary state_data/probe_summary.json \
+  --passed-candidates state_data/passed_candidates.json
+```
+
+### Step 5: generate Xray fragments from passed candidates
+
+```bash
+scholar-outbound-manager generate \
+  --config config.yaml \
+  --candidates state_data/passed_candidates.json
+```
+
+### Step 6: inspect generated manifest
+
+```bash
+scholar-outbound-manager inspect \
+  --manifest generated/google_scholar_manifest.json
+```
+
+### Step 7: prepare one runtime config and optionally test it
+
+```bash
+scholar-outbound-manager run \
+  --config config.yaml \
+  --candidates state_data/passed_candidates.json \
+  --candidate-index 0 \
+  --test-config
+```
+
+## CLI Reference
+
+### `generate`
+
+Purpose: convert offline candidates into Xray outbounds, routes, and manifest JSON.
+
+Required arguments:
+
+- `--config`
+- `--candidates`
+
+Output files:
+
+- outbounds JSON
+- routes JSON
+- generated manifest JSON
+
+Exit codes:
+
+- `0`: generation succeeded
+- `1`: config, input, validation, or write error
+
+### `probe`
+
+Purpose: sequentially probe offline candidates, write a redacted review-safe summary, and write a sensitive passed-candidates artifact for later generation.
+
+Important arguments:
+
+- `--config`
+- `--candidates`
+- `--summary-output`
+- `--passed-candidates-output`
+- `--max-candidates`
+- `--max-passed`
+- `--include-unsupported`
+- `--query`
+- `--skip-query`
+- `--startup-timeout`
+- `--request-timeout`
+- `--xray-test-timeout`
+- `--runtime-config-name`
+
+Output files:
+
+- redacted probe summary JSON
+- sensitive passed-candidates JSON
+
+Exit codes:
+
+- `0`: probe completed and at least one candidate passed
+- `1`: config, input, validation, probe, or write error
+- `2`: probe completed but no candidate passed
+
+### `inspect`
+
+Purpose: safely review redacted probe summaries, generated manifests, and metadata from sensitive passed-candidate artifacts.
+
+Important arguments:
+
+- `--probe-summary`
+- `--manifest`
+- `--passed-candidates`
+
+Guarantee:
+
+- `inspect` does not print sensitive candidate contents from passed-candidate artifacts.
+
+Exit codes:
+
+- `0`: inspection succeeded
+- `1`: input, JSON, or schema error
+
+### `run`
+
+Purpose: prepare one local runtime config from a selected candidate and optionally validate it with `xray run -test`.
+
+Notes:
+
+- `run` prepares runtime config only.
+- `--test-config` is optional.
+- `run` does not live-probe Google Scholar.
+
+Exit codes:
+
+- `0`: runtime preparation succeeded, and optional config test passed
+- `1`: config, input, validation, runtime preparation, or config test failure
+
+### `fetch`
+
+Purpose: currently not implemented.
+
+Exit codes:
+
+- `2`: placeholder command state
+
+## Artifact Table
+
+| Path | Produced by | Sensitivity | Purpose | Commit? |
+| --- | --- | --- | --- | --- |
+| `config.yaml` | user | sensitive | local configuration | no |
+| `candidates.json` | user or offline parser | sensitive | offline candidate input | no |
+| `state_data/probe_summary.json` | `probe` | review-safe | redacted probe report | no |
+| `state_data/passed_candidates.json` | `probe` | sensitive | selected proxy credentials for later `generate` | no |
+| `generated/google_scholar_outbounds.json` | `generate` | local generated | Xray outbound fragments | no |
+| `generated/google_scholar_routes.json` | `generate` | local generated | Xray route fragments | no |
+| `generated/google_scholar_manifest.json` | `generate` | review-safe | generated manifest for inspection | no |
+| `.runtime/` | `run` and probe runtime prep | sensitive | local runtime configs and temporary execution material | no |
+| `state_data/history/` | local workflow | local generated | retained local history artifacts | no |
+
+## Exit Codes
+
+- `0`: success
+- `1`: command, config, input, validation, write, or runtime error
+- `2`: no passed candidate for `probe`, or placeholder/unimplemented command such as `fetch`
+
+## Development Notes
+
+- Tests use fake binaries and local fake servers.
+- The full test suite may require loopback port binding.
+- No real Xray binary is required for most tests.
+- No real proxy credentials should be committed.

@@ -11,6 +11,12 @@ state_data/
 config.yaml
 config.local.yaml
 *.local.yaml
+candidates.json
+passed_candidates.json
+probe_summary.json
+*_candidates.local.json
+*_passed.local.json
+*_probe.local.json
 .venv/
 venv/
 build/
