@@ -80,9 +80,9 @@ def test_generate_does_not_print_raw_uri(tmp_path, capsys) -> None:
     assert "vless://" not in captured.err
 
 
-def test_other_subcommands_remain_unimplemented(capsys) -> None:
-    """Keep fetch and inspect in the placeholder state."""
-    for command_name in ("fetch", "inspect"):
+def test_fetch_remains_unimplemented(capsys) -> None:
+    """Keep fetch in the placeholder state."""
+    for command_name in ("fetch",):
         exit_code = cli.main([command_name])
         captured = capsys.readouterr()
         assert exit_code == 2

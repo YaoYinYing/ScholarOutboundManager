@@ -11,6 +11,12 @@ from scholar_outbound_manager import __version__
 from scholar_outbound_manager.config import ConfigError
 from scholar_outbound_manager.config import load_config
 from scholar_outbound_manager.generation import write_generation_outputs
+from scholar_outbound_manager.inspect import format_generated_manifest_inspection
+from scholar_outbound_manager.inspect import format_probe_summary_inspection
+from scholar_outbound_manager.inspect import format_sensitive_candidates_inspection
+from scholar_outbound_manager.inspect import inspect_generated_manifest
+from scholar_outbound_manager.inspect import inspect_probe_summary
+from scholar_outbound_manager.inspect import inspect_sensitive_candidates
 from scholar_outbound_manager.io import load_candidates
 from scholar_outbound_manager.probe.batch_probe import BatchProbeOptions
 from scholar_outbound_manager.probe.batch_probe import probe_candidates_sequential
@@ -76,8 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     inspect_parser = subparsers.add_parser("inspect")
     inspect_parser.add_argument("--config", default="config.yaml")
-    inspect_parser.add_argument("--manifest", default="generated/google_scholar_manifest.json")
-    inspect_parser.set_defaults(handler=_handle_unimplemented)
+    inspect_parser.add_argument("--probe-summary")
+    inspect_parser.add_argument("--manifest")
+    inspect_parser.add_argument("--passed-candidates")
+    inspect_parser.set_defaults(handler=_handle_inspect)
 
     return parser
 
@@ -209,6 +217,34 @@ def _handle_run(args: argparse.Namespace) -> int:
     print(f"timed_out: {result.timed_out}")
     print(f"error: {result.error}")
     return 1
+
+
+def _handle_inspect(args: argparse.Namespace) -> int:
+    """Inspect review-safe artifacts without printing sensitive credentials."""
+    try:
+        sections: list[str] = []
+        probe_summary_path = args.probe_summary
+        manifest_path = args.manifest
+        passed_candidates_path = args.passed_candidates
+        if probe_summary_path is None and manifest_path is None and passed_candidates_path is None:
+            manifest_path = "generated/google_scholar_manifest.json"
+
+        if probe_summary_path is not None:
+            sections.append(format_probe_summary_inspection(inspect_probe_summary(probe_summary_path)))
+        if manifest_path is not None:
+            sections.append(format_generated_manifest_inspection(inspect_generated_manifest(manifest_path)))
+        if passed_candidates_path is not None:
+            sections.append(
+                format_sensitive_candidates_inspection(
+                    inspect_sensitive_candidates(passed_candidates_path)
+                )
+            )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("\n\n".join(sections))
+    return 0
 
 
 def _validate_runtime_config_name(config_name: str) -> None:
