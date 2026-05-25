@@ -1,14 +1,23 @@
 # Example configuration for ScholarOutboundManager.
 
 subscriptions:
-  - "https://example.invalid/subscription-1"
-  - "https://example.invalid/subscription-2"
+  - name: "third_party_main"
+    url: "https://example.invalid/subscription-1"
+    format: "auto"
+    enabled: true
+    headers: {}
 
 filters:
   include_keywords:
     - "scholar"
     - "google"
+    - "academic"
+    - "ipv4"
+    - "clean"
   exclude_keywords:
+    - "game"
+    - "media"
+  deprioritize_keywords:
     - "ipv6"
     - "warp"
 
@@ -34,7 +43,11 @@ output:
 generation:
   tag_prefix: "google-scholar-node-"
   max_passed_nodes: 3
-  routing_mode: "dedicated_inbound"
-  fail_closed: true
   fallback_blackhole_tag: "google-scholar-unavailable"
   previous_output_max_age_hours: 168
+
+routing:
+  mode: "dedicated_inbound"
+  inbound_tags:
+    - "google-scholar-in"
+  fail_closed: true
