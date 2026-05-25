@@ -81,8 +81,8 @@ def test_generate_does_not_print_raw_uri(tmp_path, capsys) -> None:
 
 
 def test_other_subcommands_remain_unimplemented(capsys) -> None:
-    """Keep fetch, probe, run, and inspect in the placeholder state."""
-    for command_name in ("fetch", "probe", "run", "inspect"):
+    """Keep fetch, probe, and inspect in the placeholder state."""
+    for command_name in ("fetch", "probe", "inspect"):
         exit_code = cli.main([command_name])
         captured = capsys.readouterr()
         assert exit_code == 2

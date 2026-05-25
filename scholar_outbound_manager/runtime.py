@@ -14,11 +14,15 @@ def prepare_candidate_runtime(
     candidate: CandidateProxy,
     xray_config: XrayConfig,
     config_name: str = "candidate_runtime.json",
+    outbound_tag: str = "scholar-probe-out",
+    inbound_tag: str = "scholar-probe-socks-in",
 ) -> dict[str, object]:
     """Prepare and write one candidate runtime configuration without starting Xray."""
     runtime_config, local_socks_port = build_runtime_config_for_candidate(
         candidate=candidate,
         xray_config=xray_config,
+        outbound_tag=outbound_tag,
+        inbound_tag=inbound_tag,
     )
     runtime_dir = Path(xray_config.runtime_dir)
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -28,5 +32,6 @@ def prepare_candidate_runtime(
         "runtime_config_path": str(runtime_config_path),
         "local_socks_host": xray_config.local_socks_host,
         "local_socks_port": local_socks_port,
-        "outbound_tag": "scholar-probe-out",
+        "outbound_tag": outbound_tag,
+        "inbound_tag": inbound_tag,
     }

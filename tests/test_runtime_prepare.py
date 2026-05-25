@@ -69,6 +69,48 @@ def test_prepare_candidate_runtime_written_config_excludes_raw_uri(tmp_path) -> 
     assert "vless://" not in rendered
 
 
+def test_prepare_candidate_runtime_supports_custom_outbound_tag(tmp_path) -> None:
+    """Allow callers to override the outbound tag."""
+    runtime_dir = tmp_path / "runtime"
+    summary = prepare_candidate_runtime(
+        candidate=_make_candidate(),
+        xray_config=_make_xray_config(runtime_dir),
+        outbound_tag="custom-outbound",
+    )
+
+    rendered = Path(summary["runtime_config_path"]).read_text(encoding="utf-8")
+    assert summary["outbound_tag"] == "custom-outbound"
+    assert '"tag": "custom-outbound"' in rendered
+
+
+def test_prepare_candidate_runtime_supports_custom_inbound_tag(tmp_path) -> None:
+    """Allow callers to override the inbound tag."""
+    runtime_dir = tmp_path / "runtime"
+    summary = prepare_candidate_runtime(
+        candidate=_make_candidate(),
+        xray_config=_make_xray_config(runtime_dir),
+        inbound_tag="custom-inbound",
+    )
+
+    rendered = Path(summary["runtime_config_path"]).read_text(encoding="utf-8")
+    assert summary["inbound_tag"] == "custom-inbound"
+    assert '"tag": "custom-inbound"' in rendered
+
+
+def test_prepare_candidate_runtime_summary_excludes_sensitive_fields(tmp_path) -> None:
+    """Keep sensitive candidate material out of the runtime summary."""
+    runtime_dir = tmp_path / "runtime"
+    summary = prepare_candidate_runtime(
+        candidate=_make_candidate(),
+        xray_config=_make_xray_config(runtime_dir),
+    )
+
+    rendered = json.dumps(summary)
+    assert "vless://" not in rendered
+    assert "PUBLIC_KEY_PLACEHOLDER" not in rendered
+    assert "00000000-0000-0000-0000-000000000000" not in rendered
+
+
 def _make_candidate() -> CandidateProxy:
     """Construct one baseline candidate for runtime preparation tests."""
     return CandidateProxy(
