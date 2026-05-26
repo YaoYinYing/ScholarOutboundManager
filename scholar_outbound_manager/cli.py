@@ -102,7 +102,9 @@ def build_parser() -> argparse.ArgumentParser:
     probe_parser.add_argument("--summary-output", default="state_data/probe_summary.json")
     probe_parser.add_argument("--passed-candidates-output", default="state_data/passed_candidates.json")
     probe_parser.add_argument("--max-candidates", type=int)
+    probe_parser.add_argument("--parallel", type=int)
     probe_parser.add_argument("--max-passed", type=int)
+    probe_parser.add_argument("--keep-all-passed", action="store_true")
     probe_parser.add_argument("--include-unsupported", action="store_true")
     probe_parser.add_argument("--no-stop-after-max-passed", action="store_true")
     probe_parser.add_argument("--query", default="ppr")
@@ -390,9 +392,10 @@ def _handle_doctor(args: argparse.Namespace) -> int:
 
 
 def _handle_probe(args: argparse.Namespace) -> int:
-    """Probe local candidates sequentially and write review-safe probe artifacts."""
+    """Probe local candidates and write review-safe probe artifacts."""
     try:
         _validate_positive_int_or_none(args.max_candidates, "max-candidates")
+        _validate_positive_int_or_none(args.parallel, "parallel")
         _validate_positive_int_or_none(args.max_passed, "max-passed")
         _validate_positive_float(args.startup_timeout, "startup-timeout")
         if args.request_timeout is not None:
@@ -416,13 +419,17 @@ def _handle_probe(args: argparse.Namespace) -> int:
             runtime_config_name=args.runtime_config_name,
             probe_query=not args.skip_query,
         )
+        parallel_workers = args.parallel
+        if parallel_workers is None:
+            parallel_workers = config.probe.concurrency if config.probe.concurrency > 0 else 1
+        keep_all_passed = args.keep_all_passed
         batch_options = BatchProbeOptions(
             candidate_options=candidate_options,
+            max_workers=parallel_workers,
             max_candidates=args.max_candidates,
-            max_passed=(
-                config.generation.max_passed_nodes if args.max_passed is None else args.max_passed
-            ),
-            stop_after_max_passed=not args.no_stop_after_max_passed,
+            max_passed=None if keep_all_passed else args.max_passed,
+            stop_after_max_passed=False if keep_all_passed else not args.no_stop_after_max_passed,
+            keep_all_passed=keep_all_passed,
             include_unsupported=args.include_unsupported,
         )
         summary = probe_candidates_sequential(candidates, config.xray, batch_options)
@@ -445,6 +452,10 @@ def _handle_probe(args: argparse.Namespace) -> int:
     print(f"skipped_count: {summary.skipped_count}")
     print(f"passed_count: {summary.passed_count}")
     print(f"failed_count: {summary.failed_count}")
+    print(f"parallel_workers: {summary.parallel_workers}")
+    print(f"keep_all_passed: {str(summary.keep_all_passed).lower()}")
+    print(f"retained_passed_count: {summary.retained_passed_count}")
+    print(f"truncated: {str(summary.truncated).lower()}")
     print(f"summary_path: {artifacts['summary_path']}")
     print(f"passed_candidates_path: {artifacts['passed_candidates_path']}")
     return 0 if summary.passed_count > 0 else 2

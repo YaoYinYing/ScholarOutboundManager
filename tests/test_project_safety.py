@@ -80,6 +80,9 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "sidecar service-start" in readme_text
     assert "sidecar service-enable" in readme_text
     assert "sidecar service-snippet" in readme_text
+    assert "--parallel 4" in readme_text
+    assert "--keep-all-passed" in readme_text
+    assert "each worker starts its own managed xray runtime" in readme_text.lower()
     assert "legacy offline fragment export" in readme_text.lower()
     assert "not the recommended production workflow" in readme_text.lower()
     assert "does not mutate production xray" in readme_text.lower() or "does not modify production xray" in readme_text.lower()

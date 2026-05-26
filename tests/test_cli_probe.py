@@ -85,12 +85,16 @@ def test_probe_prints_counts_and_paths(tmp_path, capsys, monkeypatch) -> None:
     assert "attempted_count: 1" in captured.out
     assert "skipped_count: 0" in captured.out
     assert "failed_count: 0" in captured.out
+    assert "parallel_workers: 1" in captured.out
+    assert "keep_all_passed: false" in captured.out
+    assert "retained_passed_count: 1" in captured.out
+    assert "truncated: false" in captured.out
     assert f"summary_path: {tmp_path / 'probe_summary.json'}" in captured.out
     assert f"passed_candidates_path: {tmp_path / 'passed_candidates.json'}" in captured.out
 
 
-def test_probe_uses_config_default_max_passed(tmp_path, monkeypatch) -> None:
-    """Use config.generation.max_passed_nodes when max-passed is omitted."""
+def test_probe_uses_config_default_parallel_workers(tmp_path, monkeypatch) -> None:
+    """Use config.probe.concurrency when --parallel is omitted."""
     config_path = _write_config(tmp_path, max_passed_nodes=3, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
@@ -105,7 +109,8 @@ def test_probe_uses_config_default_max_passed(tmp_path, monkeypatch) -> None:
     assert cli.main(
         ["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--allow-network-probe"]
     ) == 0
-    assert observed["options"].max_passed == 3
+    assert observed["options"].max_workers == 1
+    assert observed["options"].max_passed is None
 
 
 def test_probe_allows_cli_max_passed_override(tmp_path, monkeypatch) -> None:
@@ -134,6 +139,65 @@ def test_probe_allows_cli_max_passed_override(tmp_path, monkeypatch) -> None:
         ]
     ) == 0
     assert observed["options"].max_passed == 1
+
+
+def test_probe_passes_parallel_override(tmp_path, monkeypatch) -> None:
+    """Allow --parallel to override config.probe.concurrency."""
+    config_path = _write_config(tmp_path, allow_network_probe=True)
+    candidates_path = _write_candidates(tmp_path)
+    observed = {}
+
+    def fake_probe(candidates, xray_config, options):
+        observed["options"] = options
+        return _make_batch_summary(parallel_workers=4)
+
+    monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
+    monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
+
+    assert cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--parallel",
+            "4",
+            "--allow-network-probe",
+        ]
+    ) == 0
+    assert observed["options"].max_workers == 4
+
+
+def test_probe_keep_all_passed_disables_max_passed_and_early_stop(tmp_path, monkeypatch) -> None:
+    """Honor --keep-all-passed for production full probe mode."""
+    config_path = _write_config(tmp_path, max_passed_nodes=3, allow_network_probe=True)
+    candidates_path = _write_candidates(tmp_path)
+    observed = {}
+
+    def fake_probe(candidates, xray_config, options):
+        observed["options"] = options
+        return _make_batch_summary(passed_count=3, retained_passed_count=3, parallel_workers=4, keep_all_passed=True)
+
+    monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
+    monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path, passed_count=3, retained_passed_count=3))
+
+    assert cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--parallel",
+            "4",
+            "--keep-all-passed",
+            "--allow-network-probe",
+        ]
+    ) == 0
+    assert observed["options"].keep_all_passed is True
+    assert observed["options"].max_passed is None
+    assert observed["options"].stop_after_max_passed is False
 
 
 def test_probe_passes_max_candidates(tmp_path, monkeypatch) -> None:
@@ -517,6 +581,28 @@ def test_probe_rejects_non_positive_max_candidates(tmp_path, capsys) -> None:
     assert "max-candidates" in captured.err
 
 
+def test_probe_rejects_non_positive_parallel(tmp_path, capsys) -> None:
+    """Reject non-positive parallel worker counts."""
+    config_path = _write_config(tmp_path, allow_network_probe=True)
+    candidates_path = _write_candidates(tmp_path)
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--parallel",
+            "0",
+            "--allow-network-probe",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "parallel" in captured.err
+
+
 def test_probe_rejects_non_positive_max_passed(tmp_path, capsys) -> None:
     """Reject non-positive max-passed."""
     config_path = _write_config(tmp_path, allow_network_probe=True)
@@ -746,6 +832,10 @@ def _make_batch_summary(
     attempted_count: int = 1,
     skipped_count: int = 0,
     total_count: int = 1,
+    parallel_workers: int = 1,
+    keep_all_passed: bool = False,
+    retained_passed_count: int | None = None,
+    truncated: bool = False,
 ) -> BatchProbeSummary:
     """Construct one BatchProbeSummary for CLI tests."""
     record = BatchProbeRecord(
@@ -783,18 +873,31 @@ def _make_batch_summary(
         skipped_count=skipped_count,
         passed_count=passed_count,
         failed_count=failed_count,
+        parallel_workers=parallel_workers,
+        keep_all_passed=keep_all_passed,
+        stop_after_max_passed=not keep_all_passed,
+        retained_passed_count=passed_count if retained_passed_count is None else retained_passed_count,
+        truncated=truncated,
         records=[record],
         passed_indices=[0] if passed_count > 0 else [],
         passed_candidate_ids=["candidate-001"] if passed_count > 0 else [],
     )
 
 
-def _artifact_result(tmp_path: Path) -> dict[str, object]:
+def _artifact_result(
+    tmp_path: Path,
+    *,
+    passed_count: int = 1,
+    retained_passed_count: int = 1,
+    truncated: bool = False,
+) -> dict[str, object]:
     """Construct one artifact write result for CLI tests."""
     return {
         "summary_path": str(tmp_path / "probe_summary.json"),
         "passed_candidates_path": str(tmp_path / "passed_candidates.json"),
-        "passed_count": 1,
+        "passed_count": passed_count,
+        "retained_passed_count": retained_passed_count,
+        "truncated": truncated,
         "attempted_count": 1,
         "skipped_count": 0,
         "failed_count": 0,

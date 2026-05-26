@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from threading import Lock
 
 import pytest
 
@@ -172,10 +173,12 @@ def test_probe_candidates_sequential_stops_after_max_passed_when_requested() -> 
 
     assert len(summary.records) == 1
     assert summary.passed_count == 1
+    assert summary.retained_passed_count == 1
+    assert summary.truncated is False
 
 
 def test_probe_candidates_sequential_can_continue_after_max_passed() -> None:
-    """Continue probing after reaching max_passed when configured to do so."""
+    """Continue probing after reaching max_passed and retain truncated metadata."""
     candidates = [_make_candidate(raw_name="a"), _make_candidate(raw_name="b"), _make_candidate(raw_name="c")]
 
     summary = probe_candidates_sequential(
@@ -192,8 +195,10 @@ def test_probe_candidates_sequential_can_continue_after_max_passed() -> None:
     )
 
     assert len(summary.records) == 3
-    assert summary.passed_count == 1
-    assert summary.failed_count == 2
+    assert summary.passed_count == 3
+    assert summary.retained_passed_count == 1
+    assert summary.failed_count == 0
+    assert summary.truncated is True
 
 
 def test_probe_candidates_sequential_skips_unsupported_candidates_by_default() -> None:
@@ -284,6 +289,7 @@ def test_select_passed_candidates_returns_original_candidates() -> None:
         skipped_count=0,
         passed_count=1,
         failed_count=0,
+        retained_passed_count=1,
         records=[],
         passed_indices=[1],
         passed_candidate_ids=["candidate-002-b"],
@@ -305,6 +311,7 @@ def test_select_passed_candidates_rejects_out_of_range_index() -> None:
                 skipped_count=0,
                 passed_count=0,
                 failed_count=0,
+                retained_passed_count=0,
                 records=[],
                 passed_indices=[1],
                 passed_candidate_ids=[],
@@ -357,6 +364,109 @@ def test_probe_candidates_sequential_handles_empty_candidates() -> None:
     assert summary.skipped_count == 0
     assert summary.passed_count == 0
     assert summary.failed_count == 0
+    assert summary.parallel_workers == 1
+    assert summary.keep_all_passed is False
+
+
+def test_probe_candidates_parallel_sorts_records_by_candidate_index() -> None:
+    """Return parallel probe records in stable candidate-index order."""
+    candidates = [_make_candidate(raw_name="a"), _make_candidate(raw_name="b"), _make_candidate(raw_name="c")]
+
+    summary = probe_candidates_sequential(
+        candidates=candidates,
+        xray_config=_make_xray_config(),
+        options=BatchProbeOptions(max_workers=3, stop_after_max_passed=False),
+        probe_candidate_func=_fake_probe_factory(
+            [
+                _make_summary("candidate-003-c"),
+                _make_summary("candidate-002-b"),
+                _make_summary("candidate-001-a"),
+            ],
+            reverse=True,
+        ),
+    )
+
+    assert [record.index for record in summary.records] == [0, 1, 2]
+    assert summary.parallel_workers == 3
+
+
+def test_probe_candidates_parallel_uses_unique_runtime_config_names() -> None:
+    """Build a unique runtime config name for each candidate in parallel mode."""
+    candidates = [_make_candidate(raw_name="a"), _make_candidate(raw_name="b")]
+    observed_names: list[str] = []
+
+    def fake_probe(candidate, xray_config, candidate_id, candidate_options):
+        del candidate, xray_config, candidate_id
+        observed_names.append(candidate_options.runtime_config_name)
+        return _make_summary("candidate-001-a")
+
+    probe_candidates_sequential(
+        candidates=candidates,
+        xray_config=_make_xray_config(),
+        options=BatchProbeOptions(
+            max_workers=2,
+            stop_after_max_passed=False,
+            candidate_options=CandidateProbeOptions(runtime_config_name="candidate_probe_runtime.json"),
+        ),
+        probe_candidate_func=fake_probe,
+    )
+
+    assert len(observed_names) == 2
+    assert len(set(observed_names)) == 2
+    assert all(name.startswith("candidate_probe_runtime_") for name in observed_names)
+
+
+def test_probe_candidates_parallel_wraps_exceptions_without_stopping_batch() -> None:
+    """Convert one parallel worker exception into a structured failed record."""
+    candidates = [_make_candidate(raw_name="a"), _make_candidate(raw_name="b")]
+
+    call_count = {"value": 0}
+    lock = Lock()
+
+    def fake_probe(candidate, xray_config, candidate_id, candidate_options):
+        del candidate, xray_config, candidate_options
+        with lock:
+            call_count["value"] += 1
+            current = call_count["value"]
+        if current == 1:
+            raise RuntimeError("boom")
+        return _make_summary(candidate_id)
+
+    summary = probe_candidates_sequential(
+        candidates=candidates,
+        xray_config=_make_xray_config(),
+        options=BatchProbeOptions(max_workers=2, stop_after_max_passed=False),
+        probe_candidate_func=fake_probe,
+    )
+
+    assert len(summary.records) == 2
+    assert summary.attempted_count == 2
+    assert summary.failed_count == 1
+    assert any(record.summary and record.summary.result.failure_markers == ["batch_probe_exception"] for record in summary.records)
+
+
+def test_probe_candidates_keep_all_passed_retains_every_pass() -> None:
+    """Keep every passed candidate when keep_all_passed is enabled."""
+    candidates = [_make_candidate(raw_name="a"), _make_candidate(raw_name="b"), _make_candidate(raw_name="c")]
+
+    summary = probe_candidates_sequential(
+        candidates=candidates,
+        xray_config=_make_xray_config(),
+        options=BatchProbeOptions(max_workers=3, keep_all_passed=True, max_passed=1),
+        probe_candidate_func=_fake_probe_factory(
+            [
+                _make_summary("candidate-001-a"),
+                _make_summary("candidate-002-b"),
+                _make_summary("candidate-003-c"),
+            ]
+        ),
+    )
+
+    assert summary.keep_all_passed is True
+    assert summary.passed_count == 3
+    assert summary.retained_passed_count == 3
+    assert summary.truncated is False
+    assert summary.passed_indices == [0, 1, 2]
 
 
 def test_probe_candidates_sequential_uses_fallback_candidate_name() -> None:
@@ -471,14 +581,17 @@ def _make_summary(
     )
 
 
-def _fake_probe_factory(summaries: list[CandidateProbeSummary]):
-    """Build one sequential fake probe_candidate function."""
+def _fake_probe_factory(summaries: list[CandidateProbeSummary], *, reverse: bool = False):
+    """Build one fake probe_candidate function for sequential or parallel tests."""
     state = {"index": 0}
+    lock = Lock()
+    ordered = list(reversed(summaries)) if reverse else list(summaries)
 
     def fake_probe(candidate, xray_config, candidate_id, candidate_options):
         del candidate, xray_config, candidate_id, candidate_options
-        summary = summaries[state["index"]]
-        state["index"] += 1
+        with lock:
+            summary = ordered[state["index"]]
+            state["index"] += 1
         return summary
 
     return fake_probe

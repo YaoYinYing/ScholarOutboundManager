@@ -226,8 +226,12 @@ scholar-outbound-manager probe \
   --candidates candidates.json \
   --summary-output state_data/probe_summary.json \
   --passed-candidates-output state_data/passed_candidates.json \
+  --parallel 4 \
+  --keep-all-passed \
   --allow-network-probe
 ```
+
+Use a conservative worker count such as `2` to `4` first. Each worker starts its own managed Xray runtime, and `--keep-all-passed` preserves every candidate that passes Scholar home and query classification before you choose a sidecar candidate.
 
 2. Stage production sidecar files:
 
@@ -316,8 +320,13 @@ scholar-outbound-manager probe \
   --candidates candidates.json \
   --summary-output state_data/probe_summary.json \
   --passed-candidates-output state_data/passed_candidates.json \
+  --parallel 4 \
+  --keep-all-passed \
+  --query ppr \
   --allow-network-probe
 ```
+
+For VPS full probes, prefer `--parallel` with a conservative value such as `2` to `4`. Each worker starts its own managed Xray runtime, and `--keep-all-passed` keeps every passed candidate in the sensitive artifact for later sidecar selection. External Xray or `x-ui` processes are not managed by this project.
 
 ### Step 4: inspect probe result
 
@@ -623,7 +632,7 @@ The redacted summary now includes fetch error categories and HTTP status counts 
 | `config.yaml` | user | sensitive | local configuration | no |
 | `candidates.json` | `fetch`, user, or offline parser | sensitive | downloaded subscription candidate input with raw candidate material | no |
 | `state_data/probe_summary.json` | `probe` | review-safe | redacted probe report | no |
-| `state_data/passed_candidates.json` | `probe` | sensitive | selected proxy credentials and optional `ProbeResult` evidence for later `generate` | no |
+| `state_data/passed_candidates.json` | `probe` | sensitive | passed proxy credentials and optional `ProbeResult` evidence for sidecar selection or legacy offline export | no |
 | `generated/google_scholar_outbounds.json` | `generate` | local generated | Xray outbound fragments | no |
 | `generated/google_scholar_routes.json` | `generate` | local generated | Xray route fragments | no |
 | `generated/google_scholar_manifest.json` | `generate` | review-safe | generated manifest for inspection, including redacted probe evidence when available | no |

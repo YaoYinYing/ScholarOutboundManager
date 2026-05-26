@@ -62,6 +62,10 @@ def test_serialize_batch_probe_summary_includes_schema_version_and_records() -> 
     serialized = serialize_batch_probe_summary(_make_batch_probe_summary())
 
     assert serialized["schema_version"] == 1
+    assert serialized["parallel_workers"] == 1
+    assert serialized["keep_all_passed"] is False
+    assert serialized["retained_passed_count"] == 1
+    assert serialized["truncated"] is False
     assert len(serialized["records"]) == 2
 
 
@@ -115,6 +119,9 @@ def test_build_passed_candidates_payload_marks_sensitive_and_keeps_credentials()
 
     assert payload["sensitive"] is True
     assert "must not be committed" in payload["description"]
+    assert payload["passed_count"] == 1
+    assert payload["retained_passed_count"] == 1
+    assert payload["truncated"] is False
     assert payload["candidates"][0]["candidate"]["user_id"] == "00000000-0000-0000-0000-000000000000"
     assert payload["candidates"][0]["candidate"]["public_key"] == "PUBLIC_KEY_PLACEHOLDER"
     assert payload["candidates"][0]["probe"]["home_status"] == 200
@@ -147,6 +154,8 @@ def test_write_probe_artifacts_writes_both_files_and_returns_counts(tmp_path) ->
     assert (tmp_path / "artifacts" / "summary.json").exists()
     assert (tmp_path / "artifacts" / "passed.json").exists()
     assert result["passed_count"] == summary.passed_count
+    assert result["retained_passed_count"] == summary.retained_passed_count
+    assert result["truncated"] == summary.truncated
     assert result["attempted_count"] == summary.attempted_count
 
 
@@ -179,6 +188,25 @@ def test_empty_passed_indices_produce_empty_sensitive_candidates_payload() -> No
     )
 
     assert payload["candidates"] == []
+
+
+def test_passed_candidates_payload_tracks_truncated_retention() -> None:
+    """Preserve actual and retained pass counts when the artifact is truncated."""
+    payload = build_passed_candidates_payload(
+        [_make_candidate(raw_name="a"), _make_candidate(raw_name="b")],
+        _make_batch_probe_summary(
+            passed_indices=[0],
+            passed_candidate_ids=["candidate-001"],
+            passed_count=2,
+            retained_passed_count=1,
+            truncated=True,
+        ),
+    )
+
+    assert payload["passed_count"] == 2
+    assert payload["retained_passed_count"] == 1
+    assert payload["truncated"] is True
+    assert len(payload["candidates"]) == 1
 
 
 def test_passed_candidates_payload_keeps_probe_result_for_selected_candidate() -> None:
@@ -274,6 +302,8 @@ def _make_batch_probe_summary(
     passed_indices: list[int] | None = None,
     passed_candidate_ids: list[str] | None = None,
     passed_count: int | None = None,
+    retained_passed_count: int | None = None,
+    truncated: bool = False,
 ) -> BatchProbeSummary:
     """Construct one BatchProbeSummary for probe state tests."""
     built_records = records if records is not None else [
@@ -301,12 +331,18 @@ def _make_batch_probe_summary(
     actual_passed_indices = [0] if passed_indices is None else passed_indices
     actual_passed_candidate_ids = ["candidate-001"] if passed_candidate_ids is None else passed_candidate_ids
     actual_passed_count = len(actual_passed_indices) if passed_count is None else passed_count
+    retained_count = len(actual_passed_indices) if retained_passed_count is None else retained_passed_count
     return BatchProbeSummary(
         total_count=2,
         attempted_count=1,
         skipped_count=1,
         passed_count=actual_passed_count,
         failed_count=0,
+        parallel_workers=1,
+        keep_all_passed=False,
+        stop_after_max_passed=True,
+        retained_passed_count=retained_count,
+        truncated=truncated,
         records=built_records,
         passed_indices=actual_passed_indices,
         passed_candidate_ids=actual_passed_candidate_ids,
