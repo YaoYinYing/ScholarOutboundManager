@@ -114,13 +114,13 @@ def test_probe_generate_run_and_inspect_remain_available(tmp_path, capsys, monke
     assert inspect_exit_code == 0
 
 
-def test_fetch_remains_unimplemented(capsys) -> None:
-    """Keep fetch in the placeholder state."""
+def test_fetch_requires_network_opt_in(capsys) -> None:
+    """Keep fetch available and protected by an explicit network gate."""
     exit_code = cli.main(["fetch"])
     captured = capsys.readouterr()
 
-    assert exit_code == 2
-    assert "not implemented in Phase 0.5" in captured.out
+    assert exit_code == 1
+    assert "--allow-network-fetch" in captured.err
 
 
 def _write_config(tmp_path, allow_network_probe: bool = False):

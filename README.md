@@ -4,8 +4,10 @@ ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager 
 
 ## Project Status
 
-- `fetch` is still not implemented.
-- Current inputs come from a local `candidates.json` file, not from live subscription fetching.
+- `fetch` may download subscription content into a local sensitive `candidates.json` artifact.
+- `fetch` requires explicit CLI opt-in with `--allow-network-fetch`.
+- `fetch` does not probe Google Scholar and does not start Xray.
+- Current inputs for `probe` and `generate` can come from a locally fetched `candidates.json` file or other offline candidate artifacts.
 - `probe` is protected by a two-key network safety gate.
 - `probe.allow_network_probe` must be `true` in config.
 - `--allow-network-probe` must also be passed on the CLI.
@@ -39,6 +41,8 @@ These artifacts are intended for review and should avoid raw proxy credentials.
 
 `passed_candidates.json` contains selected proxy credentials. It may also contain `ProbeResult` evidence used later by `generate`. It must not be committed.
 
+`candidates.json` may contain downloaded subscription material, raw proxy URIs, UUIDs, and public keys. It must not be committed.
+
 `config.yaml` must not be committed.
 
 `state_data/` and `generated/` should remain local.
@@ -61,6 +65,12 @@ Network probing is opt-in at both config and CLI layers.
 - Users should only enable it in a local, ignored `config.yaml`.
 - The CLI flag is an intentional second confirmation.
 
+Subscription fetching is also explicit opt-in at the CLI layer.
+
+- `fetch` may download remote subscription content.
+- `--allow-network-fetch` is required before any subscription download starts.
+- `fetch` writes a sensitive local candidate artifact and should only be used with a local ignored output path.
+
 ## Typical Workflow
 
 ### Step 1: prepare local config
@@ -79,6 +89,19 @@ probe:
 Only enable this in local `config.yaml`. Do not change shared examples to real credentials. Do not commit `config.yaml`.
 
 ### Step 2: prepare local candidates JSON
+
+Option A: fetch candidates from enabled subscriptions.
+
+```bash
+scholar-outbound-manager fetch \
+  --config config.yaml \
+  --output candidates.json \
+  --allow-network-fetch
+```
+
+`fetch` may download subscription content. `--allow-network-fetch` is required. `candidates.json` is sensitive and must not be committed. `fetch` does not probe Scholar and does not start Xray.
+
+Option B: use an existing offline `candidates.json` artifact.
 
 Prepare an offline `candidates.json` file from the Phase 2 parser output or from your own offline export. Do not use real proxy material in examples or shared documents.
 
@@ -229,18 +252,39 @@ Exit codes:
 
 ### `fetch`
 
-Purpose: currently not implemented.
+Purpose: download enabled subscriptions, decode subscription text, parse proxy candidates, and write a sensitive local candidate artifact.
+
+Important arguments:
+
+- `--config`
+- `--output`
+- `--allow-network-fetch`
+- `--timeout`
+- `--max-bytes`
+
+Notes:
+
+- `fetch` only starts after `--allow-network-fetch` is passed.
+- `fetch` may download subscription content and write raw candidate material locally.
+- `fetch` does not start Xray.
+- `fetch` does not probe Google Scholar.
+
+Output files:
+
+- sensitive candidate artifact JSON
 
 Exit codes:
 
-- `2`: placeholder command state
+- `0`: subscription content was fetched and at least one candidate was parsed
+- `1`: config, input, validation, fetch, parse, or write error
+- `2`: fetch completed but no enabled source was fetched or no candidate was parsed
 
 ## Artifact Table
 
 | Path | Produced by | Sensitivity | Purpose | Commit? |
 | --- | --- | --- | --- | --- |
 | `config.yaml` | user | sensitive | local configuration | no |
-| `candidates.json` | user or offline parser | sensitive | offline candidate input | no |
+| `candidates.json` | `fetch`, user, or offline parser | sensitive | downloaded subscription candidate input with raw candidate material | no |
 | `state_data/probe_summary.json` | `probe` | review-safe | redacted probe report | no |
 | `state_data/passed_candidates.json` | `probe` | sensitive | selected proxy credentials and optional `ProbeResult` evidence for later `generate` | no |
 | `generated/google_scholar_outbounds.json` | `generate` | local generated | Xray outbound fragments | no |
@@ -253,7 +297,7 @@ Exit codes:
 
 - `0`: success
 - `1`: command, config, input, validation, write, runtime, or safety-gate error
-- `2`: no passed candidate for `probe`, or placeholder/unimplemented command such as `fetch`
+- `2`: no passed candidate for `probe`, or fetch completed without any fetched subscription candidates
 
 ## Development Notes
 

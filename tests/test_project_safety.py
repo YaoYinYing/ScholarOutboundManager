@@ -40,15 +40,19 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     readme_text = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "probe" in readme_text
+    assert "fetch" in readme_text
     assert "inspect" in readme_text
     assert "generate" in readme_text
     assert "run" in readme_text
     assert "--allow-network-probe" in readme_text
+    assert "--allow-network-fetch" in readme_text
     assert "probe.allow_network_probe" in readme_text
     assert "required together" in readme_text.lower() or "without both" in readme_text.lower()
     assert "proberesult" in readme_text.lower() or "probe evidence" in readme_text.lower()
     assert "can consume plain candidates json" in readme_text.lower()
     assert "passed-candidates artifacts" in readme_text.lower()
+    assert "download subscription content" in readme_text.lower()
+    assert "does not probe scholar" in readme_text.lower()
     assert "sensitive" in readme_text.lower()
     assert "credentials" in readme_text.lower()
     assert "must not be committed" in readme_text.lower()

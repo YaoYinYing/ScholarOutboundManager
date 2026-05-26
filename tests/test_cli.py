@@ -19,12 +19,12 @@ def test_cli_version_returns_zero(capsys) -> None:
     assert "scholar-outbound-manager 0.1.0" in captured.out
 
 
-def test_unimplemented_subcommand_returns_two(capsys) -> None:
-    """Return the documented placeholder status for unimplemented commands."""
+def test_fetch_requires_explicit_network_opt_in(capsys) -> None:
+    """Refuse fetch unless the network opt-in flag is present."""
     exit_code = cli.main(["fetch"])
     captured = capsys.readouterr()
-    assert exit_code == 2
-    assert "not implemented in Phase 0.5" in captured.out
+    assert exit_code == 1
+    assert "--allow-network-fetch" in captured.err
 
 
 def test_cli_no_args_returns_zero(capsys) -> None:

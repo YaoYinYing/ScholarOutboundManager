@@ -12,6 +12,7 @@ from scholar_outbound_manager.config import ConfigError
 from scholar_outbound_manager.config import load_config
 from scholar_outbound_manager.doctor import build_doctor_report
 from scholar_outbound_manager.doctor import format_doctor_report
+from scholar_outbound_manager.fetcher import fetch_enabled_subscriptions
 from scholar_outbound_manager.generation import write_generation_outputs
 from scholar_outbound_manager.inspect import format_generated_manifest_inspection
 from scholar_outbound_manager.inspect import format_probe_summary_inspection
@@ -22,11 +23,14 @@ from scholar_outbound_manager.inspect import inspect_sensitive_candidates
 from scholar_outbound_manager.io import load_candidate_bundle
 from scholar_outbound_manager.io import load_candidates
 from scholar_outbound_manager.parsers.filtering import filter_candidates
+from scholar_outbound_manager.parsers.subscription import parse_fetched_subscriptions
 from scholar_outbound_manager.probe.batch_probe import BatchProbeOptions
 from scholar_outbound_manager.probe.batch_probe import probe_candidates_sequential
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeOptions
 from scholar_outbound_manager.runtime import prepare_candidate_runtime
 from scholar_outbound_manager.selection import select_candidate_by_index
+from scholar_outbound_manager.state.candidate_artifact import build_candidate_artifact
+from scholar_outbound_manager.state.candidate_artifact import write_candidate_artifact
 from scholar_outbound_manager.state.probe_state import write_probe_artifacts
 from scholar_outbound_manager.xray.process import test_xray_config
 
@@ -46,7 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     fetch_parser = subparsers.add_parser("fetch")
     fetch_parser.add_argument("--config", default="config.yaml")
-    fetch_parser.set_defaults(handler=_handle_unimplemented)
+    fetch_parser.add_argument("--output", default="candidates.json")
+    fetch_parser.add_argument("--allow-network-fetch", action="store_true")
+    fetch_parser.add_argument("--timeout", type=float)
+    fetch_parser.add_argument("--max-bytes", type=int, default=1_048_576)
+    fetch_parser.set_defaults(handler=_handle_fetch)
 
     doctor_parser = subparsers.add_parser("doctor")
     doctor_parser.add_argument("--config", default="config.yaml")
@@ -106,6 +114,69 @@ def _handle_unimplemented(args: argparse.Namespace) -> int:
     """Handle a declared but not yet implemented subcommand."""
     print(UNIMPLEMENTED_MESSAGE.format(name=args.command))
     return 2
+
+
+def _handle_fetch(args: argparse.Namespace) -> int:
+    """Fetch enabled subscriptions into one local sensitive candidate artifact."""
+    if not args.allow_network_fetch:
+        print(
+            "Error: --allow-network-fetch is required before downloading subscriptions.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        if args.timeout is not None:
+            _validate_positive_float(args.timeout, "timeout")
+        _validate_positive_int_or_none(args.max_bytes, "max-bytes")
+
+        config = load_config(args.config)
+        timeout_seconds = config.probe.timeout_seconds if args.timeout is None else args.timeout
+        fetched, fetch_summary = fetch_enabled_subscriptions(
+            config.subscriptions,
+            timeout_seconds=timeout_seconds,
+            max_bytes=args.max_bytes,
+        )
+        parsed_subscriptions = parse_fetched_subscriptions(
+            fetched,
+            format_by_source={source.name: source.format for source in config.subscriptions},
+        )
+
+        candidates = [
+            candidate
+            for parsed_subscription in parsed_subscriptions
+            for candidate in parsed_subscription.candidates
+        ]
+        parsed_count = len(candidates)
+        unsupported_count = sum(1 for candidate in candidates if not candidate.supported)
+        payload = build_candidate_artifact(
+            candidates,
+            source_count=fetch_summary.source_count,
+            fetched_count=fetch_summary.fetched_count,
+            disabled_count=fetch_summary.disabled_count,
+            failed_count=fetch_summary.failed_count,
+            total_bytes=fetch_summary.total_bytes,
+            parsed_count=parsed_count,
+            unsupported_count=unsupported_count,
+        )
+        write_candidate_artifact(args.output, payload)
+    except (ConfigError, FileNotFoundError, ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    enabled_count = fetch_summary.source_count - fetch_summary.disabled_count
+    supported_count = parsed_count - unsupported_count
+    print("Fetched Scholar candidate subscriptions.")
+    print(f"source_count: {fetch_summary.source_count}")
+    print(f"enabled_count: {enabled_count}")
+    print(f"disabled_count: {fetch_summary.disabled_count}")
+    print(f"fetched_count: {fetch_summary.fetched_count}")
+    print(f"failed_count: {fetch_summary.failed_count}")
+    print(f"parsed_count: {parsed_count}")
+    print(f"supported_count: {supported_count}")
+    print(f"unsupported_count: {unsupported_count}")
+    print(f"output_path: {args.output}")
+    return 0 if fetch_summary.fetched_count > 0 and parsed_count > 0 else 2
 
 
 def _handle_generate(args: argparse.Namespace) -> int:

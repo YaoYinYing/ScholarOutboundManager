@@ -714,13 +714,13 @@ def test_probe_output_excludes_sensitive_values(tmp_path, capsys, monkeypatch) -
     assert "00000000-0000-0000-0000-000000000000" not in rendered
 
 
-def test_fetch_remains_unimplemented(capsys) -> None:
-    """Keep fetch in the placeholder state."""
-    for command_name in ("fetch",):
-        exit_code = cli.main([command_name])
-        captured = capsys.readouterr()
-        assert exit_code == 2
-        assert "not implemented in Phase 0.5" in captured.out
+def test_fetch_requires_network_opt_in(capsys) -> None:
+    """Keep fetch available and protected by an explicit network gate."""
+    exit_code = cli.main(["fetch"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "--allow-network-fetch" in captured.err
 
 
 def test_generate_and_run_remain_available(tmp_path, capsys) -> None:
