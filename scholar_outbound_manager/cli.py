@@ -38,6 +38,9 @@ from scholar_outbound_manager.selection import select_candidate_by_index
 from scholar_outbound_manager.state.candidate_artifact import build_candidate_artifact
 from scholar_outbound_manager.state.candidate_artifact import write_candidate_artifact
 from scholar_outbound_manager.state.probe_state import write_probe_artifacts
+from scholar_outbound_manager.xray.binary import detect_xray_platform
+from scholar_outbound_manager.xray.binary import inspect_xray_binary
+from scholar_outbound_manager.xray.binary import install_xray_binary
 from scholar_outbound_manager.xray.process import test_xray_config
 
 UNIMPLEMENTED_MESSAGE = "Subcommand '{name}' is not implemented in Phase 0.5."
@@ -117,6 +120,21 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_parser.add_argument("--manifest")
     inspect_parser.add_argument("--passed-candidates")
     inspect_parser.set_defaults(handler=_handle_inspect)
+
+    xray_parser = subparsers.add_parser("xray")
+    xray_subparsers = xray_parser.add_subparsers(dest="xray_command")
+
+    xray_inspect_parser = xray_subparsers.add_parser("inspect")
+    xray_inspect_parser.add_argument("--path", required=True)
+    xray_inspect_parser.set_defaults(handler=_handle_xray_inspect)
+
+    xray_install_parser = xray_subparsers.add_parser("install")
+    xray_install_parser.add_argument("--install-dir", required=True)
+    xray_install_parser.add_argument("--version", default="latest")
+    xray_install_parser.add_argument("--allow-download", action="store_true")
+    xray_install_parser.add_argument("--os")
+    xray_install_parser.add_argument("--arch")
+    xray_install_parser.set_defaults(handler=_handle_xray_install)
 
     return parser
 
@@ -415,6 +433,51 @@ def _handle_inspect(args: argparse.Namespace) -> int:
 
     print("\n\n".join(sections))
     return 0
+
+
+def _handle_xray_inspect(args: argparse.Namespace) -> int:
+    """Inspect one local Xray binary path without downloading anything."""
+    info = inspect_xray_binary(args.path)
+    print("Xray binary:")
+    print(f"path: {info.path}")
+    print(f"exists: {'true' if info.exists else 'false'}")
+    print(f"executable: {'true' if info.executable else 'false'}")
+    print(f"version: {info.version or ''}")
+    print(f"error: {info.error or ''}")
+    return 0 if info.exists and info.executable else 1
+
+
+def _handle_xray_install(args: argparse.Namespace) -> int:
+    """Explicitly install an Xray binary into a local ignored directory."""
+    if not args.allow_download:
+        print(
+            "Error: --allow-download is required before downloading Xray.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        platform_asset = None
+        if args.os is not None or args.arch is not None:
+            platform_asset = detect_xray_platform(system=args.os, machine=args.arch)
+        result = install_xray_binary(
+            version=args.version,
+            install_dir=args.install_dir,
+            allow_download=True,
+            platform_asset=platform_asset,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if result.installed and result.error is None:
+        print("Installed Xray binary.")
+        print(f"binary_path: {result.binary_path}")
+        print(f"version: {result.version or ''}")
+        return 0
+
+    print(f"Error: {result.error or 'Xray installation failed.'}", file=sys.stderr)
+    return 1
 
 
 def _validate_runtime_config_name(config_name: str) -> None:

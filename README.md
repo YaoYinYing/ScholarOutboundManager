@@ -88,6 +88,48 @@ Subscription fetching is also explicit opt-in at the CLI layer.
 - Future work may add explicit Xray binary acquisition or update support, but it must stay opt-in and checksum-aware.
 - Fetch and parse workflows do not require Xray or `mihomo`.
 
+## Xray Binary Preparation
+
+- `probe` and `run` require an Xray-compatible binary path in local config.
+- The project does not silently download Xray.
+- You can inspect an existing binary:
+
+```bash
+scholar-outbound-manager xray inspect --path /usr/local/bin/xray
+```
+
+- You can explicitly install Xray into a local ignored runtime directory:
+
+```bash
+scholar-outbound-manager xray install \
+  --install-dir .runtime/xray \
+  --version latest \
+  --allow-download
+```
+
+- Then point local `config.yaml` at the installed binary:
+
+```yaml
+xray:
+  binary_path: ".runtime/xray/xray"
+```
+
+- Do not commit downloaded binaries.
+- Do not commit `config.yaml`.
+- Download is explicit opt-in.
+- Tests do not download real binaries.
+- Final VPS probing should use a known Xray binary version.
+
+On a VPS, the intended manual chain is:
+
+```bash
+scholar-outbound-manager environment
+scholar-outbound-manager xray inspect --path .runtime/xray/xray
+scholar-outbound-manager probe --config config.yaml --candidates candidates.json --allow-network-probe
+scholar-outbound-manager inspect --probe-summary state_data/probe_summary.json
+scholar-outbound-manager generate --config config.yaml --candidates state_data/passed_candidates.json
+```
+
 ## Typical Workflow
 
 ### Step 1: prepare local config
