@@ -73,6 +73,18 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "xray install" in readme_text.lower()
     assert ".runtime/xray/xray" in readme_text
     assert "does not silently download xray" in readme_text.lower()
+    assert "sidecar socks runtime model" in readme_text.lower()
+    assert "production systemd sidecar" in readme_text.lower()
+    assert "sidecar service-stage" in readme_text
+    assert "sidecar service-install" in readme_text
+    assert "sidecar service-start" in readme_text
+    assert "sidecar service-enable" in readme_text
+    assert "sidecar service-snippet" in readme_text
+    assert "systemd" in readme_text.lower()
+    assert "dedicated user" in readme_text.lower()
+    assert "does not modify production xray" in readme_text.lower() or "does not modify production xrayr" in readme_text.lower()
+    assert "does not kill external xray processes" in readme_text.lower()
+    assert "docker is not the default lifecycle manager" in readme_text.lower()
 
 
 def test_security_doc_exists_and_warns_about_sensitive_material() -> None:

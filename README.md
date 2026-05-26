@@ -204,6 +204,72 @@ Example snippet:
 - This phase does not install a systemd service.
 - This phase does not implement auto failover.
 
+## Production systemd sidecar
+
+- For long-running production use, prefer `systemd` over PID-file manual mode.
+- `systemd` manages restart policy, boot startup, logs, and lifecycle.
+- ScholarOutboundManager stages sidecar runtime files for a dedicated user.
+- It does not modify production Xray, XrayR, or `x-ui` configuration.
+- It does not kill external Xray processes.
+- It does not use Docker by default.
+
+Example production flow:
+
+1. Probe and keep passed candidates:
+
+```bash
+scholar-outbound-manager probe \
+  --config config.yaml \
+  --candidates candidates.json \
+  --summary-output state_data/probe_summary.json \
+  --passed-candidates-output state_data/passed_candidates.json \
+  --allow-network-probe
+```
+
+2. Stage production sidecar files:
+
+```bash
+scholar-outbound-manager sidecar service-stage \
+  --config config.yaml \
+  --candidates state_data/passed_candidates.json \
+  --candidate-index 0 \
+  --listen-host 127.0.0.1 \
+  --listen-port 19080
+```
+
+3. Install the `systemd` unit:
+
+```bash
+scholar-outbound-manager sidecar service-install \
+  --unit-name scholar-outbound-sidecar.service
+```
+
+4. Start and enable it:
+
+```bash
+scholar-outbound-manager sidecar service-start \
+  --unit-name scholar-outbound-sidecar.service
+
+scholar-outbound-manager sidecar service-enable \
+  --unit-name scholar-outbound-sidecar.service
+```
+
+5. Print a production Xray or XrayR SOCKS outbound snippet:
+
+```bash
+scholar-outbound-manager sidecar service-snippet \
+  --listen-host 127.0.0.1 \
+  --listen-port 19080 \
+  --tag scholar-sidecar-socks-out
+```
+
+- `service-stage` and `service-install` often require root.
+- The generated runtime config is sensitive.
+- The `systemd` unit itself should not contain proxy credentials.
+- Production Xray or XrayR integration remains manual.
+- Docker is not the default lifecycle manager.
+- In production, the preferred sequence is: full probe, select a passed candidate, stage the sidecar, install the unit, start the unit, check service status, then manually point production Xray or XrayR at the localhost SOCKS sidecar.
+
 ## Typical Workflow
 
 ### Step 1: prepare local config

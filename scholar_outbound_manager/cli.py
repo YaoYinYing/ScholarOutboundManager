@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter
 from collections.abc import Sequence
@@ -45,6 +46,14 @@ from scholar_outbound_manager.sidecar import stop_sidecar_runtime
 from scholar_outbound_manager.state.candidate_artifact import build_candidate_artifact
 from scholar_outbound_manager.state.candidate_artifact import write_candidate_artifact
 from scholar_outbound_manager.state.probe_state import write_probe_artifacts
+from scholar_outbound_manager.systemd_sidecar import SystemdSidecarOptions
+from scholar_outbound_manager.systemd_sidecar import build_systemd_sidecar_paths
+from scholar_outbound_manager.systemd_sidecar import ensure_system_user
+from scholar_outbound_manager.systemd_sidecar import install_systemd_unit
+from scholar_outbound_manager.systemd_sidecar import render_sidecar_systemd_unit
+from scholar_outbound_manager.systemd_sidecar import render_socks_outbound_snippet_for_sidecar
+from scholar_outbound_manager.systemd_sidecar import run_systemctl
+from scholar_outbound_manager.systemd_sidecar import stage_systemd_sidecar_files
 from scholar_outbound_manager.xray.binary import detect_xray_platform
 from scholar_outbound_manager.xray.binary import inspect_xray_binary
 from scholar_outbound_manager.xray.binary import install_xray_binary
@@ -186,6 +195,33 @@ def build_parser() -> argparse.ArgumentParser:
     sidecar_snippet_parser.add_argument("--listen-port", type=int, default=19080)
     sidecar_snippet_parser.add_argument("--tag", default="scholar-sidecar-socks-out")
     sidecar_snippet_parser.set_defaults(handler=_handle_sidecar_snippet)
+
+    sidecar_service_render_parser = sidecar_subparsers.add_parser("service-render")
+    _add_sidecar_service_arguments(sidecar_service_render_parser)
+    sidecar_service_render_parser.set_defaults(handler=_handle_sidecar_service_render)
+
+    sidecar_service_stage_parser = sidecar_subparsers.add_parser("service-stage")
+    _add_sidecar_service_arguments(sidecar_service_stage_parser)
+    sidecar_service_stage_parser.add_argument("--config", default="config.yaml")
+    sidecar_service_stage_parser.add_argument("--candidates", required=True)
+    sidecar_service_stage_parser.add_argument("--candidate-index", type=int, default=0)
+    sidecar_service_stage_parser.add_argument("--source-xray-binary")
+    sidecar_service_stage_parser.set_defaults(handler=_handle_sidecar_service_stage)
+
+    sidecar_service_install_parser = sidecar_subparsers.add_parser("service-install")
+    _add_sidecar_service_arguments(sidecar_service_install_parser)
+    sidecar_service_install_parser.set_defaults(handler=_handle_sidecar_service_install)
+
+    for action in ("start", "stop", "restart", "status", "enable", "disable"):
+        action_parser = sidecar_subparsers.add_parser(f"service-{action}")
+        action_parser.add_argument("--unit-name", default="scholar-outbound-sidecar.service")
+        action_parser.set_defaults(handler=_make_sidecar_service_action_handler(action))
+
+    sidecar_service_snippet_parser = sidecar_subparsers.add_parser("service-snippet")
+    sidecar_service_snippet_parser.add_argument("--listen-host", default="127.0.0.1")
+    sidecar_service_snippet_parser.add_argument("--listen-port", type=int, default=19080)
+    sidecar_service_snippet_parser.add_argument("--tag", default="scholar-sidecar-socks-out")
+    sidecar_service_snippet_parser.set_defaults(handler=_handle_sidecar_service_snippet)
 
     return parser
 
@@ -711,6 +747,109 @@ def _handle_sidecar_snippet(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_sidecar_service_render(args: argparse.Namespace) -> int:
+    """Render one production systemd sidecar unit to stdout."""
+    try:
+        options = _build_systemd_sidecar_options(args)
+        paths = build_systemd_sidecar_paths(options)
+        unit_text = render_sidecar_systemd_unit(options, paths)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(unit_text, end="")
+    return 0
+
+
+def _handle_sidecar_service_stage(args: argparse.Namespace) -> int:
+    """Stage production sidecar files without installing or starting systemd."""
+    try:
+        options = _build_systemd_sidecar_options(args)
+        if _service_paths_require_root(options) and os.geteuid() != 0:
+            raise PermissionError(
+                "service-stage requires root for /opt, /etc, or /var targets; use root or custom paths."
+            )
+        config = load_config(args.config)
+        candidates = load_candidates(args.candidates)
+        candidate = select_candidate_by_index(candidates, args.candidate_index)
+        paths = stage_systemd_sidecar_files(
+            candidate=candidate,
+            candidate_id=f"candidate-{args.candidate_index:03d}",
+            xray_config=config.xray,
+            options=options,
+            source_xray_binary_path=args.source_xray_binary,
+        )
+    except (ConfigError, FileNotFoundError, PermissionError, ValueError, OSError, LookupError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("Staged Scholar production sidecar files.")
+    print(f"xray_binary_path: {paths.xray_binary_path}")
+    print(f"runtime_config_path: {paths.runtime_config_path}")
+    print(f"metadata_path: {paths.metadata_path}")
+    print(f"listen_host: {options.listen_host}")
+    print(f"listen_port: {options.listen_port}")
+    print(f"candidate_protocol: {candidate.protocol}")
+    print("staged: true")
+    return 0
+
+
+def _handle_sidecar_service_install(args: argparse.Namespace) -> int:
+    """Install one production systemd sidecar unit without starting it."""
+    try:
+        options = _build_systemd_sidecar_options(args)
+        if _service_paths_require_root(options) and os.geteuid() != 0:
+            raise PermissionError(
+                "service-install requires root for /etc and system user setup; use root or custom paths."
+            )
+        paths = build_systemd_sidecar_paths(options)
+        user_results = ensure_system_user(options)
+        unit_text = render_sidecar_systemd_unit(options, paths)
+        install_results = install_systemd_unit(unit_text, paths.unit_path)
+    except (PermissionError, ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("Installed Scholar production sidecar unit.")
+    print("user_ensured: true")
+    print(f"unit_path: {paths.unit_path}")
+    print("installed: true")
+    if any(not result.ok for result in [*user_results, *install_results]):
+        return 1
+    return 0
+
+
+def _make_sidecar_service_action_handler(action: str):
+    """Build one CLI handler for a simple systemctl-backed sidecar action."""
+
+    def _handler(args: argparse.Namespace) -> int:
+        try:
+            result = run_systemctl(action, args.unit_name)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(f"action: {action}")
+        print(f"unit_name: {args.unit_name}")
+        print(f"returncode: {result.returncode}")
+        return 0 if result.ok else 1
+
+    return _handler
+
+
+def _handle_sidecar_service_snippet(args: argparse.Namespace) -> int:
+    """Print one production systemd-sidecar SOCKS outbound snippet."""
+    try:
+        snippet = render_socks_outbound_snippet_for_sidecar(
+            listen_host=args.listen_host,
+            listen_port=args.listen_port,
+            tag=args.tag,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(snippet, indent=2, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 def _validate_runtime_config_name(config_name: str) -> None:
     """Validate that the runtime config name is a plain file name."""
     config_path = Path(config_name)
@@ -734,6 +873,20 @@ def _add_sidecar_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--runtime-config-name", default="scholar_sidecar_runtime.json")
 
 
+def _add_sidecar_service_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add shared production systemd sidecar arguments."""
+    parser.add_argument("--unit-name", default="scholar-outbound-sidecar.service")
+    parser.add_argument("--service-user", default="scholar-sidecar")
+    parser.add_argument("--service-group", default="scholar-sidecar")
+    parser.add_argument("--install-root", default="/opt/scholar-outbound-manager")
+    parser.add_argument("--config-dir", default="/etc/scholar-outbound-manager")
+    parser.add_argument("--state-dir", default="/var/lib/scholar-outbound-manager")
+    parser.add_argument("--listen-host", default="127.0.0.1")
+    parser.add_argument("--listen-port", type=int, default=19080)
+    parser.add_argument("--restart-policy", default="on-failure")
+    parser.add_argument("--restart-sec", type=int, default=5)
+
+
 def _build_sidecar_options(args: argparse.Namespace) -> SidecarRuntimeOptions:
     """Construct sidecar runtime options from CLI arguments."""
     return SidecarRuntimeOptions(
@@ -747,6 +900,29 @@ def _build_sidecar_status_options(runtime_config_name: str) -> SidecarRuntimeOpt
     """Construct sidecar options for status/stop from the runtime config name."""
     _validate_runtime_config_name(runtime_config_name)
     return SidecarRuntimeOptions(runtime_config_name=runtime_config_name)
+
+
+def _build_systemd_sidecar_options(args: argparse.Namespace) -> SystemdSidecarOptions:
+    """Construct production systemd sidecar options from CLI arguments."""
+    return SystemdSidecarOptions(
+        unit_name=args.unit_name,
+        service_user=args.service_user,
+        service_group=args.service_group,
+        install_root=args.install_root,
+        config_dir=args.config_dir,
+        state_dir=args.state_dir,
+        listen_host=args.listen_host,
+        listen_port=args.listen_port,
+        restart_policy=args.restart_policy,
+        restart_sec=args.restart_sec,
+    )
+
+
+def _service_paths_require_root(options: SystemdSidecarOptions) -> bool:
+    """Return whether the configured production paths typically require root access."""
+    protected_prefixes = ("/opt/", "/etc/", "/var/")
+    configured_paths = (options.install_root, options.config_dir, options.state_dir)
+    return any(path == prefix[:-1] or path.startswith(prefix) for path in configured_paths for prefix in protected_prefixes)
 
 
 def _validate_xray_test_timeout(timeout_seconds: float) -> None:
