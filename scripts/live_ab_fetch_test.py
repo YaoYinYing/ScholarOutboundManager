@@ -123,15 +123,31 @@ def summarize_candidate_artifact(path: str | Path) -> dict[str, object]:
             "unsupported_count": 0,
             "candidate_count": 0,
             "supported_count": 0,
+            "fetch_error_categories": {},
+            "fetch_http_statuses": {},
         }
 
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
     candidates = payload.get("candidates", [])
+    fetch_errors = payload.get("fetch_errors", [])
     supported_count = sum(
         1
         for candidate in candidates
         if isinstance(candidate, dict) and candidate.get("supported") is True
     )
+    fetch_error_categories: dict[str, int] = {}
+    fetch_http_statuses: dict[str, int] = {}
+    if isinstance(fetch_errors, list):
+        for fetch_error in fetch_errors:
+            if not isinstance(fetch_error, dict):
+                continue
+            category = fetch_error.get("category")
+            if isinstance(category, str) and category:
+                fetch_error_categories[category] = fetch_error_categories.get(category, 0) + 1
+            http_status = fetch_error.get("http_status")
+            if isinstance(http_status, int):
+                key = str(http_status)
+                fetch_http_statuses[key] = fetch_http_statuses.get(key, 0) + 1
     return {
         "schema_version": payload.get("schema_version"),
         "sensitive": payload.get("sensitive"),
@@ -142,6 +158,8 @@ def summarize_candidate_artifact(path: str | Path) -> dict[str, object]:
         "unsupported_count": payload.get("unsupported_count", 0),
         "candidate_count": len(candidates) if isinstance(candidates, list) else 0,
         "supported_count": supported_count,
+        "fetch_error_categories": dict(sorted(fetch_error_categories.items())),
+        "fetch_http_statuses": dict(sorted(fetch_http_statuses.items())),
     }
 
 
@@ -204,6 +222,8 @@ def run_group(
         "parsed_count": artifact_summary["parsed_count"],
         "supported_count": artifact_summary["supported_count"],
         "unsupported_count": artifact_summary["unsupported_count"],
+        "fetch_error_categories": artifact_summary["fetch_error_categories"],
+        "fetch_http_statuses": artifact_summary["fetch_http_statuses"],
         "output_path": str(output_path),
     }
     return group_summary, stdout_redacted, stderr_redacted

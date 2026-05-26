@@ -98,6 +98,14 @@ def test_summary_does_not_include_raw_link(tmp_path) -> None:
                 "failed_count": 0,
                 "parsed_count": 1,
                 "unsupported_count": 0,
+                "fetch_errors": [
+                    {
+                        "source_name": "valid_001",
+                        "category": "http_error",
+                        "message": "Subscription source 'valid_001' failed: <REDACTED_URL>",
+                        "http_status": 403,
+                    }
+                ],
                 "candidates": [
                     {
                         "source_name": "valid_001",
@@ -140,6 +148,46 @@ def test_summary_does_not_include_raw_link(tmp_path) -> None:
     rendered = json.dumps(payload)
     assert "https://example.invalid" not in rendered
     assert "vless://" not in rendered
+
+
+def test_summarize_candidate_artifact_reads_fetch_error_counts(tmp_path) -> None:
+    """Summarize fetch error categories and HTTP status counts."""
+    module = _load_script_module()
+    output_path = tmp_path / "candidates.json"
+    output_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "sensitive": True,
+                "source_count": 1,
+                "fetched_count": 0,
+                "failed_count": 2,
+                "parsed_count": 0,
+                "unsupported_count": 0,
+                "fetch_errors": [
+                    {
+                        "source_name": "valid_001",
+                        "category": "http_error",
+                        "message": "Subscription source 'valid_001' failed: <REDACTED_URL>",
+                        "http_status": 403,
+                    },
+                    {
+                        "source_name": "valid_001",
+                        "category": "timeout",
+                        "message": "Subscription source 'valid_001' failed: timed out",
+                        "http_status": None,
+                    },
+                ],
+                "candidates": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = module.summarize_candidate_artifact(output_path)
+
+    assert summary["fetch_error_categories"] == {"http_error": 1, "timeout": 1}
+    assert summary["fetch_http_statuses"] == {"403": 1}
 
 
 def test_run_fetch_command_can_be_simulated_without_network(tmp_path) -> None:
@@ -187,6 +235,7 @@ def test_main_uses_fake_runner_and_writes_redacted_summary(tmp_path, monkeypatch
                         "failed_count": 0,
                         "parsed_count": 1,
                         "unsupported_count": 0,
+                        "fetch_errors": [],
                         "candidates": [
                             {
                                 "source_name": "valid_001",
@@ -220,6 +269,14 @@ def test_main_uses_fake_runner_and_writes_redacted_summary(tmp_path, monkeypatch
                     "failed_count": 0,
                     "parsed_count": 0,
                     "unsupported_count": 0,
+                    "fetch_errors": [
+                        {
+                            "source_name": "invalid_001",
+                            "category": "http_error",
+                            "message": "Subscription source 'invalid_001' failed: <REDACTED_URL>",
+                            "http_status": 403,
+                        }
+                    ],
                     "candidates": [],
                 }
             ),
@@ -254,7 +311,10 @@ def test_main_uses_fake_runner_and_writes_redacted_summary(tmp_path, monkeypatch
     summary = json.loads((work_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["groups"]["valid"]["parsed_count"] == 1
     assert summary["groups"]["invalid"]["parsed_count"] == 0
+    assert summary["groups"]["invalid"]["fetch_error_categories"] == {"http_error": 1}
+    assert summary["groups"]["invalid"]["fetch_http_statuses"] == {"403": 1}
     assert summary["interpretation"]["secrets_redacted"] is True
+    assert "https://example.invalid" not in json.dumps(summary)
 
 
 def _load_script_module():

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from scholar_outbound_manager import cli
+from scholar_outbound_manager.fetcher import FetchErrorRecord
 from scholar_outbound_manager.fetcher import FetchSummary
 from scholar_outbound_manager.fetcher import FetchedSubscription
 
@@ -38,14 +39,7 @@ def test_fetch_succeeds_and_writes_output(tmp_path, capsys, monkeypatch) -> None
         "fetch_enabled_subscriptions",
         lambda sources, timeout_seconds, max_bytes: (
             [_fetched_subscription()],
-            FetchSummary(
-                source_count=1,
-                fetched_count=1,
-                disabled_count=0,
-                failed_count=0,
-                total_bytes=120,
-                errors=[],
-            ),
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         ),
     )
 
@@ -77,14 +71,7 @@ def test_fetch_prints_expected_counts(tmp_path, capsys, monkeypatch) -> None:
         "fetch_enabled_subscriptions",
         lambda sources, timeout_seconds, max_bytes: (
             [_fetched_subscription(), _unsupported_fetched_subscription()],
-            FetchSummary(
-                source_count=2,
-                fetched_count=2,
-                disabled_count=0,
-                failed_count=0,
-                total_bytes=240,
-                errors=[],
-            ),
+            _summary(source_count=2, fetched_count=2, disabled_count=0, failed_count=0, total_bytes=240),
         ),
     )
 
@@ -109,14 +96,7 @@ def test_fetch_output_does_not_include_subscription_url(tmp_path, capsys, monkey
         "fetch_enabled_subscriptions",
         lambda sources, timeout_seconds, max_bytes: (
             [_fetched_subscription()],
-            FetchSummary(
-                source_count=1,
-                fetched_count=1,
-                disabled_count=0,
-                failed_count=0,
-                total_bytes=120,
-                errors=[],
-            ),
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         ),
     )
 
@@ -138,14 +118,7 @@ def test_fetch_output_excludes_sensitive_candidate_material(tmp_path, capsys, mo
         "fetch_enabled_subscriptions",
         lambda sources, timeout_seconds, max_bytes: (
             [_fetched_subscription()],
-            FetchSummary(
-                source_count=1,
-                fetched_count=1,
-                disabled_count=0,
-                failed_count=0,
-                total_bytes=120,
-                errors=[],
-            ),
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         ),
     )
 
@@ -169,14 +142,7 @@ def test_fetch_returns_two_when_nothing_is_fetched(tmp_path, capsys, monkeypatch
         "fetch_enabled_subscriptions",
         lambda sources, timeout_seconds, max_bytes: (
             [],
-            FetchSummary(
-                source_count=1,
-                fetched_count=0,
-                disabled_count=1,
-                failed_count=0,
-                total_bytes=0,
-                errors=[],
-            ),
+            _summary(source_count=1, fetched_count=0, disabled_count=1, failed_count=0, total_bytes=0),
         ),
     )
 
@@ -197,14 +163,7 @@ def test_fetch_returns_two_when_no_candidates_are_parsed(tmp_path, capsys, monke
         "fetch_enabled_subscriptions",
         lambda sources, timeout_seconds, max_bytes: (
             [FetchedSubscription(source_name="fixture-source", content="# comments only\n", byte_count=16)],
-            FetchSummary(
-                source_count=1,
-                fetched_count=1,
-                disabled_count=0,
-                failed_count=0,
-                total_bytes=16,
-                errors=[],
-            ),
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=16),
         ),
     )
 
@@ -222,14 +181,7 @@ def test_fetch_rejects_non_positive_timeout(tmp_path, capsys) -> None:
     config_path = _write_config(tmp_path)
 
     exit_code = cli.main(
-        [
-            "fetch",
-            "--config",
-            str(config_path),
-            "--allow-network-fetch",
-            "--timeout",
-            "0",
-        ]
+        ["fetch", "--config", str(config_path), "--allow-network-fetch", "--timeout", "0"]
     )
     captured = capsys.readouterr()
 
@@ -242,14 +194,7 @@ def test_fetch_rejects_non_positive_max_bytes(tmp_path, capsys) -> None:
     config_path = _write_config(tmp_path)
 
     exit_code = cli.main(
-        [
-            "fetch",
-            "--config",
-            str(config_path),
-            "--allow-network-fetch",
-            "--max-bytes",
-            "0",
-        ]
+        ["fetch", "--config", str(config_path), "--allow-network-fetch", "--max-bytes", "0"]
     )
     captured = capsys.readouterr()
 
@@ -259,14 +204,7 @@ def test_fetch_rejects_non_positive_max_bytes(tmp_path, capsys) -> None:
 
 def test_fetch_returns_one_when_config_is_missing(tmp_path, capsys) -> None:
     """Return 1 when config loading fails."""
-    exit_code = cli.main(
-        [
-            "fetch",
-            "--config",
-            str(tmp_path / "missing.yaml"),
-            "--allow-network-fetch",
-        ]
-    )
+    exit_code = cli.main(["fetch", "--config", str(tmp_path / "missing.yaml"), "--allow-network-fetch"])
     captured = capsys.readouterr()
 
     assert exit_code == 1
@@ -281,14 +219,7 @@ def test_fetch_returns_one_when_write_fails(tmp_path, capsys, monkeypatch) -> No
         "fetch_enabled_subscriptions",
         lambda sources, timeout_seconds, max_bytes: (
             [_fetched_subscription()],
-            FetchSummary(
-                source_count=1,
-                fetched_count=1,
-                disabled_count=0,
-                failed_count=0,
-                total_bytes=120,
-                errors=[],
-            ),
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         ),
     )
     monkeypatch.setattr(
@@ -315,14 +246,7 @@ def test_fetch_does_not_call_probe_or_xray(tmp_path, monkeypatch) -> None:
         observed["fetch"] += 1
         return (
             [_fetched_subscription()],
-            FetchSummary(
-                source_count=1,
-                fetched_count=1,
-                disabled_count=0,
-                failed_count=0,
-                total_bytes=120,
-                errors=[],
-            ),
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         )
 
     monkeypatch.setattr(cli, "fetch_enabled_subscriptions", fake_fetch)
@@ -357,14 +281,7 @@ def test_probe_generate_run_and_inspect_remain_available(tmp_path, capsys, monke
         "fetch_enabled_subscriptions",
         lambda sources, timeout_seconds, max_bytes: (
             [_fetched_subscription()],
-            FetchSummary(
-                source_count=1,
-                fetched_count=1,
-                disabled_count=0,
-                failed_count=0,
-                total_bytes=120,
-                errors=[],
-            ),
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         ),
     )
 
@@ -390,6 +307,164 @@ def test_probe_generate_run_and_inspect_remain_available(tmp_path, capsys, monke
     assert generate_exit_code == 0
     assert run_exit_code == 0
     assert inspect_exit_code == 0
+
+
+def test_fetch_prints_error_category_counts(tmp_path, capsys, monkeypatch) -> None:
+    """Print non-secret fetch error category counts."""
+    config_path = _write_config(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "fetch_enabled_subscriptions",
+        lambda sources, timeout_seconds, max_bytes: (
+            [],
+            _summary(
+                source_count=1,
+                fetched_count=0,
+                disabled_count=0,
+                failed_count=2,
+                total_bytes=0,
+                errors=["safe", "safe"],
+                error_records=[
+                    FetchErrorRecord("fixture-source", "http_error", "safe", http_status=403),
+                    FetchErrorRecord("fixture-source", "timeout", "safe"),
+                ],
+            ),
+        ),
+    )
+
+    exit_code = cli.main(
+        ["fetch", "--config", str(config_path), "--allow-network-fetch", "--output", str(tmp_path / "candidates.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "fetch_error_http_error_count: 1" in captured.out
+    assert "fetch_error_timeout_count: 1" in captured.out
+
+
+def test_fetch_prints_http_status_counts(tmp_path, capsys, monkeypatch) -> None:
+    """Print HTTP status counts when structured diagnostics include them."""
+    config_path = _write_config(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "fetch_enabled_subscriptions",
+        lambda sources, timeout_seconds, max_bytes: (
+            [],
+            _summary(
+                source_count=1,
+                fetched_count=0,
+                disabled_count=0,
+                failed_count=1,
+                total_bytes=0,
+                errors=["safe"],
+                error_records=[FetchErrorRecord("fixture-source", "http_error", "safe", http_status=403)],
+            ),
+        ),
+    )
+
+    exit_code = cli.main(
+        ["fetch", "--config", str(config_path), "--allow-network-fetch", "--output", str(tmp_path / "candidates.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "http_status_403_count: 1" in captured.out
+
+
+def test_fetch_artifact_contains_fetch_errors(tmp_path, monkeypatch) -> None:
+    """Write structured fetch errors into the candidate artifact."""
+    config_path = _write_config(tmp_path)
+    output_path = tmp_path / "candidates.json"
+    monkeypatch.setattr(
+        cli,
+        "fetch_enabled_subscriptions",
+        lambda sources, timeout_seconds, max_bytes: (
+            [],
+            _summary(
+                source_count=1,
+                fetched_count=0,
+                disabled_count=0,
+                failed_count=1,
+                total_bytes=0,
+                errors=["safe"],
+                error_records=[
+                    FetchErrorRecord(
+                        "fixture-source",
+                        "http_error",
+                        "Subscription source 'fixture-source' failed: HTTP 403.",
+                        http_status=403,
+                    )
+                ],
+            ),
+        ),
+    )
+
+    exit_code = cli.main(["fetch", "--config", str(config_path), "--allow-network-fetch", "--output", str(output_path)])
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 2
+    assert payload["fetch_errors"][0]["category"] == "http_error"
+    assert payload["fetch_errors"][0]["http_status"] == 403
+
+
+def test_fetch_output_excludes_secret_words_and_urls(tmp_path, capsys, monkeypatch) -> None:
+    """Avoid printing secret-bearing or URL-bearing diagnostics."""
+    config_path = _write_config(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "fetch_enabled_subscriptions",
+        lambda sources, timeout_seconds, max_bytes: (
+            [],
+            _summary(
+                source_count=1,
+                fetched_count=0,
+                disabled_count=0,
+                failed_count=1,
+                total_bytes=0,
+                errors=["Subscription source 'fixture-source' failed: <REDACTED_URL> <REDACTED>"],
+                error_records=[
+                    FetchErrorRecord(
+                        "fixture-source",
+                        "url_error",
+                        "Subscription source 'fixture-source' failed: <REDACTED_URL> <REDACTED>",
+                    )
+                ],
+            ),
+        ),
+    )
+
+    exit_code = cli.main(
+        ["fetch", "--config", str(config_path), "--allow-network-fetch", "--output", str(tmp_path / "candidates.json")]
+    )
+    captured = capsys.readouterr()
+
+    rendered = captured.out + captured.err
+    assert exit_code == 2
+    assert "https://" not in rendered
+    assert "token=" not in rendered.lower()
+    assert "password=" not in rendered.lower()
+
+
+def _summary(
+    *,
+    source_count: int,
+    fetched_count: int,
+    disabled_count: int,
+    failed_count: int,
+    total_bytes: int,
+    errors: list[str] | None = None,
+    error_records: list[FetchErrorRecord] | None = None,
+) -> FetchSummary:
+    """Build one FetchSummary with explicit defaults for tests."""
+    return FetchSummary(
+        source_count=source_count,
+        fetched_count=fetched_count,
+        disabled_count=disabled_count,
+        failed_count=failed_count,
+        total_bytes=total_bytes,
+        errors=errors or [],
+        error_records=error_records or [],
+    )
 
 
 def _write_config(
@@ -495,7 +570,7 @@ def _manifest_payload() -> dict[str, object]:
 
 
 def _artifact_result(tmp_path: Path) -> dict[str, object]:
-    """Build one probe artifact summary for CLI compatibility tests."""
+    """Build one probe artifact summary for compatibility tests."""
     return {
         "summary_path": str(tmp_path / "probe_summary.json"),
         "passed_candidates_path": str(tmp_path / "passed_candidates.json"),

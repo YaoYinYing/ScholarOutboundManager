@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import io
+import ssl
 from email.message import Message
+from urllib.error import HTTPError
+from urllib.error import URLError
 
 import pytest
 
 from scholar_outbound_manager import fetcher
+from scholar_outbound_manager.fetcher import _classify_fetch_exception
 from scholar_outbound_manager.fetcher import FetchedSubscription
 from scholar_outbound_manager.fetcher import fetch_enabled_subscriptions
 from scholar_outbound_manager.fetcher import fetch_subscription
@@ -69,6 +73,7 @@ def test_fetch_enabled_subscriptions_records_individual_failures() -> None:
     assert [item.source_name for item in fetched] == ["two"]
     assert summary.failed_count == 1
     assert summary.fetched_count == 1
+    assert len(summary.error_records) == 1
 
 
 def test_fetch_enabled_subscriptions_errors_do_not_include_urls() -> None:
@@ -81,7 +86,9 @@ def test_fetch_enabled_subscriptions_errors_do_not_include_urls() -> None:
     _, summary = fetch_enabled_subscriptions(sources, 5.0, fetch_func=fake_fetch)
 
     rendered = " ".join(summary.errors)
+    structured_rendered = " ".join(record.message for record in summary.error_records)
     assert "https://example.invalid/token-secret" not in rendered
+    assert "https://example.invalid/token-secret" not in structured_rendered
     assert "one" in rendered
 
 
@@ -158,3 +165,133 @@ def test_fetch_subscription_uses_headers_and_decodes_response(monkeypatch) -> No
     assert observed["timeout"] == 7.0
     assert fetched.content == "vless://fixture"
 
+
+def test_classify_fetch_exception_marks_http_errors() -> None:
+    """Classify HTTP errors with status codes."""
+    record = _classify_fetch_exception(
+        "fixture",
+        HTTPError("https://example.invalid/token", 403, "Forbidden", None, None),
+    )
+
+    assert record.category == "http_error"
+    assert record.http_status == 403
+
+
+def test_classify_fetch_exception_marks_timeout_url_errors() -> None:
+    """Classify URL timeouts as timeout."""
+    record = _classify_fetch_exception("fixture", URLError(TimeoutError("timed out")))
+
+    assert record.category == "timeout"
+
+
+def test_classify_fetch_exception_marks_dns_url_errors() -> None:
+    """Classify DNS-style failures as dns_error."""
+    record = _classify_fetch_exception(
+        "fixture",
+        URLError("nodename nor servname provided, or not known"),
+    )
+
+    assert record.category == "dns_error"
+
+
+def test_classify_fetch_exception_marks_ssl_errors() -> None:
+    """Classify SSL failures as ssl_error."""
+    record = _classify_fetch_exception("fixture", ssl.SSLError("CERTIFICATE_VERIFY_FAILED"))
+
+    assert record.category == "ssl_error"
+
+
+def test_classify_fetch_exception_marks_connection_errors() -> None:
+    """Classify connection failures as connection_error."""
+    record = _classify_fetch_exception("fixture", ConnectionRefusedError("Connection refused"))
+
+    assert record.category == "connection_error"
+
+
+def test_classify_fetch_exception_marks_too_large_value_errors() -> None:
+    """Classify size-limit failures as too_large."""
+    record = _classify_fetch_exception("fixture", ValueError("subscription is too large"))
+
+    assert record.category == "too_large"
+
+
+def test_classify_fetch_exception_marks_unsupported_schemes() -> None:
+    """Classify unsupported-scheme failures explicitly."""
+    record = _classify_fetch_exception(
+        "fixture",
+        ValueError("Subscription source 'fixture' must use http or https."),
+    )
+
+    assert record.category == "unsupported_scheme"
+
+
+def test_fetch_subscription_adds_default_user_agent(monkeypatch) -> None:
+    """Add a default User-Agent when the source does not define one."""
+    observed: dict[str, object] = {}
+    source = SubscriptionSource(
+        name="fixture",
+        url="https://example.invalid/subscription",
+        enabled=True,
+        headers={"X-Test": "value"},
+    )
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.headers = Message()
+            self.headers["Content-Type"] = "text/plain; charset=utf-8"
+            self._payload = io.BytesIO("vless://fixture".encode("utf-8"))
+
+        def read(self, size: int = -1) -> bytes:
+            return self._payload.read(size)
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    def fake_urlopen(request, timeout: float):
+        observed["user_agent"] = request.get_header("User-agent")
+        return FakeResponse()
+
+    monkeypatch.setattr(fetcher, "urlopen", fake_urlopen)
+
+    fetch_subscription(source, 7.0)
+
+    assert observed["user_agent"] == "ScholarOutboundManager/0.1"
+
+
+def test_fetch_subscription_preserves_custom_user_agent(monkeypatch) -> None:
+    """Keep a user-provided User-Agent header unchanged."""
+    observed: dict[str, object] = {}
+    source = SubscriptionSource(
+        name="fixture",
+        url="https://example.invalid/subscription",
+        enabled=True,
+        headers={"User-Agent": "CustomAgent/1.0"},
+    )
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.headers = Message()
+            self.headers["Content-Type"] = "text/plain; charset=utf-8"
+            self._payload = io.BytesIO("vless://fixture".encode("utf-8"))
+
+        def read(self, size: int = -1) -> bytes:
+            return self._payload.read(size)
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    def fake_urlopen(request, timeout: float):
+        observed["user_agent"] = request.get_header("User-agent")
+        return FakeResponse()
+
+    monkeypatch.setattr(fetcher, "urlopen", fake_urlopen)
+
+    fetch_subscription(source, 7.0)
+
+    assert observed["user_agent"] == "CustomAgent/1.0"

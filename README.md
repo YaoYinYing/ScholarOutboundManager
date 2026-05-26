@@ -293,6 +293,8 @@ python scripts/live_ab_fetch_test.py \
 
 This smoke test only exercises fetch/parse behavior. It does not probe Scholar, does not start Xray, and writes local output under `state_data/live_ab/`. Do not commit `live_test_data/` or `state_data/live_ab/`.
 
+The redacted summary now includes fetch error categories and HTTP status counts when available. A valid group with `fetched_count=0` means fetch failed before parsing. A valid group with `fetched_count>0` and `parsed_count=0` points to a parser or content-format issue.
+
 ## Artifact Table
 
 | Path | Produced by | Sensitivity | Purpose | Commit? |

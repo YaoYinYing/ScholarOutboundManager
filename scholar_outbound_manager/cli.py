@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -158,6 +159,7 @@ def _handle_fetch(args: argparse.Namespace) -> int:
             total_bytes=fetch_summary.total_bytes,
             parsed_count=parsed_count,
             unsupported_count=unsupported_count,
+            fetch_errors=fetch_summary.error_records,
         )
         write_candidate_artifact(args.output, payload)
     except (ConfigError, FileNotFoundError, ValueError, OSError) as exc:
@@ -175,6 +177,10 @@ def _handle_fetch(args: argparse.Namespace) -> int:
     print(f"parsed_count: {parsed_count}")
     print(f"supported_count: {supported_count}")
     print(f"unsupported_count: {unsupported_count}")
+    for category, count in _summarize_fetch_error_categories(fetch_summary.error_records).items():
+        print(f"fetch_error_{category}_count: {count}")
+    for status_code, count in _summarize_fetch_http_statuses(fetch_summary.error_records).items():
+        print(f"http_status_{status_code}_count: {count}")
     print(f"output_path: {args.output}")
     return 0 if fetch_summary.fetched_count > 0 and parsed_count > 0 else 2
 
@@ -392,6 +398,20 @@ def _validate_distinct_output_paths(summary_output: str, passed_candidates_outpu
     """Validate that probe output paths do not point to the same location."""
     if Path(summary_output) == Path(passed_candidates_output):
         raise ValueError("summary-output and passed-candidates-output must be different paths.")
+
+
+def _summarize_fetch_error_categories(error_records: list) -> dict[str, int]:
+    """Count fetch error categories for CLI summary output."""
+    return dict(sorted(Counter(record.category for record in error_records).items()))
+
+
+def _summarize_fetch_http_statuses(error_records: list) -> dict[int, int]:
+    """Count fetch HTTP status codes for CLI summary output."""
+    return dict(
+        sorted(
+            Counter(record.http_status for record in error_records if record.http_status is not None).items()
+        )
+    )
 
 
 def _filter_candidates_for_cli(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from scholar_outbound_manager.fetcher import FetchErrorRecord
 from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
 
@@ -18,6 +19,7 @@ def build_candidate_artifact(
     total_bytes: int,
     parsed_count: int,
     unsupported_count: int,
+    fetch_errors: list[FetchErrorRecord] | None = None,
 ) -> dict[str, object]:
     """Build one sensitive candidate artifact payload."""
     return {
@@ -31,6 +33,15 @@ def build_candidate_artifact(
         "total_bytes": total_bytes,
         "parsed_count": parsed_count,
         "unsupported_count": unsupported_count,
+        "fetch_errors": [
+            {
+                "source_name": error.source_name,
+                "category": error.category,
+                "message": error.message,
+                "http_status": error.http_status,
+            }
+            for error in (fetch_errors or [])
+        ],
         "candidates": [candidate.to_dict() for candidate in candidates],
     }
 
