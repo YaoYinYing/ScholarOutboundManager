@@ -1,6 +1,6 @@
 # ScholarOutboundManager
 
-ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager for offline candidate review, sequential probing, safe inspection, JSON fragment generation, and local runtime preparation.
+ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager for offline candidate review, sequential probing, safe inspection, and isolated SOCKS sidecar runtime preparation.
 
 ## Project Status
 
@@ -8,7 +8,7 @@ ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager 
 - `fetch` can parse plain URI subscriptions and Clash-compatible YAML subscriptions.
 - `fetch` requires explicit CLI opt-in with `--allow-network-fetch`.
 - `fetch` does not probe Google Scholar and does not start Xray.
-- Current inputs for `probe` and `generate` can come from a locally fetched `candidates.json` file or other offline candidate artifacts.
+- Current inputs for `probe`, `sidecar`, and legacy `generate` can come from a locally fetched `candidates.json` file or other offline candidate artifacts.
 - `probe` is protected by a two-key network safety gate.
 - `probe.allow_network_probe` must be `true` in config.
 - `--allow-network-probe` must also be passed on the CLI.
@@ -17,9 +17,9 @@ ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager 
 - There is no concurrency.
 - There is no retry or cache layer in the current CLI workflow.
 - Scholar probe pass/fail is two-stage: Scholar home and a reference query must both pass.
-- `probe` and `generate` apply configured candidate filters before probing or generation.
+- `probe` and legacy `generate` apply configured candidate filters before probing or export.
 - Passed-candidates artifacts may preserve `ProbeResult` evidence for later manifest generation.
-- `generate` only writes JSON artifacts and does not start Xray.
+- `generate` only writes offline JSON fragments and does not start Xray.
 - `run` prepares one local runtime config and can optionally execute `xray run -test`, but it does not probe Google Scholar.
 - `inspect` only performs safe local review of existing artifacts.
 
@@ -51,13 +51,13 @@ These artifacts are intended for review and should avoid raw proxy credentials.
 
 `inspect` never prints selected proxy credentials from sensitive artifacts.
 
-### Generated Xray artifacts
+### Legacy generated Xray artifacts
 
 - Generated outbounds JSON
 - Generated routes JSON
 - Generated manifest JSON
 
-These artifacts are produced locally from offline candidate input and are meant for controlled downstream use.
+These artifacts are produced locally from offline candidate input and are retained for legacy export, debugging, or advanced downstream tooling. They are not the recommended production integration path.
 
 ### Network probe safety gate
 
@@ -82,7 +82,7 @@ Subscription fetching is also explicit opt-in at the CLI layer.
 - Xray-compatible Clash YAML protocols now include VLESS, Trojan, Shadowsocks, and VMess when required fields are present.
 - Unsupported protocols such as hysteria2, tuic, and wireguard still require a future `mihomo` probe backend.
 - `mihomo` is a useful future probe backend for broader protocol coverage.
-- Xray/XrayR remains the preferred final configuration target for generated runtime artifacts.
+- Localhost SOCKS sidecar integration is the preferred production path.
 - The project should not reimplement proxy protocol data planes directly.
 - Xray binary availability is not assumed on the target machine.
 - Future work may add explicit Xray binary acquisition or update support, but it must stay opt-in and checksum-aware.
@@ -130,14 +130,17 @@ xray:
 - Do not use `killall xray` or `pkill xray` for this project.
 - For manual checks, use project-managed pid files under `.runtime/` instead of global process-name scans.
 
-On a VPS, the intended manual chain is:
+On a VPS, the recommended manual chain is:
 
 ```bash
 scholar-outbound-manager environment
 scholar-outbound-manager xray inspect --path .runtime/xray/xray
 scholar-outbound-manager probe --config config.yaml --candidates candidates.json --allow-network-probe
 scholar-outbound-manager inspect --probe-summary state_data/probe_summary.json
-scholar-outbound-manager generate --config config.yaml --candidates state_data/passed_candidates.json
+scholar-outbound-manager sidecar service-stage --config config.yaml --candidates state_data/passed_candidates.json --candidate-index 0
+scholar-outbound-manager sidecar service-install --unit-name scholar-outbound-sidecar.service
+scholar-outbound-manager sidecar service-start --unit-name scholar-outbound-sidecar.service
+scholar-outbound-manager sidecar service-snippet --listen-host 127.0.0.1 --listen-port 19080 --tag scholar-sidecar-socks-out
 ```
 
 Before a VPS probe:
@@ -324,7 +327,57 @@ scholar-outbound-manager inspect \
   --passed-candidates state_data/passed_candidates.json
 ```
 
-### Step 5: generate Xray fragments from passed candidates
+### Step 5: start an isolated sidecar manually for smoke or local validation
+
+```bash
+scholar-outbound-manager sidecar start \
+  --config config.yaml \
+  --candidates state_data/passed_candidates.json
+  --candidate-index 0 \
+  --listen-host 127.0.0.1 \
+  --listen-port 19080
+```
+
+### Step 6: stage production sidecar files
+
+```bash
+scholar-outbound-manager sidecar service-stage \
+  --config config.yaml \
+  --candidates state_data/passed_candidates.json \
+  --candidate-index 0 \
+  --listen-host 127.0.0.1 \
+  --listen-port 19080
+```
+
+### Step 7: install and start the production sidecar unit
+
+```bash
+scholar-outbound-manager sidecar service-install \
+  --unit-name scholar-outbound-sidecar.service
+
+scholar-outbound-manager sidecar service-start \
+  --unit-name scholar-outbound-sidecar.service
+
+scholar-outbound-manager sidecar service-enable \
+  --unit-name scholar-outbound-sidecar.service
+```
+
+### Step 8: print the downstream production SOCKS outbound snippet
+
+```bash
+scholar-outbound-manager sidecar service-snippet \
+  --listen-host 127.0.0.1 \
+  --listen-port 19080 \
+  --tag scholar-sidecar-socks-out
+```
+
+Production Xray or XrayR integration remains a manual downstream step that points to the localhost SOCKS sidecar. ScholarOutboundManager does not mutate production Xray, XrayR, or `x-ui` configuration.
+
+## Legacy Offline Fragment Export
+
+`generate` is retained for legacy offline export, debugging, and advanced tooling. It does not modify production configuration and is not the recommended production workflow.
+
+### Legacy step: export offline Xray fragments
 
 ```bash
 scholar-outbound-manager generate \
@@ -332,16 +385,14 @@ scholar-outbound-manager generate \
   --candidates state_data/passed_candidates.json
 ```
 
-`generate` remains available for fragment export, but it is no longer the preferred production integration path.
-
-### Step 6: inspect generated manifest
+### Legacy step: inspect generated manifest
 
 ```bash
 scholar-outbound-manager inspect \
   --manifest generated/google_scholar_manifest.json
 ```
 
-### Step 7: prepare one runtime config and optionally test it
+### Legacy step: prepare one runtime config and optionally test it
 
 ```bash
 scholar-outbound-manager run \
@@ -351,29 +402,11 @@ scholar-outbound-manager run \
   --test-config
 ```
 
-### Step 8: start an isolated Scholar sidecar
-
-```bash
-scholar-outbound-manager sidecar start \
-  --config config.yaml \
-  --candidates state_data/passed_candidates.json \
-  --candidate-index 0 \
-  --listen-host 127.0.0.1 \
-  --listen-port 19080
-```
-
-### Step 9: inspect or stop the sidecar
-
-```bash
-scholar-outbound-manager sidecar status --config config.yaml
-scholar-outbound-manager sidecar stop --config config.yaml
-```
-
 ## CLI Reference
 
 ### `generate`
 
-Purpose: convert offline candidates into Xray outbounds, routes, and manifest JSON.
+Purpose: export legacy offline Xray outbounds, routes, and manifest JSON for debugging or advanced downstream tooling.
 
 Required arguments:
 
@@ -385,7 +418,10 @@ Notes:
 - `generate` can consume plain candidates JSON.
 - `generate` can also consume sensitive passed-candidates artifacts.
 - When probe evidence is present, the generated manifest preserves redacted probe evidence.
-- `generate` applies configured candidate filters before generation.
+- `generate` applies configured candidate filters before export.
+- `generate` does not modify production Xray, XrayR, or `x-ui` configuration.
+- `generate` does not reload production services.
+- For production use, prefer the sidecar service workflow.
 
 Output files:
 
@@ -400,7 +436,7 @@ Exit codes:
 
 ### `probe`
 
-Purpose: sequentially probe offline candidates, write a redacted review-safe summary, and write a sensitive passed-candidates artifact for later generation.
+Purpose: sequentially probe offline candidates, write a redacted review-safe summary, and write a sensitive passed-candidates artifact for later sidecar selection or legacy offline export.
 
 Important arguments:
 

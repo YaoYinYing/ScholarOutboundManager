@@ -12,18 +12,23 @@ Treat the following as local sensitive material:
 - `.runtime/`
 - `.env`
 - logs containing proxy material
+- `/etc/scholar-outbound-manager/`
 
 These files can contain proxy URI, UUID, public key, token, runtime config, or other credential-bearing data. They must not be committed.
 
 ## Redacted vs Sensitive Artifacts
 
 - Redacted probe summary is for review.
-- Sensitive passed-candidates artifact is for `generate`.
+- Sensitive passed-candidates artifact is for sidecar selection or legacy offline export.
 - `inspect` only shows metadata for sensitive artifacts.
 
-The redacted probe summary is intended for safe sharing inside reviews. The passed-candidates artifact intentionally preserves selected proxy credentials for later offline generation and must remain local.
+The redacted probe summary is intended for safe sharing inside reviews. The passed-candidates artifact intentionally preserves selected proxy credentials for later sidecar selection or legacy offline generation and must remain local.
 
 `passed_candidates.json` may contain nested candidate credentials and probe evidence. It remains sensitive even if probe evidence is useful for debugging. It must not be committed.
+
+If produced, generated Xray fragments are legacy offline exports and may also contain real node credentials. They must remain local.
+
+Sidecar runtime configs are sensitive. Do not paste `.runtime/` sidecar configs or production-staged runtime configs under `/etc/scholar-outbound-manager/`.
 
 ## Network Probe Safety Gate
 
@@ -47,6 +52,10 @@ Do not paste any of the following into issues, pull requests, chats, or screensh
 - `config.yaml`
 - `passed_candidates.json`
 - generated outbounds containing real nodes
+- generated routes containing real nodes
+- generated manifests if they carry real credential-bearing fragments
+- sidecar runtime config
+- `/etc/scholar-outbound-manager/scholar_sidecar_runtime.json`
 
 ## Safe Debugging Checklist
 
@@ -57,6 +66,8 @@ Prefer sharing only:
 - redacted `inspect` output
 - failure markers
 - file paths, with usernames removed if desired
+
+Production Xray, XrayR, and `x-ui` configuration is not managed by this project. The production integration model is a manual downstream SOCKS outbound that points at the Scholar sidecar. The `systemd` unit itself should not contain proxy credentials.
 
 ## Recovery and Cleanup
 

@@ -29,6 +29,9 @@ def test_generate_command_succeeds_with_offline_candidates(tmp_path, capsys) -> 
     assert "loaded_count: 1" in captured.out
     assert "filtered_count: 1" in captured.out
     assert "filter_skipped_count: 0" in captured.out
+    assert "offline xray fragments" in captured.out.lower()
+    assert "does not modify production" in captured.out.lower()
+    assert "prefer the sidecar" in captured.out.lower()
 
 
 def test_generate_applies_candidate_filters_before_generation(tmp_path, capsys) -> None:
@@ -111,6 +114,7 @@ def test_generate_does_not_print_raw_uri(tmp_path, capsys) -> None:
     assert exit_code == 0
     assert "vless://" not in captured.out
     assert "vless://" not in captured.err
+    assert "offline xray fragments" in captured.out.lower()
 
 
 def test_fetch_requires_network_opt_in(capsys) -> None:

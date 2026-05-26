@@ -119,7 +119,13 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--config", default="config.yaml")
         subparser.set_defaults(handler=_handle_unimplemented)
 
-    generate_parser = subparsers.add_parser("generate")
+    generate_parser = subparsers.add_parser(
+        "generate",
+        help="Export legacy offline Xray fragments without modifying production configuration.",
+        description=(
+            "Deprecated for production integration; prefer the sidecar service workflow."
+        ),
+    )
     generate_parser.add_argument("--config", default="config.yaml")
     generate_parser.add_argument("--candidates", required=True)
     generate_parser.set_defaults(handler=_handle_generate)
@@ -321,6 +327,11 @@ def _handle_generate(args: argparse.Namespace) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    print(
+        "Warning: generate only exports offline Xray fragments. "
+        "It does not modify production Xray/XrayR configuration. "
+        "For production use, prefer the sidecar systemd workflow."
+    )
     print("Generated Scholar outbound artifacts.")
     print(f"loaded_count: {len(bundle.candidates)}")
     print(f"filtered_count: {len(candidates)}")

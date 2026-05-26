@@ -80,11 +80,16 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "sidecar service-start" in readme_text
     assert "sidecar service-enable" in readme_text
     assert "sidecar service-snippet" in readme_text
+    assert "legacy offline fragment export" in readme_text.lower()
+    assert "not the recommended production workflow" in readme_text.lower()
+    assert "does not mutate production xray" in readme_text.lower() or "does not modify production xray" in readme_text.lower()
+    assert "manual downstream step" in readme_text.lower()
     assert "systemd" in readme_text.lower()
     assert "dedicated user" in readme_text.lower()
     assert "does not modify production xray" in readme_text.lower() or "does not modify production xrayr" in readme_text.lower()
     assert "does not kill external xray processes" in readme_text.lower()
     assert "docker is not the default lifecycle manager" in readme_text.lower()
+    assert "step 5: generate xray fragments from passed candidates" not in readme_text.lower()
 
 
 def test_security_doc_exists_and_warns_about_sensitive_material() -> None:
@@ -102,6 +107,10 @@ def test_security_doc_exists_and_warns_about_sensitive_material() -> None:
     assert "passed_candidates" in security_text
     assert "config.yaml" in security_text
     assert "must not be committed" in security_text.lower()
+    assert "/etc/scholar-outbound-manager/" in security_text
+    assert "production xray" in security_text.lower()
+    assert "not managed by this project" in security_text.lower()
+    assert "generated xray fragments are legacy offline exports" in security_text.lower()
 
 
 def test_config_example_keeps_network_probe_disabled_by_default() -> None:
