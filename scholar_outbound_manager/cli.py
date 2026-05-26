@@ -10,6 +10,8 @@ from pathlib import Path
 from scholar_outbound_manager import __version__
 from scholar_outbound_manager.config import ConfigError
 from scholar_outbound_manager.config import load_config
+from scholar_outbound_manager.doctor import build_doctor_report
+from scholar_outbound_manager.doctor import format_doctor_report
 from scholar_outbound_manager.generation import write_generation_outputs
 from scholar_outbound_manager.inspect import format_generated_manifest_inspection
 from scholar_outbound_manager.inspect import format_probe_summary_inspection
@@ -45,6 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_parser = subparsers.add_parser("fetch")
     fetch_parser.add_argument("--config", default="config.yaml")
     fetch_parser.set_defaults(handler=_handle_unimplemented)
+
+    doctor_parser = subparsers.add_parser("doctor")
+    doctor_parser.add_argument("--config", default="config.yaml")
+    doctor_parser.add_argument("--candidates")
+    doctor_parser.add_argument("--require-network-probe-ready", action="store_true")
+    doctor_parser.add_argument("--require-passed-candidates", action="store_true")
+    doctor_parser.set_defaults(handler=_handle_doctor)
 
     probe_parser = subparsers.add_parser("probe")
     probe_parser.add_argument("--config", default="config.yaml")
@@ -126,6 +135,23 @@ def _handle_generate(args: argparse.Namespace) -> int:
     print(f"routes_path: {summary['routes_path']}")
     print(f"manifest_path: {summary['manifest_path']}")
     return 0
+
+
+def _handle_doctor(args: argparse.Namespace) -> int:
+    """Run local-only preflight checks without starting Xray or probing."""
+    try:
+        report = build_doctor_report(
+            config_path=args.config,
+            candidates_path=args.candidates,
+            require_network_probe_ready=args.require_network_probe_ready,
+            require_passed_candidates=args.require_passed_candidates,
+        )
+    except Exception as exc:  # pragma: no cover - defensive CLI boundary
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(format_doctor_report(report))
+    return report.exit_code
 
 
 def _handle_probe(args: argparse.Namespace) -> int:
