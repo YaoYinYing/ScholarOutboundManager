@@ -213,7 +213,7 @@ def test_probe_candidate_terminates_on_query_blocked_response(tmp_path) -> None:
     fake_process = _FakeManagedProcess()
 
     def fake_http_probe(target, socks, timeout_seconds):
-        if "scholar?q=" in target.url:
+        if "/scholar?" in target.url:
             return _make_response(url=target.url, status_code=403, body_prefix="captcha")
         return _make_response(url=target.url, status_code=200, body_prefix="ok")
 
@@ -235,7 +235,7 @@ def test_probe_candidate_merges_scholar_failure_markers(tmp_path) -> None:
     fake_process = _FakeManagedProcess()
 
     def fake_http_probe(target, socks, timeout_seconds):
-        if "scholar?q=" in target.url:
+        if "/scholar?" in target.url:
             return _make_response(url=target.url, status_code=403, body_prefix="captcha", elapsed_ms=20)
         return _make_response(url=target.url, status_code=200, body_prefix="Our systems have detected unusual traffic", elapsed_ms=10)
 
@@ -248,7 +248,12 @@ def test_probe_candidate_merges_scholar_failure_markers(tmp_path) -> None:
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
     )
 
-    assert summary.result.failure_markers == ["unusual_traffic", "captcha", "http_403"]
+    assert summary.result.failure_markers == [
+        "unusual_traffic",
+        "captcha",
+        "http_403",
+        "stage_home_blocked",
+    ]
     assert summary.result.latency_ms == 30
 
 

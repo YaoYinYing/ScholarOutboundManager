@@ -72,9 +72,24 @@ def test_is_probe_passed_rejects_bad_query_status() -> None:
     assert is_probe_passed(_make_probe_result(query_status=403)) is False
 
 
+def test_is_probe_passed_rejects_missing_query_status() -> None:
+    """Reject results that did not complete the query-stage check."""
+    assert is_probe_passed(_make_probe_result(query_status=None)) is False
+
+
 def test_is_probe_passed_rejects_failure_markers() -> None:
     """Reject results with failure markers."""
     assert is_probe_passed(_make_probe_result(failure_markers=["captcha"])) is False
+
+
+def test_is_probe_passed_rejects_stage_query_blocked_marker() -> None:
+    """Reject explicit query-blocked stage markers."""
+    assert is_probe_passed(_make_probe_result(failure_markers=["stage_query_blocked"])) is False
+
+
+def test_is_probe_passed_rejects_stage_home_blocked_marker() -> None:
+    """Reject explicit home-blocked stage markers."""
+    assert is_probe_passed(_make_probe_result(failure_markers=["stage_home_blocked"])) is False
 
 
 def test_probe_candidates_sequential_probes_multiple_candidates(capsys) -> None:

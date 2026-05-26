@@ -15,6 +15,7 @@ ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager 
 - `probe` runs sequentially.
 - There is no concurrency.
 - There is no retry or cache layer in the current CLI workflow.
+- Scholar probe pass/fail is two-stage: Scholar home and a reference query must both pass.
 - `probe` and `generate` apply configured candidate filters before probing or generation.
 - Passed-candidates artifacts may preserve `ProbeResult` evidence for later manifest generation.
 - `generate` only writes JSON artifacts and does not start Xray.
@@ -203,6 +204,9 @@ Safety:
 
 - `--allow-network-probe` is required together with `probe.allow_network_probe: true`.
 - This command may start local Xray and issue Scholar HTTP requests only after both are enabled.
+- A passed candidate requires both `https://scholar.google.com/` and the reference query path to pass.
+- `home blocked` means the Scholar home page is denied.
+- `query blocked` means the home page responds, but the reference query path is denied.
 
 Output files:
 
@@ -214,6 +218,15 @@ Exit codes:
 - `0`: probe completed and at least one candidate passed
 - `1`: config, input, validation, probe, write error, or safety-gate refusal
 - `2`: probe completed but no candidate passed
+
+## Real probe environment
+
+- A MacBook running `mihomo` or another TUN-based client is not a trustworthy final Scholar probe environment.
+- Use the MacBook for development, fetch, parse, inspect, and artifact review.
+- Use the target VPS for final probe and generate decisions.
+- TUN routing can contaminate the effective Xray outbound path even when the local workflow looks correct.
+- The `environment` command only provides a local hint. It cannot prove routing isolation.
+- Final confidence comes from running `probe` on the target VPS.
 
 ### `inspect`
 
@@ -234,6 +247,17 @@ Exit codes:
 
 - `0`: inspection succeeded
 - `1`: input, JSON, or schema error
+
+### `environment`
+
+Purpose: report local-only environment hints that affect how trustworthy live probe results are.
+
+Notes:
+
+- `environment` does not access the network.
+- `environment` does not start Xray.
+- It only reports local hints such as proxy environment variables and the current platform.
+- On macOS, it should be treated as a development-only warning surface rather than proof of routing isolation.
 
 ### `run`
 

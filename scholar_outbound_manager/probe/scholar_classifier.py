@@ -17,6 +17,14 @@ BROWSER_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36"
 )
 
+SCHOLAR_STAGE_FULL_ACCESS = "full_access"
+SCHOLAR_STAGE_HOME_BLOCKED = "home_blocked"
+SCHOLAR_STAGE_QUERY_BLOCKED = "query_blocked"
+SCHOLAR_STAGE_TIMEOUT = "timeout"
+SCHOLAR_STAGE_TRANSPORT_FAILED = "transport_failed"
+SCHOLAR_STAGE_SERVER_ERROR = "server_error"
+SCHOLAR_STAGE_UNKNOWN = "unknown"
+
 _BLOCK_MARKER_RULES: list[tuple[str, str, str]] = [
     ("unusual traffic", "unusual_traffic", "Body or headers mention unusual traffic."),
     ("automated queries", "automated_queries", "Body or headers mention automated queries."),
@@ -44,6 +52,21 @@ class ScholarClassification:
     timeout: bool
     transport_error: bool
     status_code: int | None
+    failure_markers: list[str]
+    evidence: list[str]
+
+
+@dataclass(slots=True)
+class ScholarAccessDecision:
+    """Represent a two-stage Scholar accessibility decision."""
+
+    stage: str
+    passed: bool
+    home_status: int | None
+    query_status: int | None
+    blocked: bool
+    timeout: bool
+    transport_error: bool
     failure_markers: list[str]
     evidence: list[str]
 
@@ -129,6 +152,84 @@ def classify_scholar_response(response: HttpProbeResponse) -> ScholarClassificat
     )
 
 
+def classify_scholar_access(
+    home_response: HttpProbeResponse,
+    query_response: HttpProbeResponse | None,
+) -> ScholarAccessDecision:
+    """Classify combined Scholar home and query responses into a two-stage decision."""
+    home_classification = classify_scholar_response(home_response)
+    query_classification = (
+        None if query_response is None else classify_scholar_response(query_response)
+    )
+    failure_markers = _merge_unique(
+        home_classification.failure_markers,
+        [] if query_classification is None else query_classification.failure_markers,
+    )
+    evidence = _merge_unique(
+        home_classification.evidence,
+        [] if query_classification is None else query_classification.evidence,
+    )
+
+    blocked = home_classification.blocked or bool(query_classification and query_classification.blocked)
+    timeout = home_classification.timeout or bool(query_classification and query_classification.timeout)
+    transport_error = home_classification.transport_error or bool(
+        query_classification and query_classification.transport_error
+    )
+
+    home_status = home_response.status_code
+    query_status = None if query_response is None else query_response.status_code
+    status_values = [status for status in (home_status, query_status) if status is not None]
+
+    if timeout:
+        stage = SCHOLAR_STAGE_TIMEOUT
+        passed = False
+    elif transport_error:
+        stage = SCHOLAR_STAGE_TRANSPORT_FAILED
+        passed = False
+    elif home_status is not None and home_status >= 500 or "server_error" in home_classification.failure_markers:
+        stage = SCHOLAR_STAGE_SERVER_ERROR
+        passed = False
+    elif query_classification is not None and (
+        query_status is not None and query_status >= 500 or "server_error" in query_classification.failure_markers
+    ):
+        stage = SCHOLAR_STAGE_SERVER_ERROR
+        passed = False
+    elif home_classification.blocked or home_status == 403:
+        stage = SCHOLAR_STAGE_HOME_BLOCKED
+        passed = False
+    elif query_response is None:
+        stage = SCHOLAR_STAGE_UNKNOWN
+        passed = False
+    elif query_classification.blocked or query_status == 403:
+        stage = SCHOLAR_STAGE_QUERY_BLOCKED
+        passed = False
+    elif (
+        home_status in {200, 301, 302, 303, 307, 308}
+        and query_status in {200, 301, 302, 303, 307, 308}
+        and not failure_markers
+    ):
+        stage = SCHOLAR_STAGE_FULL_ACCESS
+        passed = True
+    elif any(status >= 500 for status in status_values):
+        stage = SCHOLAR_STAGE_SERVER_ERROR
+        passed = False
+    else:
+        stage = SCHOLAR_STAGE_UNKNOWN
+        passed = False
+
+    return ScholarAccessDecision(
+        stage=stage,
+        passed=passed,
+        home_status=home_status,
+        query_status=query_status,
+        blocked=blocked,
+        timeout=timeout,
+        transport_error=transport_error,
+        failure_markers=failure_markers,
+        evidence=evidence,
+    )
+
+
 def build_scholar_probe_result(
     candidate_id: str,
     home_response: HttpProbeResponse,
@@ -136,14 +237,19 @@ def build_scholar_probe_result(
     checked_at: str | None = None,
 ) -> ProbeResult:
     """Build one semantic ProbeResult from home and query probe responses."""
-    home_classification = classify_scholar_response(home_response)
-    query_classification = (
-        classify_scholar_response(query_response) if query_response is not None else None
-    )
-    failure_markers = _merge_unique(
-        home_classification.failure_markers,
-        [] if query_classification is None else query_classification.failure_markers,
-    )
+    decision = classify_scholar_access(home_response, query_response)
+    failure_markers = list(decision.failure_markers)
+    if decision.stage == SCHOLAR_STAGE_HOME_BLOCKED:
+        _append_unique(failure_markers, "stage_home_blocked")
+    elif decision.stage == SCHOLAR_STAGE_QUERY_BLOCKED:
+        _append_unique(failure_markers, "stage_query_blocked")
+    elif decision.stage == SCHOLAR_STAGE_TRANSPORT_FAILED:
+        _append_unique(failure_markers, "stage_transport_failed")
+    elif decision.stage == SCHOLAR_STAGE_TIMEOUT:
+        _append_unique(failure_markers, "stage_timeout")
+    elif decision.stage == SCHOLAR_STAGE_SERVER_ERROR:
+        _append_unique(failure_markers, "stage_server_error")
+
     errors: list[str] = []
     if home_response.error:
         errors.append(f"home: {home_response.error}")
@@ -152,10 +258,10 @@ def build_scholar_probe_result(
 
     return ProbeResult(
         candidate_id=candidate_id,
-        home_status=home_response.status_code,
-        query_status=None if query_response is None else query_response.status_code,
-        blocked=home_classification.blocked or bool(query_classification and query_classification.blocked),
-        timeout=home_classification.timeout or bool(query_classification and query_classification.timeout),
+        home_status=decision.home_status,
+        query_status=decision.query_status,
+        blocked=decision.blocked,
+        timeout=decision.timeout,
         error=None if not errors else "; ".join(errors),
         failure_markers=failure_markers,
         latency_ms=_combine_latency(home_response.elapsed_ms, None if query_response is None else query_response.elapsed_ms),
@@ -175,9 +281,14 @@ def build_scholar_query_target(query: str = "test") -> HttpProbeTarget:
     """Build the canonical Scholar query probe target."""
     encoded_query = quote_plus(query)
     return HttpProbeTarget(
-        url=f"https://scholar.google.com/scholar?q={encoded_query}",
+        url=f"https://scholar.google.com/scholar?hl=zh-CN&as_sdt=0%2C5&q={encoded_query}&btnG=",
         user_agent=BROWSER_USER_AGENT,
     )
+
+
+def build_scholar_reference_query_target() -> HttpProbeTarget:
+    """Build the canonical reference Scholar query target used for access checks."""
+    return build_scholar_query_target("ppr")
 
 
 def _searchable_text(response: HttpProbeResponse) -> str:

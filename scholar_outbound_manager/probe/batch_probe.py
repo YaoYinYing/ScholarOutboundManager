@@ -78,11 +78,22 @@ def build_candidate_id(candidate: CandidateProxy, index: int) -> str:
 def is_probe_passed(result: ProbeResult) -> bool:
     """Return whether one probe result satisfies the conservative passed predicate."""
     allowed_statuses = {200, 301, 302, 303, 307, 308}
+    failing_stage_markers = {
+        "stage_home_blocked",
+        "stage_query_blocked",
+        "stage_transport_failed",
+        "stage_timeout",
+        "stage_server_error",
+    }
     if result.blocked or result.timeout or result.error is not None:
         return False
     if result.home_status not in allowed_statuses:
         return False
-    if result.query_status is not None and result.query_status not in allowed_statuses:
+    if result.query_status is None:
+        return False
+    if result.query_status not in allowed_statuses:
+        return False
+    if any(marker in failing_stage_markers for marker in result.failure_markers):
         return False
     if result.failure_markers:
         return False

@@ -15,9 +15,12 @@ from scholar_outbound_manager.probe.candidate_probe import CandidateProbeOptions
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeSummary
 from scholar_outbound_manager.probe.candidate_probe import probe_candidate
 from scholar_outbound_manager.probe.scholar_classifier import ScholarClassification
+from scholar_outbound_manager.probe.scholar_classifier import ScholarAccessDecision
 from scholar_outbound_manager.probe.scholar_classifier import build_scholar_home_target
 from scholar_outbound_manager.probe.scholar_classifier import build_scholar_probe_result
 from scholar_outbound_manager.probe.scholar_classifier import build_scholar_query_target
+from scholar_outbound_manager.probe.scholar_classifier import build_scholar_reference_query_target
+from scholar_outbound_manager.probe.scholar_classifier import classify_scholar_access
 from scholar_outbound_manager.probe.scholar_classifier import classify_scholar_response
 
 __all__ = [
@@ -30,10 +33,13 @@ __all__ = [
     "HttpProbeTarget",
     "SocksEndpoint",
     "ScholarClassification",
+    "ScholarAccessDecision",
     "build_scholar_home_target",
     "build_scholar_probe_result",
     "build_scholar_query_target",
+    "build_scholar_reference_query_target",
     "build_candidate_id",
+    "classify_scholar_access",
     "classify_scholar_response",
     "is_probe_passed",
     "probe_candidate",

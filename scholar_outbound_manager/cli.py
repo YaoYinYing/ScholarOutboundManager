@@ -13,6 +13,8 @@ from scholar_outbound_manager.config import ConfigError
 from scholar_outbound_manager.config import load_config
 from scholar_outbound_manager.doctor import build_doctor_report
 from scholar_outbound_manager.doctor import format_doctor_report
+from scholar_outbound_manager.environment import format_runtime_environment_inspection
+from scholar_outbound_manager.environment import inspect_runtime_environment
 from scholar_outbound_manager.fetcher import build_url_opener
 from scholar_outbound_manager.fetcher import fetch_enabled_subscriptions
 from scholar_outbound_manager.fetcher import FetchErrorRecord
@@ -68,6 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--require-passed-candidates", action="store_true")
     doctor_parser.set_defaults(handler=_handle_doctor)
 
+    environment_parser = subparsers.add_parser("environment")
+    environment_parser.set_defaults(handler=_handle_environment)
+
     probe_parser = subparsers.add_parser("probe")
     probe_parser.add_argument("--config", default="config.yaml")
     probe_parser.add_argument("--candidates", required=True)
@@ -77,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe_parser.add_argument("--max-passed", type=int)
     probe_parser.add_argument("--include-unsupported", action="store_true")
     probe_parser.add_argument("--no-stop-after-max-passed", action="store_true")
-    probe_parser.add_argument("--query", default="test")
+    probe_parser.add_argument("--query", default="ppr")
     probe_parser.add_argument("--skip-query", action="store_true")
     probe_parser.add_argument("--startup-timeout", type=float, default=5.0)
     probe_parser.add_argument("--request-timeout", type=float)
@@ -297,6 +302,18 @@ def _handle_probe(args: argparse.Namespace) -> int:
     print(f"summary_path: {artifacts['summary_path']}")
     print(f"passed_candidates_path: {artifacts['passed_candidates_path']}")
     return 0 if summary.passed_count > 0 else 2
+
+
+def _handle_environment(args: argparse.Namespace) -> int:
+    """Inspect local runtime hints without probing or starting Xray."""
+    del args
+    try:
+        inspection = inspect_runtime_environment()
+    except Exception as exc:  # pragma: no cover - defensive CLI boundary
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(format_runtime_environment_inspection(inspection))
+    return 0
 
 
 def _handle_run(args: argparse.Namespace) -> int:

@@ -30,7 +30,7 @@ from scholar_outbound_manager.xray.process import test_xray_config
 class CandidateProbeOptions:
     """Define options for one candidate probe workflow."""
 
-    query: str = "test"
+    query: str = "ppr"
     startup_timeout_seconds: float = 5.0
     request_timeout_seconds: float = 15.0
     xray_test_timeout_seconds: float | None = None

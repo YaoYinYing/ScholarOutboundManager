@@ -6,6 +6,8 @@ from dataclasses import asdict
 import json
 
 from scholar_outbound_manager.probe.http_probe import HttpProbeResponse
+from scholar_outbound_manager.probe.scholar_classifier import build_scholar_reference_query_target
+from scholar_outbound_manager.probe.scholar_classifier import classify_scholar_access
 from scholar_outbound_manager.probe.scholar_classifier import build_scholar_home_target
 from scholar_outbound_manager.probe.scholar_classifier import build_scholar_probe_result
 from scholar_outbound_manager.probe.scholar_classifier import build_scholar_query_target
@@ -163,7 +165,7 @@ def test_build_scholar_probe_result_merges_markers() -> None:
         checked_at="2026-05-25T00:00:00Z",
     )
 
-    assert result.failure_markers == ["http_403", "captcha"]
+    assert result.failure_markers == ["http_403", "captcha", "stage_home_blocked"]
     assert result.blocked is True
 
 
@@ -192,6 +194,107 @@ def test_build_scholar_probe_result_handles_missing_query_response() -> None:
     assert result.home_status == 200
 
 
+def test_classify_scholar_access_marks_home_blocked() -> None:
+    """Classify home-page blocking distinctly from query-page blocking."""
+    decision = classify_scholar_access(
+        _make_response(status_code=403),
+        _make_response(status_code=200),
+    )
+
+    assert decision.stage == "home_blocked"
+    assert decision.passed is False
+
+
+def test_classify_scholar_access_marks_query_blocked() -> None:
+    """Classify query-page blocking distinctly when home remains accessible."""
+    decision = classify_scholar_access(
+        _make_response(status_code=200),
+        _make_response(status_code=403),
+    )
+
+    assert decision.stage == "query_blocked"
+    assert decision.passed is False
+
+
+def test_classify_scholar_access_marks_full_access() -> None:
+    """Require both home and query to pass for full access."""
+    decision = classify_scholar_access(
+        _make_response(status_code=200),
+        _make_response(status_code=200),
+    )
+
+    assert decision.stage == "full_access"
+    assert decision.passed is True
+
+
+def test_classify_scholar_access_marks_query_blocked_on_unusual_traffic() -> None:
+    """Treat a query-stage block page as query_blocked even with a 200 status."""
+    decision = classify_scholar_access(
+        _make_response(status_code=200),
+        _make_response(status_code=200, body_prefix="Our systems have detected unusual traffic."),
+    )
+
+    assert decision.stage == "query_blocked"
+    assert decision.passed is False
+
+
+def test_classify_scholar_access_marks_timeout_from_home() -> None:
+    """Promote home-stage timeout into a timeout decision."""
+    decision = classify_scholar_access(
+        _make_response(status_code=None, timed_out=True, elapsed_ms=None),
+        _make_response(status_code=200),
+    )
+
+    assert decision.stage == "timeout"
+    assert decision.timeout is True
+
+
+def test_classify_scholar_access_marks_timeout_from_query() -> None:
+    """Promote query-stage timeout into a timeout decision."""
+    decision = classify_scholar_access(
+        _make_response(status_code=200),
+        _make_response(status_code=None, timed_out=True, elapsed_ms=None),
+    )
+
+    assert decision.stage == "timeout"
+    assert decision.timeout is True
+
+
+def test_classify_scholar_access_marks_transport_failed() -> None:
+    """Promote transport errors into a transport_failed decision."""
+    decision = classify_scholar_access(
+        _make_response(status_code=None, error="Connection refused"),
+        _make_response(status_code=200),
+    )
+
+    assert decision.stage == "transport_failed"
+    assert decision.transport_error is True
+
+
+def test_classify_scholar_access_requires_query_response_for_full_access() -> None:
+    """Do not treat a missing query response as full access."""
+    decision = classify_scholar_access(
+        _make_response(status_code=200),
+        None,
+    )
+
+    assert decision.stage == "unknown"
+    assert decision.passed is False
+
+
+def test_classify_scholar_access_evidence_is_short_and_secret_free() -> None:
+    """Keep two-stage decision evidence review-safe."""
+    decision = classify_scholar_access(
+        _make_response(status_code=200),
+        _make_response(status_code=200, body_prefix="captcha " + ("x" * 400)),
+    )
+
+    rendered = json.dumps(decision.evidence)
+    assert all(len(item) <= 160 for item in decision.evidence)
+    assert "vless://" not in rendered
+    assert "PUBLIC_KEY_PLACEHOLDER" not in rendered
+
+
 def test_build_scholar_probe_result_generates_checked_at_with_z_suffix() -> None:
     """Generate a UTC timestamp when checked_at is omitted."""
     result = build_scholar_probe_result(
@@ -214,7 +317,15 @@ def test_build_scholar_query_target_url_encodes_query() -> None:
     """Encode query terms in the canonical Scholar query target URL."""
     target = build_scholar_query_target("deep learning")
 
-    assert target.url == "https://scholar.google.com/scholar?q=deep+learning"
+    assert target.url == "https://scholar.google.com/scholar?hl=zh-CN&as_sdt=0%2C5&q=deep+learning&btnG="
+
+
+def test_build_scholar_reference_query_target_uses_expected_reference_url() -> None:
+    """Build the canonical reference query target for two-stage access checks."""
+    target = build_scholar_reference_query_target()
+
+    assert "/scholar?hl=zh-CN" in target.url
+    assert "q=ppr" in target.url
 
 
 def test_target_builders_are_pure_configuration_helpers() -> None:
