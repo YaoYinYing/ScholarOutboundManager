@@ -17,7 +17,9 @@ from scholar_outbound_manager.inspect import format_sensitive_candidates_inspect
 from scholar_outbound_manager.inspect import inspect_generated_manifest
 from scholar_outbound_manager.inspect import inspect_probe_summary
 from scholar_outbound_manager.inspect import inspect_sensitive_candidates
+from scholar_outbound_manager.io import load_candidate_bundle
 from scholar_outbound_manager.io import load_candidates
+from scholar_outbound_manager.parsers.filtering import filter_candidates
 from scholar_outbound_manager.probe.batch_probe import BatchProbeOptions
 from scholar_outbound_manager.probe.batch_probe import probe_candidates_sequential
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeOptions
@@ -59,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe_parser.add_argument("--request-timeout", type=float)
     probe_parser.add_argument("--xray-test-timeout", type=float)
     probe_parser.add_argument("--runtime-config-name", default="candidate_probe_runtime.json")
+    probe_parser.add_argument("--allow-network-probe", action="store_true")
     probe_parser.set_defaults(handler=_handle_probe)
 
     for command_name in ():
@@ -100,18 +103,23 @@ def _handle_generate(args: argparse.Namespace) -> int:
     """Generate offline Scholar outbound artifacts from a local candidate file."""
     try:
         config = load_config(args.config)
-        candidates = load_candidates(args.candidates)
+        bundle = load_candidate_bundle(args.candidates)
+        candidates, filtered_count = _filter_candidates_for_cli(bundle.candidates, config.filters)
         summary = write_generation_outputs(
             candidates=candidates,
             output_config=config.output,
             generation_config=config.generation,
             routing_config=config.routing,
+            probe_results=_align_probe_results(bundle.candidates, bundle.probe_results, candidates),
         )
     except (ConfigError, FileNotFoundError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     print("Generated Scholar outbound artifacts.")
+    print(f"loaded_count: {len(bundle.candidates)}")
+    print(f"filtered_count: {len(candidates)}")
+    print(f"filter_skipped_count: {filtered_count}")
     print(f"selected_count: {summary['selected_count']}")
     print(f"rejected_count: {summary['rejected_count']}")
     print(f"outbounds_path: {summary['outbounds_path']}")
@@ -134,7 +142,9 @@ def _handle_probe(args: argparse.Namespace) -> int:
         _validate_distinct_output_paths(args.summary_output, args.passed_candidates_output)
 
         config = load_config(args.config)
-        candidates = load_candidates(args.candidates)
+        _require_network_probe_opt_in(config.probe.allow_network_probe, args.allow_network_probe)
+        loaded_candidates = load_candidates(args.candidates)
+        candidates, filtered_out_count = _filter_candidates_for_cli(loaded_candidates, config.filters)
         candidate_options = CandidateProbeOptions(
             query=args.query,
             startup_timeout_seconds=args.startup_timeout,
@@ -166,6 +176,9 @@ def _handle_probe(args: argparse.Namespace) -> int:
         return 1
 
     print("Probed Scholar candidates.")
+    print(f"loaded_count: {len(loaded_candidates)}")
+    print(f"filtered_count: {len(candidates)}")
+    print(f"filter_skipped_count: {filtered_out_count}")
     print(f"total_count: {summary.total_count}")
     print(f"attempted_count: {summary.attempted_count}")
     print(f"skipped_count: {summary.skipped_count}")
@@ -282,6 +295,43 @@ def _validate_distinct_output_paths(summary_output: str, passed_candidates_outpu
     """Validate that probe output paths do not point to the same location."""
     if Path(summary_output) == Path(passed_candidates_output):
         raise ValueError("summary-output and passed-candidates-output must be different paths.")
+
+
+def _filter_candidates_for_cli(
+    candidates: list,
+    filter_config,
+) -> tuple[list, int]:
+    """Apply configured candidate filters and report how many entries were skipped."""
+    filtered_candidates = filter_candidates(candidates, filter_config)
+    return filtered_candidates, len(candidates) - len(filtered_candidates)
+
+
+def _align_probe_results(
+    loaded_candidates: list,
+    loaded_probe_results: list,
+    filtered_candidates: list,
+) -> list | None:
+    """Align loaded probe results with the filtered candidate list order."""
+    if not loaded_probe_results or all(result is None for result in loaded_probe_results):
+        return None
+
+    indexed_probe_results = {
+        id(candidate): probe_result
+        for candidate, probe_result in zip(loaded_candidates, loaded_probe_results)
+    }
+    return [indexed_probe_results.get(id(candidate)) for candidate in filtered_candidates]
+
+
+def _require_network_probe_opt_in(config_allows_network_probe: bool, cli_allows_network_probe: bool) -> None:
+    """Require both config and CLI opt-in before starting network probing."""
+    if not config_allows_network_probe:
+        raise ValueError(
+            "probe.allow_network_probe must be true before network probing may start."
+        )
+    if not cli_allows_network_probe:
+        raise ValueError(
+            "--allow-network-probe is required before starting Xray or sending Scholar HTTP requests."
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

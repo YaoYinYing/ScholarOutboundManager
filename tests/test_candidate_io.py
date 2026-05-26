@@ -7,6 +7,7 @@ import json
 import pytest
 
 from scholar_outbound_manager.io import dump_candidates
+from scholar_outbound_manager.io import load_candidate_bundle
 from scholar_outbound_manager.io import load_candidates
 
 
@@ -83,6 +84,43 @@ def test_dump_candidates_round_trips_through_loader(tmp_path) -> None:
     assert [candidate.to_dict() for candidate in loaded_candidates] == [
         candidate.to_dict() for candidate in original_candidates
     ]
+
+
+def test_load_candidate_bundle_reads_probe_evidence_from_sensitive_artifact(tmp_path) -> None:
+    """Load candidates together with optional probe results from passed-candidate artifacts."""
+    candidate_path = tmp_path / "passed_candidates.json"
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "sensitive": True,
+                "passed_candidate_ids": ["candidate-001"],
+                "candidates": [
+                    {
+                        "candidate": _candidate_mapping(),
+                        "probe": {
+                            "candidate_id": "candidate-001",
+                            "home_status": 200,
+                            "query_status": 200,
+                            "blocked": False,
+                            "timeout": False,
+                            "error": None,
+                            "failure_markers": [],
+                            "latency_ms": 10,
+                            "checked_at": "2026-05-25T00:00:00Z",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_candidate_bundle(candidate_path)
+
+    assert len(bundle.candidates) == 1
+    assert bundle.probe_results[0] is not None
+    assert bundle.probe_results[0].candidate_id == "candidate-001"
 
 
 def _write_source_candidates(tmp_path):

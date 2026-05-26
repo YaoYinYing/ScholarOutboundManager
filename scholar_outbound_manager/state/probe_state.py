@@ -83,12 +83,26 @@ def build_passed_candidates_payload(
 ) -> dict[str, object]:
     """Build a sensitive local payload containing only passed candidates."""
     passed_candidates = select_passed_candidates(candidates, summary)
+    records_by_index = {record.index: record for record in summary.records}
+    candidate_entries = []
+    for candidate, passed_index in zip(passed_candidates, summary.passed_indices):
+        record = records_by_index.get(passed_index)
+        candidate_entries.append(
+            {
+                "candidate": candidate.to_dict(),
+                "probe": (
+                    None
+                    if record is None or record.summary is None
+                    else serialize_probe_result(record.summary.result)
+                ),
+            }
+        )
     return {
         "schema_version": 1,
         "sensitive": True,
         "description": "This file contains selected proxy credentials and must not be committed.",
         "passed_candidate_ids": list(summary.passed_candidate_ids),
-        "candidates": [candidate.to_dict() for candidate in passed_candidates],
+        "candidates": candidate_entries,
     }
 
 

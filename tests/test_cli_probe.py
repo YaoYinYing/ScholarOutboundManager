@@ -14,12 +14,21 @@ from scholar_outbound_manager.models import ProbeResult
 
 def test_probe_returns_zero_when_passed_candidates_exist(tmp_path, capsys, monkeypatch) -> None:
     """Return success when at least one candidate passes probing."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     monkeypatch.setattr(cli, "probe_candidates_sequential", lambda candidates, xray_config, options: _make_batch_summary(passed_count=1))
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
 
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path)])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 0
@@ -28,12 +37,21 @@ def test_probe_returns_zero_when_passed_candidates_exist(tmp_path, capsys, monke
 
 def test_probe_returns_two_when_no_candidates_pass(tmp_path, capsys, monkeypatch) -> None:
     """Return status 2 when probing completes without passed candidates."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     monkeypatch.setattr(cli, "probe_candidates_sequential", lambda candidates, xray_config, options: _make_batch_summary(passed_count=0, failed_count=1))
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
 
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path)])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 2
@@ -42,15 +60,27 @@ def test_probe_returns_two_when_no_candidates_pass(tmp_path, capsys, monkeypatch
 
 def test_probe_prints_counts_and_paths(tmp_path, capsys, monkeypatch) -> None:
     """Print summary counts and output paths."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     monkeypatch.setattr(cli, "probe_candidates_sequential", lambda candidates, xray_config, options: _make_batch_summary())
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
 
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path)])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 0
+    assert "loaded_count: 1" in captured.out
+    assert "filtered_count: 1" in captured.out
+    assert "filter_skipped_count: 0" in captured.out
     assert "total_count: 1" in captured.out
     assert "attempted_count: 1" in captured.out
     assert "skipped_count: 0" in captured.out
@@ -61,7 +91,7 @@ def test_probe_prints_counts_and_paths(tmp_path, capsys, monkeypatch) -> None:
 
 def test_probe_uses_config_default_max_passed(tmp_path, monkeypatch) -> None:
     """Use config.generation.max_passed_nodes when max-passed is omitted."""
-    config_path = _write_config(tmp_path, max_passed_nodes=3)
+    config_path = _write_config(tmp_path, max_passed_nodes=3, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -72,13 +102,15 @@ def test_probe_uses_config_default_max_passed(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
 
-    assert cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path)]) == 0
+    assert cli.main(
+        ["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--allow-network-probe"]
+    ) == 0
     assert observed["options"].max_passed == 3
 
 
 def test_probe_allows_cli_max_passed_override(tmp_path, monkeypatch) -> None:
     """Allow CLI max-passed to override config defaults."""
-    config_path = _write_config(tmp_path, max_passed_nodes=3)
+    config_path = _write_config(tmp_path, max_passed_nodes=3, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -89,13 +121,24 @@ def test_probe_allows_cli_max_passed_override(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
 
-    assert cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--max-passed", "1"]) == 0
+    assert cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--max-passed",
+            "1",
+            "--allow-network-probe",
+        ]
+    ) == 0
     assert observed["options"].max_passed == 1
 
 
 def test_probe_passes_max_candidates(tmp_path, monkeypatch) -> None:
     """Pass max-candidates through to BatchProbeOptions."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -106,14 +149,25 @@ def test_probe_passes_max_candidates(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
 
-    cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--max-candidates", "2"])
+    cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--max-candidates",
+            "2",
+            "--allow-network-probe",
+        ]
+    )
 
     assert observed["options"].max_candidates == 2
 
 
 def test_probe_passes_include_unsupported(tmp_path, monkeypatch) -> None:
     """Pass include-unsupported through to BatchProbeOptions."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -123,14 +177,24 @@ def test_probe_passes_include_unsupported(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
-    cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--include-unsupported"])
+    cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--include-unsupported",
+            "--allow-network-probe",
+        ]
+    )
 
     assert observed["options"].include_unsupported is True
 
 
 def test_probe_disables_stop_after_max_passed(tmp_path, monkeypatch) -> None:
     """Honor --no-stop-after-max-passed."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -140,14 +204,24 @@ def test_probe_disables_stop_after_max_passed(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
-    cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--no-stop-after-max-passed"])
+    cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--no-stop-after-max-passed",
+            "--allow-network-probe",
+        ]
+    )
 
     assert observed["options"].stop_after_max_passed is False
 
 
 def test_probe_passes_query_to_candidate_options(tmp_path, monkeypatch) -> None:
     """Pass custom query text through to CandidateProbeOptions."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -157,14 +231,25 @@ def test_probe_passes_query_to_candidate_options(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
-    cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--query", "deep learning"])
+    cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--query",
+            "deep learning",
+            "--allow-network-probe",
+        ]
+    )
 
     assert observed["options"].candidate_options.query == "deep learning"
 
 
 def test_probe_can_skip_query(tmp_path, monkeypatch) -> None:
     """Pass skip-query through to CandidateProbeOptions."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -174,14 +259,24 @@ def test_probe_can_skip_query(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
-    cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--skip-query"])
+    cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--skip-query",
+            "--allow-network-probe",
+        ]
+    )
 
     assert observed["options"].candidate_options.probe_query is False
 
 
 def test_probe_passes_startup_timeout(tmp_path, monkeypatch) -> None:
     """Pass startup-timeout through to CandidateProbeOptions."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -191,14 +286,25 @@ def test_probe_passes_startup_timeout(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
-    cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--startup-timeout", "7"])
+    cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--startup-timeout",
+            "7",
+            "--allow-network-probe",
+        ]
+    )
 
     assert observed["options"].candidate_options.startup_timeout_seconds == 7.0
 
 
 def test_probe_can_override_request_timeout(tmp_path, monkeypatch) -> None:
     """Allow request-timeout to override config.probe.timeout_seconds."""
-    config_path = _write_config(tmp_path, probe_timeout=5)
+    config_path = _write_config(tmp_path, probe_timeout=5, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -208,14 +314,25 @@ def test_probe_can_override_request_timeout(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
-    cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--request-timeout", "11"])
+    cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--request-timeout",
+            "11",
+            "--allow-network-probe",
+        ]
+    )
 
     assert observed["options"].candidate_options.request_timeout_seconds == 11.0
 
 
 def test_probe_passes_xray_test_timeout(tmp_path, monkeypatch) -> None:
     """Pass xray-test-timeout through to CandidateProbeOptions."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -225,14 +342,25 @@ def test_probe_passes_xray_test_timeout(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
-    cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--xray-test-timeout", "3"])
+    cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--xray-test-timeout",
+            "3",
+            "--allow-network-probe",
+        ]
+    )
 
     assert observed["options"].candidate_options.xray_test_timeout_seconds == 3.0
 
 
 def test_probe_passes_runtime_config_name(tmp_path, monkeypatch) -> None:
     """Pass runtime-config-name through to CandidateProbeOptions."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     observed = {}
 
@@ -242,7 +370,18 @@ def test_probe_passes_runtime_config_name(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
-    cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--runtime-config-name", "probe-runtime.json"])
+    cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--runtime-config-name",
+            "probe-runtime.json",
+            "--allow-network-probe",
+        ]
+    )
 
     assert observed["options"].candidate_options.runtime_config_name == "probe-runtime.json"
 
@@ -276,11 +415,102 @@ def test_probe_returns_one_when_candidates_file_is_missing(tmp_path, capsys) -> 
     assert "Error:" in captured.err
 
 
+def test_probe_refuses_without_config_opt_in(tmp_path, capsys, monkeypatch) -> None:
+    """Reject probing when the config does not allow network probing."""
+    config_path = _write_config(tmp_path, allow_network_probe=False)
+    candidates_path = _write_candidates(tmp_path)
+    monkeypatch.setattr(cli, "probe_candidates_sequential", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not probe")))
+
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--allow-network-probe",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "allow_network_probe" in captured.err
+
+
+def test_probe_refuses_without_cli_opt_in(tmp_path, capsys, monkeypatch) -> None:
+    """Reject probing when the CLI opt-in flag is absent."""
+    config_path = _write_config(tmp_path, allow_network_probe=True)
+    candidates_path = _write_candidates(tmp_path)
+    monkeypatch.setattr(cli, "probe_candidates_sequential", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not probe")))
+
+    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "allow-network-probe" in captured.err
+
+
+def test_probe_applies_cli_level_candidate_filters(tmp_path, capsys, monkeypatch) -> None:
+    """Filter candidates before batch probing and report filter counts."""
+    config_path = _write_config(
+        tmp_path,
+        allow_network_probe=True,
+        include_keywords=["Scholar"],
+        exclude_keywords=["Exclude"],
+        deprioritize_keywords=["slow"],
+    )
+    candidates_path = _write_candidates(
+        tmp_path,
+        candidates=[
+            _candidate_mapping(raw_name="US Scholar IPv4"),
+            _candidate_mapping(raw_name="Exclude Scholar Node"),
+            _candidate_mapping(raw_name="slow Scholar Node"),
+        ],
+    )
+    observed: dict[str, object] = {}
+
+    def fake_probe(candidates, xray_config, options):
+        observed["names"] = [candidate.raw_name for candidate in candidates]
+        return _make_batch_summary(total_count=len(candidates), attempted_count=len(candidates))
+
+    monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
+    monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
+
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--allow-network-probe",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert observed["names"] == ["US Scholar IPv4", "slow Scholar Node"]
+    assert "loaded_count: 3" in captured.out
+    assert "filtered_count: 2" in captured.out
+    assert "filter_skipped_count: 1" in captured.out
+
+
 def test_probe_rejects_non_positive_max_candidates(tmp_path, capsys) -> None:
     """Reject non-positive max-candidates."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--max-candidates", "0"])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--max-candidates",
+            "0",
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 1
@@ -289,9 +519,20 @@ def test_probe_rejects_non_positive_max_candidates(tmp_path, capsys) -> None:
 
 def test_probe_rejects_non_positive_max_passed(tmp_path, capsys) -> None:
     """Reject non-positive max-passed."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--max-passed", "0"])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--max-passed",
+            "0",
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 1
@@ -300,9 +541,20 @@ def test_probe_rejects_non_positive_max_passed(tmp_path, capsys) -> None:
 
 def test_probe_rejects_non_positive_startup_timeout(tmp_path, capsys) -> None:
     """Reject non-positive startup-timeout."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--startup-timeout", "0"])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--startup-timeout",
+            "0",
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 1
@@ -311,9 +563,20 @@ def test_probe_rejects_non_positive_startup_timeout(tmp_path, capsys) -> None:
 
 def test_probe_rejects_non_positive_request_timeout(tmp_path, capsys) -> None:
     """Reject non-positive request-timeout."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--request-timeout", "0"])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--request-timeout",
+            "0",
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 1
@@ -322,9 +585,20 @@ def test_probe_rejects_non_positive_request_timeout(tmp_path, capsys) -> None:
 
 def test_probe_rejects_non_positive_xray_test_timeout(tmp_path, capsys) -> None:
     """Reject non-positive xray-test-timeout."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--xray-test-timeout", "0"])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--xray-test-timeout",
+            "0",
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 1
@@ -333,7 +607,7 @@ def test_probe_rejects_non_positive_xray_test_timeout(tmp_path, capsys) -> None:
 
 def test_probe_rejects_runtime_config_name_with_path_separator(tmp_path, capsys) -> None:
     """Reject runtime-config-name values with path separators."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     exit_code = cli.main(
         ["probe", "--config", str(config_path), "--candidates", str(candidates_path), "--runtime-config-name", "nested/runtime.json"]
@@ -346,7 +620,7 @@ def test_probe_rejects_runtime_config_name_with_path_separator(tmp_path, capsys)
 
 def test_probe_rejects_identical_output_paths(tmp_path, capsys) -> None:
     """Reject probe artifact paths that point to the same file."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     shared_path = tmp_path / "shared.json"
     exit_code = cli.main(
@@ -360,6 +634,7 @@ def test_probe_rejects_identical_output_paths(tmp_path, capsys) -> None:
             str(shared_path),
             "--passed-candidates-output",
             str(shared_path),
+            "--allow-network-probe",
         ]
     )
     captured = capsys.readouterr()
@@ -370,12 +645,21 @@ def test_probe_rejects_identical_output_paths(tmp_path, capsys) -> None:
 
 def test_probe_returns_one_when_artifact_write_fails(tmp_path, capsys, monkeypatch) -> None:
     """Return 1 when artifact writing fails."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     monkeypatch.setattr(cli, "probe_candidates_sequential", lambda candidates, xray_config, options: _make_batch_summary())
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: (_ for _ in ()).throw(OSError("disk full")))
 
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path)])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 1
@@ -384,11 +668,20 @@ def test_probe_returns_one_when_artifact_write_fails(tmp_path, capsys, monkeypat
 
 def test_probe_returns_one_when_batch_probe_raises_value_error(tmp_path, capsys, monkeypatch) -> None:
     """Return 1 when sequential probing raises a validation error."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     monkeypatch.setattr(cli, "probe_candidates_sequential", lambda candidates, xray_config, options: (_ for _ in ()).throw(ValueError("bad probe options")))
 
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path)])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 1
@@ -397,12 +690,21 @@ def test_probe_returns_one_when_batch_probe_raises_value_error(tmp_path, capsys,
 
 def test_probe_output_excludes_sensitive_values(tmp_path, capsys, monkeypatch) -> None:
     """Keep CLI output free of raw credentials and URIs."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     monkeypatch.setattr(cli, "probe_candidates_sequential", lambda candidates, xray_config, options: _make_batch_summary())
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
 
-    exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path)])
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--allow-network-probe",
+        ]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 0
@@ -499,23 +801,34 @@ def _artifact_result(tmp_path: Path) -> dict[str, object]:
     }
 
 
-def _write_config(tmp_path: Path, max_passed_nodes: int = 2, probe_timeout: int = 5) -> Path:
+def _write_config(
+    tmp_path: Path,
+    max_passed_nodes: int = 2,
+    probe_timeout: int = 5,
+    allow_network_probe: bool = False,
+    include_keywords: list[str] | None = None,
+    exclude_keywords: list[str] | None = None,
+    deprioritize_keywords: list[str] | None = None,
+) -> Path:
     """Write one placeholder configuration file for probe CLI tests."""
+    include_keywords = include_keywords or []
+    exclude_keywords = exclude_keywords or []
+    deprioritize_keywords = deprioritize_keywords or []
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
             [
                 "subscriptions: []",
                 "filters:",
-                "  include_keywords: []",
-                "  exclude_keywords: []",
-                "  deprioritize_keywords: []",
+                f"  include_keywords: [{', '.join(_quote_yaml(item) for item in include_keywords)}]",
+                f"  exclude_keywords: [{', '.join(_quote_yaml(item) for item in exclude_keywords)}]",
+                f"  deprioritize_keywords: [{', '.join(_quote_yaml(item) for item in deprioritize_keywords)}]",
                 "probe:",
                 f"  timeout_seconds: {probe_timeout}",
                 "  concurrency: 1",
                 "  cache_ttl_hours: 24",
                 "  failure_backoff_hours: 24",
-                "  allow_network_probe: false",
+                f"  allow_network_probe: {'true' if allow_network_probe else 'false'}",
                 "xray:",
                 "  binary_path: fake-xray",
                 f"  runtime_dir: {tmp_path / 'runtime'}",
@@ -544,34 +857,44 @@ def _write_config(tmp_path: Path, max_passed_nodes: int = 2, probe_timeout: int 
     return config_path
 
 
-def _write_candidates(tmp_path: Path) -> Path:
+def _write_candidates(tmp_path: Path, candidates: list[dict[str, object]] | None = None) -> Path:
     """Write one placeholder candidate file for probe CLI tests."""
     candidates_path = tmp_path / "candidates.json"
     candidates_path.write_text(
         json.dumps(
             {
-                "candidates": [
-                    {
-                        "source_name": "fixture-source",
-                        "raw_name": "US Scholar IPv4",
-                        "protocol": "vless",
-                        "address": "example.invalid",
-                        "port": 443,
-                        "user_id": "00000000-0000-0000-0000-000000000000",
-                        "encryption": "none",
-                        "flow": "xtls-rprx-vision",
-                        "network": "tcp",
-                        "security": "reality",
-                        "server_name": "www.cloudflare.com",
-                        "fingerprint": "chrome",
-                        "public_key": "PUBLIC_KEY_PLACEHOLDER",
-                        "short_id": "SHORT_ID_PLACEHOLDER",
-                        "raw_uri": "vless://00000000-0000-0000-0000-000000000000@example.invalid:443",
-                        "supported": True,
-                    }
-                ]
+                "candidates": candidates or [_candidate_mapping()],
             }
         ),
         encoding="utf-8",
     )
     return candidates_path
+
+
+def _candidate_mapping(**overrides: object) -> dict[str, object]:
+    """Build one placeholder candidate mapping for probe CLI tests."""
+    candidate = {
+        "source_name": "fixture-source",
+        "raw_name": "US Scholar IPv4",
+        "protocol": "vless",
+        "address": "example.invalid",
+        "port": 443,
+        "user_id": "00000000-0000-0000-0000-000000000000",
+        "encryption": "none",
+        "flow": "xtls-rprx-vision",
+        "network": "tcp",
+        "security": "reality",
+        "server_name": "www.cloudflare.com",
+        "fingerprint": "chrome",
+        "public_key": "PUBLIC_KEY_PLACEHOLDER",
+        "short_id": "SHORT_ID_PLACEHOLDER",
+        "raw_uri": "vless://00000000-0000-0000-0000-000000000000@example.invalid:443",
+        "supported": True,
+    }
+    candidate.update(overrides)
+    return candidate
+
+
+def _quote_yaml(value: str) -> str:
+    """Quote a YAML scalar for compact inline test config output."""
+    return f'"{value}"'

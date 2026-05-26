@@ -9,6 +9,7 @@ from scholar_outbound_manager.generation import write_generation_outputs
 from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.models import GenerationConfig
 from scholar_outbound_manager.models import OutputConfig
+from scholar_outbound_manager.models import ProbeResult
 from scholar_outbound_manager.models import RoutingConfig
 
 
@@ -82,6 +83,62 @@ def test_write_generation_outputs_counts_rejected_candidates(tmp_path) -> None:
     )
 
     assert summary["rejected_count"] == 1
+
+
+def test_build_generated_nodes_preserves_probe_evidence_when_provided() -> None:
+    """Attach probe evidence to generated nodes when present in input metadata."""
+    probe_results = [
+        ProbeResult(
+            candidate_id="candidate-001",
+            home_status=200,
+            query_status=200,
+            blocked=False,
+            timeout=False,
+            error=None,
+            failure_markers=[],
+            latency_ms=15,
+            checked_at="2026-05-25T00:00:00Z",
+        )
+    ]
+
+    nodes = build_generated_nodes(
+        candidates=[_make_candidate(raw_name="node-1")],
+        tag_prefix="google-scholar-node-",
+        max_nodes=1,
+        probe_results=probe_results,
+    )
+
+    assert nodes[0].probe is not None
+    assert nodes[0].probe.candidate_id == "candidate-001"
+
+
+def test_write_generation_outputs_keeps_probe_evidence_in_manifest(tmp_path) -> None:
+    """Write selected-node probe evidence into the generated manifest."""
+    probe_results = [
+        ProbeResult(
+            candidate_id="candidate-001",
+            home_status=200,
+            query_status=200,
+            blocked=False,
+            timeout=False,
+            error=None,
+            failure_markers=[],
+            latency_ms=15,
+            checked_at="2026-05-25T00:00:00Z",
+        )
+    ]
+
+    write_generation_outputs(
+        candidates=[_make_candidate(raw_name="node-1")],
+        output_config=_make_output_config(tmp_path),
+        generation_config=_make_generation_config(),
+        routing_config=_make_routing_config(fail_closed=True),
+        probe_results=probe_results,
+    )
+
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["selected"][0]["probe"]["candidate_id"] == "candidate-001"
+    assert manifest["selected"][0]["probe"]["home_status"] == 200
 
 
 def test_generation_outputs_do_not_expose_raw_uri(tmp_path) -> None:

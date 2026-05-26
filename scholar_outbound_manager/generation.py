@@ -8,6 +8,7 @@ from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.models import GeneratedNode
 from scholar_outbound_manager.models import GenerationConfig
 from scholar_outbound_manager.models import OutputConfig
+from scholar_outbound_manager.models import ProbeResult
 from scholar_outbound_manager.models import RoutingConfig
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
 from scholar_outbound_manager.state.manifest import build_manifest
@@ -20,9 +21,10 @@ def build_generated_nodes(
     candidates: list[CandidateProxy],
     tag_prefix: str,
     max_nodes: int,
+    probe_results: list[ProbeResult | None] | None = None,
 ) -> list[GeneratedNode]:
     """Build generated nodes from supported VLESS candidates."""
-    generated_nodes, _ = _select_candidates(candidates, tag_prefix, max_nodes)
+    generated_nodes, _ = _select_candidates(candidates, tag_prefix, max_nodes, probe_results)
     return generated_nodes
 
 
@@ -31,6 +33,7 @@ def write_generation_outputs(
     output_config: OutputConfig,
     generation_config: GenerationConfig,
     routing_config: RoutingConfig,
+    probe_results: list[ProbeResult | None] | None = None,
 ) -> dict[str, object]:
     """Write outbounds, routes, and manifest artifacts for Phase 3 generation."""
     if routing_config.mode != "dedicated_inbound":
@@ -40,6 +43,7 @@ def write_generation_outputs(
         candidates,
         generation_config.tag_prefix,
         generation_config.max_passed_nodes,
+        probe_results,
     )
 
     outbounds = [node.outbound for node in generated_nodes]
@@ -80,12 +84,16 @@ def _select_candidates(
     candidates: list[CandidateProxy],
     tag_prefix: str,
     max_nodes: int,
+    probe_results: list[ProbeResult | None] | None = None,
 ) -> tuple[list[GeneratedNode], list[CandidateProxy]]:
     """Select generated nodes and collect rejected candidates."""
+    if probe_results is not None and len(probe_results) != len(candidates):
+        raise ValueError("probe_results must match the candidate list length.")
+
     generated_nodes: list[GeneratedNode] = []
     rejected_candidates: list[CandidateProxy] = []
 
-    for candidate in candidates:
+    for index, candidate in enumerate(candidates):
         if len(generated_nodes) >= max_nodes:
             rejected_candidates.append(candidate)
             continue
@@ -103,7 +111,7 @@ def _select_candidates(
                 tag=tag,
                 candidate=candidate,
                 outbound=outbound,
-                probe=None,
+                probe=None if probe_results is None else probe_results[index],
             )
         )
 

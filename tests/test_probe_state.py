@@ -115,8 +115,9 @@ def test_build_passed_candidates_payload_marks_sensitive_and_keeps_credentials()
 
     assert payload["sensitive"] is True
     assert "must not be committed" in payload["description"]
-    assert payload["candidates"][0]["user_id"] == "00000000-0000-0000-0000-000000000000"
-    assert payload["candidates"][0]["public_key"] == "PUBLIC_KEY_PLACEHOLDER"
+    assert payload["candidates"][0]["candidate"]["user_id"] == "00000000-0000-0000-0000-000000000000"
+    assert payload["candidates"][0]["candidate"]["public_key"] == "PUBLIC_KEY_PLACEHOLDER"
+    assert payload["candidates"][0]["probe"]["home_status"] == 200
     assert len(payload["candidates"]) == 1
 
 
@@ -178,6 +179,17 @@ def test_empty_passed_indices_produce_empty_sensitive_candidates_payload() -> No
     )
 
     assert payload["candidates"] == []
+
+
+def test_passed_candidates_payload_keeps_probe_result_for_selected_candidate() -> None:
+    """Preserve probe evidence alongside each passed candidate."""
+    payload = build_passed_candidates_payload(
+        [_make_candidate(raw_name="a"), _make_candidate(raw_name="b")],
+        _make_batch_probe_summary(),
+    )
+
+    assert payload["candidates"][0]["probe"]["candidate_id"] == "candidate-001"
+    assert payload["candidates"][0]["probe"]["checked_at"] == "2026-05-25T00:00:00Z"
 
 
 def test_redacted_summary_does_not_expose_secret_like_terms_verbatim() -> None:

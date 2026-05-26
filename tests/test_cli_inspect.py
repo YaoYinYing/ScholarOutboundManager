@@ -154,12 +154,21 @@ def test_fetch_remains_unimplemented(capsys) -> None:
 
 def test_probe_generate_and_run_remain_available(tmp_path, capsys, monkeypatch) -> None:
     """Keep existing wired subcommands available after adding inspect."""
-    config_path = _write_config(tmp_path)
+    config_path = _write_config(tmp_path, allow_network_probe=True)
     candidates_path = _write_candidates(tmp_path)
     monkeypatch.setattr(cli, "probe_candidates_sequential", lambda candidates, xray_config, options: _make_batch_summary())
     monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
 
-    probe_exit_code = cli.main(["probe", "--config", str(config_path), "--candidates", str(candidates_path)])
+    probe_exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--allow-network-probe",
+        ]
+    )
     probe_captured = capsys.readouterr()
     generate_exit_code = cli.main(["generate", "--config", str(config_path), "--candidates", str(candidates_path)])
     generate_captured = capsys.readouterr()
@@ -310,7 +319,7 @@ def _artifact_result(tmp_path) -> dict[str, object]:
     }
 
 
-def _write_config(tmp_path):
+def _write_config(tmp_path, allow_network_probe: bool = False):
     """Write one placeholder config file for CLI compatibility tests."""
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -326,7 +335,7 @@ def _write_config(tmp_path):
                 "  concurrency: 1",
                 "  cache_ttl_hours: 24",
                 "  failure_backoff_hours: 24",
-                "  allow_network_probe: false",
+                f"  allow_network_probe: {'true' if allow_network_probe else 'false'}",
                 "xray:",
                 "  binary_path: fake-xray",
                 f"  runtime_dir: {tmp_path / 'runtime'}",
