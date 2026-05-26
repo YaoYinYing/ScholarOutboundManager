@@ -279,6 +279,20 @@ Exit codes:
 - `1`: config, input, validation, fetch, parse, or write error
 - `2`: fetch completed but no enabled source was fetched or no candidate was parsed
 
+## Live A/B fetch smoke test
+
+You can keep real subscription links in ignored local files such as `live_test_data/sublinks/valid.txt` and `live_test_data/sublinks/invalid.txt`, then run:
+
+```bash
+python scripts/live_ab_fetch_test.py \
+  --valid-links live_test_data/sublinks/valid.txt \
+  --invalid-links live_test_data/sublinks/invalid.txt \
+  --work-dir state_data/live_ab \
+  --xray-binary fake-xray
+```
+
+This smoke test only exercises fetch/parse behavior. It does not probe Scholar, does not start Xray, and writes local output under `state_data/live_ab/`. Do not commit `live_test_data/` or `state_data/live_ab/`.
+
 ## Artifact Table
 
 | Path | Produced by | Sensitivity | Purpose | Commit? |

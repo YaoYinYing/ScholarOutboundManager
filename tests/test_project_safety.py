@@ -21,6 +21,7 @@ def test_gitignore_contains_required_sensitive_entries() -> None:
         ".runtime/",
         "generated/",
         "state_data/",
+        "live_test_data/",
         "config.yaml",
         "config.local.yaml",
         "*.local.yaml",
@@ -46,6 +47,8 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "run" in readme_text
     assert "--allow-network-probe" in readme_text
     assert "--allow-network-fetch" in readme_text
+    assert "live a/b fetch smoke test" in readme_text.lower()
+    assert "state_data/live_ab/" in readme_text
     assert "probe.allow_network_probe" in readme_text
     assert "required together" in readme_text.lower() or "without both" in readme_text.lower()
     assert "proberesult" in readme_text.lower() or "probe evidence" in readme_text.lower()

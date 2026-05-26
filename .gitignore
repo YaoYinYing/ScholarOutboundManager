@@ -24,3 +24,5 @@ dist/
 *.egg-info/
 .coverage
 htmlcov/
+/live_test_data
+live_test_data/
