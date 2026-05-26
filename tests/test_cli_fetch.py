@@ -9,6 +9,7 @@ from scholar_outbound_manager import cli
 from scholar_outbound_manager.fetcher import FetchErrorRecord
 from scholar_outbound_manager.fetcher import FetchSummary
 from scholar_outbound_manager.fetcher import FetchedSubscription
+from scholar_outbound_manager.fetcher import FetchTransportOptions
 
 
 def test_fetch_requires_allow_network_fetch_flag(tmp_path, capsys, monkeypatch) -> None:
@@ -37,7 +38,7 @@ def test_fetch_succeeds_and_writes_output(tmp_path, capsys, monkeypatch) -> None
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [_fetched_subscription()],
             _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         ),
@@ -69,7 +70,7 @@ def test_fetch_prints_expected_counts(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [_fetched_subscription(), _unsupported_fetched_subscription()],
             _summary(source_count=2, fetched_count=2, disabled_count=0, failed_count=0, total_bytes=240),
         ),
@@ -94,7 +95,7 @@ def test_fetch_output_does_not_include_subscription_url(tmp_path, capsys, monkey
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [_fetched_subscription()],
             _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         ),
@@ -116,7 +117,7 @@ def test_fetch_output_excludes_sensitive_candidate_material(tmp_path, capsys, mo
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [_fetched_subscription()],
             _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         ),
@@ -140,7 +141,7 @@ def test_fetch_returns_two_when_nothing_is_fetched(tmp_path, capsys, monkeypatch
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [],
             _summary(source_count=1, fetched_count=0, disabled_count=1, failed_count=0, total_bytes=0),
         ),
@@ -161,7 +162,7 @@ def test_fetch_returns_two_when_no_candidates_are_parsed(tmp_path, capsys, monke
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [FetchedSubscription(source_name="fixture-source", content="# comments only\n", byte_count=16)],
             _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=16),
         ),
@@ -217,7 +218,7 @@ def test_fetch_returns_one_when_write_fails(tmp_path, capsys, monkeypatch) -> No
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [_fetched_subscription()],
             _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         ),
@@ -242,7 +243,7 @@ def test_fetch_does_not_call_probe_or_xray(tmp_path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
     observed = {"fetch": 0}
 
-    def fake_fetch(sources, timeout_seconds, max_bytes):
+    def fake_fetch(sources, timeout_seconds, max_bytes, transport_options=None):
         observed["fetch"] += 1
         return (
             [_fetched_subscription()],
@@ -279,7 +280,7 @@ def test_probe_generate_run_and_inspect_remain_available(tmp_path, capsys, monke
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [_fetched_subscription()],
             _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
         ),
@@ -315,7 +316,7 @@ def test_fetch_prints_error_category_counts(tmp_path, capsys, monkeypatch) -> No
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [],
             _summary(
                 source_count=1,
@@ -348,7 +349,7 @@ def test_fetch_prints_http_status_counts(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [],
             _summary(
                 source_count=1,
@@ -378,7 +379,7 @@ def test_fetch_artifact_contains_fetch_errors(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [],
             _summary(
                 source_count=1,
@@ -413,7 +414,7 @@ def test_fetch_output_excludes_secret_words_and_urls(tmp_path, capsys, monkeypat
     monkeypatch.setattr(
         cli,
         "fetch_enabled_subscriptions",
-        lambda sources, timeout_seconds, max_bytes: (
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
             [],
             _summary(
                 source_count=1,
@@ -443,6 +444,119 @@ def test_fetch_output_excludes_secret_words_and_urls(tmp_path, capsys, monkeypat
     assert "https://" not in rendered
     assert "token=" not in rendered.lower()
     assert "password=" not in rendered.lower()
+
+
+def test_fetch_passes_proxy_url_into_transport_options(tmp_path, capsys, monkeypatch) -> None:
+    """Pass proxy transport options into the fetch layer."""
+    config_path = _write_config(tmp_path)
+    observed: dict[str, object] = {}
+
+    def fake_fetch_enabled_subscriptions(sources, timeout_seconds, max_bytes, transport_options=None):
+        observed["transport_options"] = transport_options
+        return (
+            [_fetched_subscription()],
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
+        )
+
+    monkeypatch.setattr(cli, "fetch_enabled_subscriptions", fake_fetch_enabled_subscriptions)
+
+    exit_code = cli.main(
+        [
+            "fetch",
+            "--config",
+            str(config_path),
+            "--output",
+            str(tmp_path / "candidates.json"),
+            "--allow-network-fetch",
+            "--proxy-url",
+            "http://127.0.0.1:7890",
+        ]
+    )
+    capsys.readouterr()
+
+    assert exit_code == 0
+    assert isinstance(observed["transport_options"], FetchTransportOptions)
+    assert observed["transport_options"].proxy_url == "http://127.0.0.1:7890"
+
+
+def test_fetch_rejects_invalid_proxy_url_without_echoing_it(tmp_path, capsys) -> None:
+    """Reject unsupported proxy URLs without printing them."""
+    config_path = _write_config(tmp_path)
+    proxy_url = "socks5://user:pass@example.invalid:1080"
+
+    exit_code = cli.main(
+        [
+            "fetch",
+            "--config",
+            str(config_path),
+            "--allow-network-fetch",
+            "--proxy-url",
+            proxy_url,
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "proxy URL must use http or https" in captured.err
+    assert proxy_url not in (captured.out + captured.err)
+
+
+def test_fetch_output_does_not_include_proxy_url(tmp_path, capsys, monkeypatch) -> None:
+    """Keep proxy URLs out of CLI output."""
+    config_path = _write_config(tmp_path)
+    proxy_url = "http://oreo:oreo@127.0.0.1:10089"
+    monkeypatch.setattr(
+        cli,
+        "fetch_enabled_subscriptions",
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
+            [],
+            _summary(source_count=1, fetched_count=0, disabled_count=0, failed_count=0, total_bytes=0),
+        ),
+    )
+
+    exit_code = cli.main(
+        [
+            "fetch",
+            "--config",
+            str(config_path),
+            "--allow-network-fetch",
+            "--proxy-url",
+            proxy_url,
+            "--output",
+            str(tmp_path / "candidates.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert proxy_url not in (captured.out + captured.err)
+
+
+def test_fetch_still_requires_network_opt_in_even_with_proxy_url(tmp_path, capsys, monkeypatch) -> None:
+    """Keep the explicit fetch opt-in gate in place even when a proxy is provided."""
+    config_path = _write_config(tmp_path)
+    called = {"fetch": False}
+
+    def fake_fetch(*args, **kwargs):
+        called["fetch"] = True
+        raise AssertionError("fetch should not run without opt-in")
+
+    monkeypatch.setattr(cli, "fetch_enabled_subscriptions", fake_fetch)
+
+    exit_code = cli.main(
+        [
+            "fetch",
+            "--config",
+            str(config_path),
+            "--proxy-url",
+            "http://127.0.0.1:7890",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "--allow-network-fetch" in captured.err
+    assert called["fetch"] is False
 
 
 def _summary(

@@ -12,7 +12,9 @@ import pytest
 
 from scholar_outbound_manager import fetcher
 from scholar_outbound_manager.fetcher import _classify_fetch_exception
+from scholar_outbound_manager.fetcher import build_url_opener
 from scholar_outbound_manager.fetcher import FetchedSubscription
+from scholar_outbound_manager.fetcher import FetchTransportOptions
 from scholar_outbound_manager.fetcher import fetch_enabled_subscriptions
 from scholar_outbound_manager.fetcher import fetch_subscription
 from scholar_outbound_manager.models import SubscriptionSource
@@ -152,18 +154,134 @@ def test_fetch_subscription_uses_headers_and_decodes_response(monkeypatch) -> No
         def __exit__(self, exc_type, exc, tb) -> None:
             return None
 
-    def fake_urlopen(request, timeout: float):
-        observed["header"] = request.get_header("X-test")
-        observed["timeout"] = timeout
-        return FakeResponse()
+    class FakeOpener:
+        def open(self, request, timeout: float):
+            observed["header"] = request.get_header("X-test")
+            observed["timeout"] = timeout
+            return FakeResponse()
 
-    monkeypatch.setattr(fetcher, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetcher, "build_url_opener", lambda options=None: FakeOpener())
 
     fetched = fetch_subscription(source, 7.0)
 
     assert observed["header"] == "value"
     assert observed["timeout"] == 7.0
     assert fetched.content == "vless://fixture"
+
+
+def test_build_url_opener_without_proxy_returns_opener() -> None:
+    """Build a default opener when no proxy is configured."""
+    opener = build_url_opener()
+
+    assert hasattr(opener, "open")
+
+
+def test_build_url_opener_accepts_http_proxy() -> None:
+    """Accept HTTP proxy URLs."""
+    opener = build_url_opener(FetchTransportOptions(proxy_url="http://127.0.0.1:7890"))
+
+    assert hasattr(opener, "open")
+
+
+def test_build_url_opener_accepts_https_proxy() -> None:
+    """Accept HTTPS proxy URLs."""
+    opener = build_url_opener(FetchTransportOptions(proxy_url="https://127.0.0.1:7890"))
+
+    assert hasattr(opener, "open")
+
+
+def test_build_url_opener_rejects_non_http_proxy_without_leaking_url() -> None:
+    """Reject unsupported proxy schemes without echoing the raw proxy URL."""
+    proxy_url = "socks5://user:pass@example.invalid:1080"
+
+    with pytest.raises(ValueError, match="proxy URL must use http or https") as exc_info:
+        build_url_opener(FetchTransportOptions(proxy_url=proxy_url))
+
+    assert proxy_url not in str(exc_info.value)
+
+
+def test_fetch_subscription_uses_opener_open_not_urlopen(monkeypatch) -> None:
+    """Call the opener returned by build_url_opener for network access."""
+    observed: dict[str, object] = {"open_called": False}
+    source = SubscriptionSource(
+        name="fixture",
+        url="https://example.invalid/subscription",
+        enabled=True,
+        headers={"X-Test": "value"},
+    )
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.headers = Message()
+            self.headers["Content-Type"] = "text/plain; charset=utf-8"
+            self._payload = io.BytesIO("vless://fixture".encode("utf-8"))
+
+        def read(self, size: int = -1) -> bytes:
+            return self._payload.read(size)
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    class FakeOpener:
+        def open(self, request, timeout: float):
+            observed["open_called"] = True
+            observed["user_agent"] = request.get_header("User-agent")
+            return FakeResponse()
+
+    monkeypatch.setattr(fetcher, "build_url_opener", lambda options=None: FakeOpener())
+
+    fetched = fetch_subscription(source, 7.0)
+
+    assert observed["open_called"] is True
+    assert observed["user_agent"] == "ScholarOutboundManager/0.1"
+    assert fetched.content == "vless://fixture"
+
+
+def test_fetch_enabled_subscriptions_passes_transport_options() -> None:
+    """Pass transport options through to the injected fetcher."""
+    observed: dict[str, object] = {}
+    sources = [SubscriptionSource(name="enabled", url="https://example.invalid/enabled", enabled=True)]
+    transport_options = FetchTransportOptions(proxy_url="http://127.0.0.1:7890")
+
+    def fake_fetch(
+        source: SubscriptionSource,
+        timeout_seconds: float,
+        max_bytes: int,
+        options: FetchTransportOptions | None,
+    ) -> FetchedSubscription:
+        observed["proxy_url"] = None if options is None else options.proxy_url
+        return FetchedSubscription(source_name=source.name, content="vless://line", byte_count=12)
+
+    fetched, _summary = fetch_enabled_subscriptions(
+        sources,
+        5.0,
+        fetch_func=fake_fetch,
+        transport_options=transport_options,
+    )
+
+    assert len(fetched) == 1
+    assert observed["proxy_url"] == "http://127.0.0.1:7890"
+
+
+def test_classify_fetch_exception_marks_unsupported_proxy() -> None:
+    """Classify proxy validation failures as unsupported_proxy."""
+    record = _classify_fetch_exception(
+        "fixture",
+        ValueError("proxy URL must use http or https."),
+    )
+
+    assert record.category == "unsupported_proxy"
+
+
+def test_proxy_related_error_messages_do_not_include_proxy_url() -> None:
+    """Keep proxy URLs out of redacted error messages."""
+    proxy_url = "socks5://user:pass@example.invalid:1080"
+    record = _classify_fetch_exception("fixture", ValueError(f"proxy failed for {proxy_url}"))
+
+    assert proxy_url not in record.message
 
 
 def test_classify_fetch_exception_marks_http_errors() -> None:
@@ -250,11 +368,12 @@ def test_fetch_subscription_adds_default_user_agent(monkeypatch) -> None:
         def __exit__(self, exc_type, exc, tb) -> None:
             return None
 
-    def fake_urlopen(request, timeout: float):
-        observed["user_agent"] = request.get_header("User-agent")
-        return FakeResponse()
+    class FakeOpener:
+        def open(self, request, timeout: float):
+            observed["user_agent"] = request.get_header("User-agent")
+            return FakeResponse()
 
-    monkeypatch.setattr(fetcher, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetcher, "build_url_opener", lambda options=None: FakeOpener())
 
     fetch_subscription(source, 7.0)
 
@@ -286,11 +405,12 @@ def test_fetch_subscription_preserves_custom_user_agent(monkeypatch) -> None:
         def __exit__(self, exc_type, exc, tb) -> None:
             return None
 
-    def fake_urlopen(request, timeout: float):
-        observed["user_agent"] = request.get_header("User-agent")
-        return FakeResponse()
+    class FakeOpener:
+        def open(self, request, timeout: float):
+            observed["user_agent"] = request.get_header("User-agent")
+            return FakeResponse()
 
-    monkeypatch.setattr(fetcher, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetcher, "build_url_opener", lambda options=None: FakeOpener())
 
     fetch_subscription(source, 7.0)
 

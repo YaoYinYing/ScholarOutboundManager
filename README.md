@@ -259,12 +259,14 @@ Important arguments:
 - `--config`
 - `--output`
 - `--allow-network-fetch`
+- `--proxy-url`
 - `--timeout`
 - `--max-bytes`
 
 Notes:
 
 - `fetch` only starts after `--allow-network-fetch` is passed.
+- `--proxy-url` is optional and can route subscription downloads through an HTTP(S) proxy.
 - `fetch` may download subscription content and write raw candidate material locally.
 - `fetch` does not start Xray.
 - `fetch` does not probe Google Scholar.
@@ -292,6 +294,19 @@ python scripts/live_ab_fetch_test.py \
 ```
 
 This smoke test only exercises fetch/parse behavior. It does not probe Scholar, does not start Xray, and writes local output under `state_data/live_ab/`. Do not commit `live_test_data/` or `state_data/live_ab/`.
+
+If the valid group shows `dns_error`, the current environment may not be able to resolve the subscription host directly. In that case you can optionally route fetch through a local HTTP(S) proxy:
+
+```bash
+python scripts/live_ab_fetch_test.py \
+  --valid-links live_test_data/sublinks/valid.txt \
+  --invalid-links live_test_data/sublinks/invalid.txt \
+  --work-dir state_data/live_ab \
+  --xray-binary fake-xray \
+  --proxy-url http://127.0.0.1:7890
+```
+
+`--proxy-url` is optional. Do not commit a proxy URL, and the script does not print the proxy URL. This still only tests subscription fetch/parse, not Scholar probe.
 
 The redacted summary now includes fetch error categories and HTTP status counts when available. A valid group with `fetched_count=0` means fetch failed before parsing. A valid group with `fetched_count>0` and `parsed_count=0` points to a parser or content-format issue.
 

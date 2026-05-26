@@ -25,6 +25,9 @@ _UUID_PATTERN = re.compile(
 )
 _PBK_PATTERN = re.compile(r"(?i)\b(?:pbk|public_key)\s*[:=]\s*([^\s&]+)")
 _SECRET_PATTERN = re.compile(r"(?i)\b(?:token|secret|password)\s*[:=]\s*([^\s&]+)")
+_QUERY_SECRET_PATTERN = re.compile(
+    r"(?i)\b(?:token|secret|password|key|api_key|access_token)\s*=\s*[^&\s]+"
+)
 
 
 def read_link_file(path: str | Path) -> list[str]:
@@ -106,6 +109,7 @@ def redact_live_output(text: str) -> str:
     redacted = _UUID_PATTERN.sub("<REDACTED_UUID>", redacted)
     redacted = _PBK_PATTERN.sub(lambda match: match.group(0).split(match.group(1))[0] + "<REDACTED>", redacted)
     redacted = _SECRET_PATTERN.sub(lambda match: match.group(0).split(match.group(1))[0] + "<REDACTED>", redacted)
+    redacted = _QUERY_SECRET_PATTERN.sub("<REDACTED_SECRET>", redacted)
     return redacted
 
 
@@ -167,6 +171,7 @@ def run_fetch_command(
     config_path: str | Path,
     output_path: str | Path,
     *,
+    proxy_url: str | None = None,
     cwd: str | Path | None = None,
     runner: Any = subprocess.run,
 ) -> subprocess.CompletedProcess[str]:
@@ -182,6 +187,8 @@ def run_fetch_command(
         str(output_path),
         "--allow-network-fetch",
     ]
+    if proxy_url is not None:
+        command.extend(["--proxy-url", proxy_url])
     return runner(
         command,
         cwd=str(cwd or REPO_ROOT),
@@ -197,6 +204,7 @@ def run_group(
     link_file: str | Path,
     work_dir: str | Path,
     xray_binary: str,
+    proxy_url: str | None = None,
     runner: Any = subprocess.run,
 ) -> tuple[dict[str, object], str, str]:
     """Run one group fetch flow and return its redacted summary plus CLI output."""
@@ -209,7 +217,13 @@ def run_group(
         build_group_config(group_label, links, work_dir, xray_binary),
     )
 
-    result = run_fetch_command(config_path, output_path, cwd=REPO_ROOT, runner=runner)
+    result = run_fetch_command(
+        config_path,
+        output_path,
+        proxy_url=proxy_url,
+        cwd=REPO_ROOT,
+        runner=runner,
+    )
     stdout_redacted = redact_live_output(result.stdout)
     stderr_redacted = redact_live_output(result.stderr)
     artifact_summary = summarize_candidate_artifact(output_path)
@@ -268,6 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--invalid-links", required=True)
     parser.add_argument("--work-dir", required=True)
     parser.add_argument("--xray-binary", required=True)
+    parser.add_argument("--proxy-url")
     return parser
 
 
@@ -282,12 +297,14 @@ def main(argv: list[str] | None = None) -> int:
             link_file=args.valid_links,
             work_dir=args.work_dir,
             xray_binary=args.xray_binary,
+            proxy_url=args.proxy_url,
         )
         invalid_group, invalid_stdout, invalid_stderr = run_group(
             group_label="invalid",
             link_file=args.invalid_links,
             work_dir=args.work_dir,
             xray_binary=args.xray_binary,
+            proxy_url=args.proxy_url,
         )
         summary = build_live_ab_summary(valid_group, invalid_group)
         summary_path = Path(args.work_dir) / "summary.json"

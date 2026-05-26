@@ -13,7 +13,10 @@ from scholar_outbound_manager.config import ConfigError
 from scholar_outbound_manager.config import load_config
 from scholar_outbound_manager.doctor import build_doctor_report
 from scholar_outbound_manager.doctor import format_doctor_report
+from scholar_outbound_manager.fetcher import build_url_opener
 from scholar_outbound_manager.fetcher import fetch_enabled_subscriptions
+from scholar_outbound_manager.fetcher import FetchErrorRecord
+from scholar_outbound_manager.fetcher import FetchTransportOptions
 from scholar_outbound_manager.generation import write_generation_outputs
 from scholar_outbound_manager.inspect import format_generated_manifest_inspection
 from scholar_outbound_manager.inspect import format_probe_summary_inspection
@@ -55,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_parser.add_argument("--allow-network-fetch", action="store_true")
     fetch_parser.add_argument("--timeout", type=float)
     fetch_parser.add_argument("--max-bytes", type=int, default=1_048_576)
+    fetch_parser.add_argument("--proxy-url")
     fetch_parser.set_defaults(handler=_handle_fetch)
 
     doctor_parser = subparsers.add_parser("doctor")
@@ -133,10 +137,13 @@ def _handle_fetch(args: argparse.Namespace) -> int:
 
         config = load_config(args.config)
         timeout_seconds = config.probe.timeout_seconds if args.timeout is None else args.timeout
+        transport_options = FetchTransportOptions(proxy_url=args.proxy_url)
+        build_url_opener(transport_options)
         fetched, fetch_summary = fetch_enabled_subscriptions(
             config.subscriptions,
             timeout_seconds=timeout_seconds,
             max_bytes=args.max_bytes,
+            transport_options=transport_options,
         )
         parsed_subscriptions = parse_fetched_subscriptions(
             fetched,
@@ -400,12 +407,12 @@ def _validate_distinct_output_paths(summary_output: str, passed_candidates_outpu
         raise ValueError("summary-output and passed-candidates-output must be different paths.")
 
 
-def _summarize_fetch_error_categories(error_records: list) -> dict[str, int]:
+def _summarize_fetch_error_categories(error_records: list[FetchErrorRecord]) -> dict[str, int]:
     """Count fetch error categories for CLI summary output."""
     return dict(sorted(Counter(record.category for record in error_records).items()))
 
 
-def _summarize_fetch_http_statuses(error_records: list) -> dict[int, int]:
+def _summarize_fetch_http_statuses(error_records: list[FetchErrorRecord]) -> dict[int, int]:
     """Count fetch HTTP status codes for CLI summary output."""
     return dict(
         sorted(

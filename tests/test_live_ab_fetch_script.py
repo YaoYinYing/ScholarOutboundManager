@@ -212,6 +212,56 @@ def test_run_fetch_command_can_be_simulated_without_network(tmp_path) -> None:
     assert "--allow-network-fetch" in observed["command"]
 
 
+def test_run_fetch_command_includes_proxy_url_when_provided(tmp_path) -> None:
+    """Append the proxy flag when one is provided."""
+    module = _load_script_module()
+    observed: dict[str, object] = {}
+
+    def fake_runner(command, cwd, text, capture_output, check):
+        observed["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    module.run_fetch_command(
+        tmp_path / "config.yaml",
+        tmp_path / "candidates.json",
+        proxy_url="http://oreo:oreo@127.0.0.1:10089",
+        cwd=tmp_path,
+        runner=fake_runner,
+    )
+
+    assert "--proxy-url" in observed["command"]
+
+
+def test_run_fetch_command_omits_proxy_url_when_not_provided(tmp_path) -> None:
+    """Avoid adding the proxy flag when it is not provided."""
+    module = _load_script_module()
+    observed: dict[str, object] = {}
+
+    def fake_runner(command, cwd, text, capture_output, check):
+        observed["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    module.run_fetch_command(
+        tmp_path / "config.yaml",
+        tmp_path / "candidates.json",
+        cwd=tmp_path,
+        runner=fake_runner,
+    )
+
+    assert "--proxy-url" not in observed["command"]
+
+
+def test_redact_live_output_redacts_proxy_url_with_credentials() -> None:
+    """Redact proxy URLs even when they contain credentials."""
+    module = _load_script_module()
+    proxy_url = "http://oreo:oreo@127.0.0.1:10089"
+
+    redacted = module.redact_live_output(f"using proxy {proxy_url}")
+
+    assert proxy_url not in redacted
+    assert "<REDACTED_URL>" in redacted
+
+
 def test_main_uses_fake_runner_and_writes_redacted_summary(tmp_path, monkeypatch, capsys) -> None:
     """Run the harness with a fake fetch command and no real network access."""
     module = _load_script_module()
@@ -221,7 +271,7 @@ def test_main_uses_fake_runner_and_writes_redacted_summary(tmp_path, monkeypatch
     valid_links.write_text("https://example.invalid/subscription-a\n", encoding="utf-8")
     invalid_links.write_text("# comment only\n", encoding="utf-8")
 
-    def fake_run_fetch_command(config_path, output_path, *, cwd=None, runner=None):
+    def fake_run_fetch_command(config_path, output_path, *, proxy_url=None, cwd=None, runner=None):
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
         if Path(config_path).parent.name == "valid":
@@ -315,6 +365,29 @@ def test_main_uses_fake_runner_and_writes_redacted_summary(tmp_path, monkeypatch
     assert summary["groups"]["invalid"]["fetch_http_statuses"] == {"403": 1}
     assert summary["interpretation"]["secrets_redacted"] is True
     assert "https://example.invalid" not in json.dumps(summary)
+
+
+def test_parser_accepts_proxy_url_argument() -> None:
+    """Accept one optional proxy URL argument."""
+    module = _load_script_module()
+    parser = module.build_parser()
+
+    args = parser.parse_args(
+        [
+            "--valid-links",
+            "valid.txt",
+            "--invalid-links",
+            "invalid.txt",
+            "--work-dir",
+            "state_data/live_ab",
+            "--xray-binary",
+            "fake-xray",
+            "--proxy-url",
+            "http://127.0.0.1:7890",
+        ]
+    )
+
+    assert args.proxy_url == "http://127.0.0.1:7890"
 
 
 def _load_script_module():

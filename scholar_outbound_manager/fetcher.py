@@ -9,8 +9,9 @@ from dataclasses import dataclass
 from urllib.error import HTTPError
 from urllib.error import URLError
 from urllib.parse import urlsplit
+from urllib.request import ProxyHandler
 from urllib.request import Request
-from urllib.request import urlopen
+from urllib.request import build_opener
 
 from scholar_outbound_manager.models import SubscriptionSource
 
@@ -47,10 +48,29 @@ class FetchErrorRecord:
     http_status: int | None = None
 
 
+@dataclass(frozen=True)
+class FetchTransportOptions:
+    """Represent optional transport settings for subscription downloads."""
+
+    proxy_url: str | None = None
+
+
+def build_url_opener(options: FetchTransportOptions | None = None):
+    """Build one urllib opener with optional HTTP(S) proxy support."""
+    if options is None or options.proxy_url is None:
+        return build_opener()
+
+    parsed = urlsplit(options.proxy_url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("proxy URL must use http or https.")
+    return build_opener(ProxyHandler({"http": options.proxy_url, "https": options.proxy_url}))
+
+
 def fetch_subscription(
     source: SubscriptionSource,
     timeout_seconds: float,
     max_bytes: int = 1_048_576,
+    transport_options: FetchTransportOptions | None = None,
 ) -> FetchedSubscription:
     """Download one enabled subscription using the standard library only."""
     if not source.enabled:
@@ -68,7 +88,8 @@ def fetch_subscription(
     if not any(str(key).lower() == "user-agent" for key in request_headers):
         request_headers["User-Agent"] = "ScholarOutboundManager/0.1"
     request = Request(source.url, headers=request_headers)
-    with urlopen(request, timeout=timeout_seconds) as response:
+    opener = build_url_opener(transport_options)
+    with opener.open(request, timeout=timeout_seconds) as response:
         payload = response.read(max_bytes + 1)
         if len(payload) > max_bytes:
             raise ValueError(
@@ -87,7 +108,8 @@ def fetch_enabled_subscriptions(
     sources: list[SubscriptionSource],
     timeout_seconds: float,
     max_bytes: int = 1_048_576,
-    fetch_func: Callable[[SubscriptionSource, float, int], FetchedSubscription] = fetch_subscription,
+    fetch_func: Callable[..., FetchedSubscription] = fetch_subscription,
+    transport_options: FetchTransportOptions | None = None,
 ) -> tuple[list[FetchedSubscription], FetchSummary]:
     """Fetch enabled subscriptions sequentially without failing the full batch."""
     fetched: list[FetchedSubscription] = []
@@ -101,7 +123,13 @@ def fetch_enabled_subscriptions(
             disabled_count += 1
             continue
         try:
-            result = fetch_func(source, timeout_seconds, max_bytes)
+            result = _call_fetch_func(
+                fetch_func,
+                source,
+                timeout_seconds,
+                max_bytes,
+                transport_options,
+            )
         except Exception as exc:  # pragma: no cover - defensive boundary
             error_record = _classify_fetch_exception(source.name, exc)
             errors.append(error_record.message)
@@ -157,6 +185,8 @@ def _classify_fetch_exception(source_name: str, exc: Exception) -> FetchErrorRec
         lowered = reason_text.lower()
         if "too large" in lowered:
             return FetchErrorRecord(source_name, "too_large", f"Subscription source '{source_name}' failed: {reason_text}.")
+        if "proxy" in lowered:
+            return FetchErrorRecord(source_name, "unsupported_proxy", f"Subscription source '{source_name}' failed: {reason_text}.")
         if "http or https" in lowered or "scheme" in lowered:
             return FetchErrorRecord(source_name, "unsupported_scheme", f"Subscription source '{source_name}' failed: {reason_text}.")
         return FetchErrorRecord(source_name, "unknown_error", f"Subscription source '{source_name}' failed: {reason_text}.")
@@ -169,7 +199,7 @@ def _safe_reason_text(reason: object) -> str:
     """Return a compact reason string without embedding subscription URLs."""
     text = str(reason).strip() or "unknown error"
     sanitized = text.replace("\n", " ")
-    sanitized = re.sub(r"https?://\S+", "<REDACTED_URL>", sanitized)
+    sanitized = re.sub(r"[a-zA-Z][a-zA-Z0-9+.-]*://\S+", "<REDACTED_URL>", sanitized)
     sanitized = re.sub(r"vless://\S+", "<REDACTED_VLESS_URI>", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(
         r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
@@ -177,5 +207,26 @@ def _safe_reason_text(reason: object) -> str:
         sanitized,
     )
     sanitized = re.sub(r"(?i)\b(?:pbk|public_key)\s*[:=]\s*([^\s&]+)", "public_key=<REDACTED>", sanitized)
-    sanitized = re.sub(r"(?i)\b(token|secret|password)\b", "<REDACTED>", sanitized)
+    sanitized = re.sub(
+        r"(?i)\b(?:token|secret|password|key|api_key|access_token)\s*=\s*[^&\s]+",
+        "<REDACTED_SECRET>",
+        sanitized,
+    )
+    sanitized = re.sub(r"(?i)\b(token|secret|password|api_key|access_token)\b", "<REDACTED>", sanitized)
     return sanitized
+
+
+def _call_fetch_func(
+    fetch_func: Callable[..., FetchedSubscription],
+    source: SubscriptionSource,
+    timeout_seconds: float,
+    max_bytes: int,
+    transport_options: FetchTransportOptions | None,
+) -> FetchedSubscription:
+    """Call one injected fetch function with transport options when supported."""
+    try:
+        return fetch_func(source, timeout_seconds, max_bytes, transport_options)
+    except TypeError as exc:
+        if "positional argument" not in str(exc) and "given" not in str(exc):
+            raise
+        return fetch_func(source, timeout_seconds, max_bytes)

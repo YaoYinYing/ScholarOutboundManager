@@ -47,8 +47,10 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "run" in readme_text
     assert "--allow-network-probe" in readme_text
     assert "--allow-network-fetch" in readme_text
+    assert "--proxy-url" in readme_text
     assert "live a/b fetch smoke test" in readme_text.lower()
     assert "state_data/live_ab/" in readme_text
+    assert "http(s) proxy" in readme_text.lower() or "http proxy" in readme_text.lower()
     assert "probe.allow_network_probe" in readme_text
     assert "required together" in readme_text.lower() or "without both" in readme_text.lower()
     assert "proberesult" in readme_text.lower() or "probe evidence" in readme_text.lower()
