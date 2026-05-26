@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections import Counter
 from collections.abc import Sequence
@@ -35,6 +36,12 @@ from scholar_outbound_manager.probe.batch_probe import probe_candidates_sequenti
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeOptions
 from scholar_outbound_manager.runtime import prepare_candidate_runtime
 from scholar_outbound_manager.selection import select_candidate_by_index
+from scholar_outbound_manager.sidecar import SidecarRuntimeOptions
+from scholar_outbound_manager.sidecar import build_socks_outbound_snippet
+from scholar_outbound_manager.sidecar import inspect_sidecar_runtime
+from scholar_outbound_manager.sidecar import prepare_sidecar_runtime
+from scholar_outbound_manager.sidecar import start_sidecar_runtime
+from scholar_outbound_manager.sidecar import stop_sidecar_runtime
 from scholar_outbound_manager.state.candidate_artifact import build_candidate_artifact
 from scholar_outbound_manager.state.candidate_artifact import write_candidate_artifact
 from scholar_outbound_manager.state.probe_state import write_probe_artifacts
@@ -150,6 +157,35 @@ def build_parser() -> argparse.ArgumentParser:
     xray_managed_clean_parser.add_argument("--binary-path", required=True)
     xray_managed_clean_parser.add_argument("--config-path")
     xray_managed_clean_parser.set_defaults(handler=_handle_xray_managed_clean)
+
+    sidecar_parser = subparsers.add_parser("sidecar")
+    sidecar_subparsers = sidecar_parser.add_subparsers(dest="sidecar_command")
+
+    sidecar_prepare_parser = sidecar_subparsers.add_parser("prepare")
+    _add_sidecar_runtime_arguments(sidecar_prepare_parser)
+    sidecar_prepare_parser.set_defaults(handler=_handle_sidecar_prepare)
+
+    sidecar_start_parser = sidecar_subparsers.add_parser("start")
+    _add_sidecar_runtime_arguments(sidecar_start_parser)
+    sidecar_start_parser.add_argument("--test-config-timeout", type=float, default=10.0)
+    sidecar_start_parser.add_argument("--no-test-config", action="store_true")
+    sidecar_start_parser.set_defaults(handler=_handle_sidecar_start)
+
+    sidecar_status_parser = sidecar_subparsers.add_parser("status")
+    sidecar_status_parser.add_argument("--config", default="config.yaml")
+    sidecar_status_parser.add_argument("--runtime-config-name", default="scholar_sidecar_runtime.json")
+    sidecar_status_parser.set_defaults(handler=_handle_sidecar_status)
+
+    sidecar_stop_parser = sidecar_subparsers.add_parser("stop")
+    sidecar_stop_parser.add_argument("--config", default="config.yaml")
+    sidecar_stop_parser.add_argument("--runtime-config-name", default="scholar_sidecar_runtime.json")
+    sidecar_stop_parser.set_defaults(handler=_handle_sidecar_stop)
+
+    sidecar_snippet_parser = sidecar_subparsers.add_parser("snippet")
+    sidecar_snippet_parser.add_argument("--listen-host", default="127.0.0.1")
+    sidecar_snippet_parser.add_argument("--listen-port", type=int, default=19080)
+    sidecar_snippet_parser.add_argument("--tag", default="scholar-sidecar-socks-out")
+    sidecar_snippet_parser.set_defaults(handler=_handle_sidecar_snippet)
 
     return parser
 
@@ -552,6 +588,129 @@ def _handle_xray_managed_clean(args: argparse.Namespace) -> int:
     return 0 if terminated else 1
 
 
+def _handle_sidecar_prepare(args: argparse.Namespace) -> int:
+    """Prepare one isolated sidecar runtime config without starting Xray."""
+    try:
+        config = load_config(args.config)
+        candidates = load_candidates(args.candidates)
+        candidate = select_candidate_by_index(candidates, args.candidate_index)
+        options = _build_sidecar_options(args)
+        summary = prepare_sidecar_runtime(
+            candidate=candidate,
+            xray_config=config.xray,
+            options=options,
+            candidate_id=f"candidate-{args.candidate_index:03d}",
+        )
+    except (ConfigError, FileNotFoundError, ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("Prepared Scholar sidecar runtime.")
+    print(f"runtime_config_path: {summary.runtime_config_path}")
+    print(f"listen_host: {summary.listen_host}")
+    print(f"listen_port: {summary.listen_port}")
+    print(f"candidate_protocol: {summary.candidate_protocol}")
+    print(f"pid_file_path: {summary.pid_file_path}")
+    print(f"metadata_file_path: {summary.metadata_file_path}")
+    return 0
+
+
+def _handle_sidecar_start(args: argparse.Namespace) -> int:
+    """Prepare and start one isolated sidecar runtime."""
+    try:
+        if not args.no_test_config:
+            _validate_positive_float(args.test_config_timeout, "test-config-timeout")
+        config = load_config(args.config)
+        candidates = load_candidates(args.candidates)
+        candidate = select_candidate_by_index(candidates, args.candidate_index)
+        options = _build_sidecar_options(args)
+        prepared = prepare_sidecar_runtime(
+            candidate=candidate,
+            xray_config=config.xray,
+            options=options,
+            candidate_id=f"candidate-{args.candidate_index:03d}",
+        )
+        summary = start_sidecar_runtime(
+            config.xray,
+            prepared,
+            test_config_timeout_seconds=None if args.no_test_config else args.test_config_timeout,
+        )
+    except (ConfigError, FileNotFoundError, ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("Started Scholar sidecar runtime.")
+    print(f"started: {'true' if summary.started else 'false'}")
+    print(f"listen_host: {summary.listen_host}")
+    print(f"listen_port: {summary.listen_port}")
+    print(f"pid_file_path: {summary.pid_file_path}")
+    print(f"runtime_config_path: {summary.runtime_config_path}")
+    if summary.error:
+        print(f"error: {summary.error}")
+    return 0 if summary.started else 1
+
+
+def _handle_sidecar_status(args: argparse.Namespace) -> int:
+    """Inspect one sidecar runtime through its managed pid file."""
+    try:
+        config = load_config(args.config)
+        options = _build_sidecar_status_options(args.runtime_config_name)
+        runtime_dir = Path(config.xray.runtime_dir)
+        runtime_config_path = runtime_dir / options.runtime_config_name
+        pid_file_path = runtime_dir / options.pid_file_name
+        inspection = inspect_sidecar_runtime(
+            pid_file_path,
+            expected_binary_path=config.xray.binary_path,
+            expected_config_path=runtime_config_path,
+        )
+    except (ConfigError, FileNotFoundError, ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("Scholar sidecar runtime:")
+    print(f"pid_file: {pid_file_path}")
+    print(f"alive: {'true' if inspection['alive'] else 'false'}")
+    print(f"ownership_matched: {'true' if inspection['ownership_matched'] else 'false'}")
+    return 0
+
+
+def _handle_sidecar_stop(args: argparse.Namespace) -> int:
+    """Stop one managed sidecar runtime without touching external Xray services."""
+    try:
+        config = load_config(args.config)
+        options = _build_sidecar_status_options(args.runtime_config_name)
+        runtime_dir = Path(config.xray.runtime_dir)
+        runtime_config_path = runtime_dir / options.runtime_config_name
+        pid_file_path = runtime_dir / options.pid_file_name
+        terminated = stop_sidecar_runtime(
+            pid_file_path,
+            expected_binary_path=config.xray.binary_path,
+            expected_config_path=runtime_config_path,
+        )
+    except (ConfigError, FileNotFoundError, ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("Stopped Scholar sidecar runtime.")
+    print(f"terminated: {'true' if terminated else 'false'}")
+    return 0
+
+
+def _handle_sidecar_snippet(args: argparse.Namespace) -> int:
+    """Print one production-reference SOCKS outbound snippet."""
+    try:
+        snippet = build_socks_outbound_snippet(
+            listen_host=args.listen_host,
+            listen_port=args.listen_port,
+            tag=args.tag,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(snippet, indent=2, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 def _validate_runtime_config_name(config_name: str) -> None:
     """Validate that the runtime config name is a plain file name."""
     config_path = Path(config_name)
@@ -563,6 +722,31 @@ def _validate_runtime_config_name(config_name: str) -> None:
         raise ValueError("runtime-config-name must be a file name.")
     if "/" in config_name or "\\" in config_name:
         raise ValueError("runtime-config-name must not contain path separators.")
+
+
+def _add_sidecar_runtime_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add shared sidecar prepare/start arguments."""
+    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--candidates", required=True)
+    parser.add_argument("--candidate-index", type=int, default=0)
+    parser.add_argument("--listen-host", default="127.0.0.1")
+    parser.add_argument("--listen-port", type=int, default=19080)
+    parser.add_argument("--runtime-config-name", default="scholar_sidecar_runtime.json")
+
+
+def _build_sidecar_options(args: argparse.Namespace) -> SidecarRuntimeOptions:
+    """Construct sidecar runtime options from CLI arguments."""
+    return SidecarRuntimeOptions(
+        listen_host=args.listen_host,
+        listen_port=args.listen_port,
+        runtime_config_name=args.runtime_config_name,
+    )
+
+
+def _build_sidecar_status_options(runtime_config_name: str) -> SidecarRuntimeOptions:
+    """Construct sidecar options for status/stop from the runtime config name."""
+    _validate_runtime_config_name(runtime_config_name)
+    return SidecarRuntimeOptions(runtime_config_name=runtime_config_name)
 
 
 def _validate_xray_test_timeout(timeout_seconds: float) -> None:

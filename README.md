@@ -151,6 +151,59 @@ After a VPS probe:
 - Confirm no project-managed pid file remains alive.
 - Ignore unrelated external Xray processes.
 
+## Sidecar SOCKS Runtime Model
+
+- ScholarOutboundManager does not modify production Xray or XrayR configuration.
+- It can run an isolated runtime Xray sidecar.
+- The sidecar exposes a localhost SOCKS endpoint such as `127.0.0.1:19080`.
+- Production Xray or XrayR may manually use a SOCKS outbound pointing to that localhost port.
+- This keeps production routing and user management isolated from ScholarOutboundManager.
+- ScholarOutboundManager only manages the Xray process it starts and records in its PID file.
+- It never kills Xray by process name.
+- It never kills `x-ui` or external Xray or XrayR services.
+
+Start a sidecar from a selected passed candidate:
+
+```bash
+scholar-outbound-manager sidecar start \
+  --config config.yaml \
+  --candidates state_data/passed_candidates.json \
+  --candidate-index 0 \
+  --listen-host 127.0.0.1 \
+  --listen-port 19080
+```
+
+Generate a production-reference SOCKS outbound snippet:
+
+```bash
+scholar-outbound-manager sidecar snippet \
+  --listen-host 127.0.0.1 \
+  --listen-port 19080 \
+  --tag scholar-sidecar-socks-out
+```
+
+Example snippet:
+
+```json
+{
+  "tag": "scholar-sidecar-socks-out",
+  "protocol": "socks",
+  "settings": {
+    "servers": [
+      {
+        "address": "127.0.0.1",
+        "port": 19080
+      }
+    ]
+  }
+}
+```
+
+- This snippet is not automatically written to production config.
+- Users must integrate it manually or through their own deployment tooling.
+- This phase does not install a systemd service.
+- This phase does not implement auto failover.
+
 ## Typical Workflow
 
 ### Step 1: prepare local config
@@ -213,6 +266,8 @@ scholar-outbound-manager generate \
   --candidates state_data/passed_candidates.json
 ```
 
+`generate` remains available for fragment export, but it is no longer the preferred production integration path.
+
 ### Step 6: inspect generated manifest
 
 ```bash
@@ -228,6 +283,24 @@ scholar-outbound-manager run \
   --candidates state_data/passed_candidates.json \
   --candidate-index 0 \
   --test-config
+```
+
+### Step 8: start an isolated Scholar sidecar
+
+```bash
+scholar-outbound-manager sidecar start \
+  --config config.yaml \
+  --candidates state_data/passed_candidates.json \
+  --candidate-index 0 \
+  --listen-host 127.0.0.1 \
+  --listen-port 19080
+```
+
+### Step 9: inspect or stop the sidecar
+
+```bash
+scholar-outbound-manager sidecar status --config config.yaml
+scholar-outbound-manager sidecar stop --config config.yaml
 ```
 
 ## CLI Reference
