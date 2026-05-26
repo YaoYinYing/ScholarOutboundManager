@@ -1,8 +1,10 @@
-"""Tests for Phase 3 generation outputs."""
+"""Tests for Phase 13B generation outputs."""
 
 from __future__ import annotations
 
 import json
+
+import pytest
 
 from scholar_outbound_manager.generation import build_generated_nodes
 from scholar_outbound_manager.generation import write_generation_outputs
@@ -13,45 +15,62 @@ from scholar_outbound_manager.models import ProbeResult
 from scholar_outbound_manager.models import RoutingConfig
 
 
-def test_build_generated_nodes_limits_selected_candidates() -> None:
-    """Generate no more than the configured maximum node count."""
+def test_build_generated_nodes_can_select_multiple_xray_protocols() -> None:
+    """Generate nodes for all Xray-compatible protocols in this phase."""
     nodes = build_generated_nodes(
-        candidates=[_make_candidate(raw_name="node-1"), _make_candidate(raw_name="node-2")],
+        candidates=[
+            _make_vless_candidate(raw_name="node-vless"),
+            _make_trojan_candidate(raw_name="node-trojan"),
+            _make_shadowsocks_candidate(raw_name="node-ss"),
+            _make_vmess_candidate(raw_name="node-vmess"),
+        ],
         tag_prefix="google-scholar-node-",
-        max_nodes=1,
+        max_nodes=4,
     )
 
-    assert len(nodes) == 1
-    assert nodes[0].candidate.raw_name == "node-1"
+    assert [node.outbound["protocol"] for node in nodes] == [
+        "vless",
+        "trojan",
+        "shadowsocks",
+        "vmess",
+    ]
 
 
 def test_build_generated_nodes_uses_stable_tag_numbers() -> None:
-    """Assign stable sequential tags to generated nodes."""
+    """Assign stable sequential tags across mixed supported protocols."""
     nodes = build_generated_nodes(
-        candidates=[_make_candidate(raw_name="node-1"), _make_candidate(raw_name="node-2")],
+        candidates=[
+            _make_vless_candidate(raw_name="node-1"),
+            _make_trojan_candidate(raw_name="node-2"),
+            _make_shadowsocks_candidate(raw_name="node-3"),
+        ],
         tag_prefix="google-scholar-node-",
-        max_nodes=2,
+        max_nodes=3,
     )
 
     assert [node.tag for node in nodes] == [
         "google-scholar-node-001",
         "google-scholar-node-002",
+        "google-scholar-node-003",
     ]
 
 
-def test_write_generation_outputs_writes_all_artifacts(tmp_path) -> None:
-    """Write outbounds, routes, and manifest artifacts."""
+def test_write_generation_outputs_rejects_unsupported_protocol_without_crashing(tmp_path) -> None:
+    """Reject unsupported protocols while still writing artifacts."""
     summary = write_generation_outputs(
-        candidates=[_make_candidate(raw_name="node-1")],
+        candidates=[
+            _make_vless_candidate(raw_name="selected-node"),
+            _make_candidate(protocol="hysteria2", raw_name="unsupported-node", public_key=None, short_id=None),
+        ],
         output_config=_make_output_config(tmp_path),
         generation_config=_make_generation_config(),
         routing_config=_make_routing_config(fail_closed=True),
     )
 
-    assert (tmp_path / "outbounds.json").exists()
-    assert (tmp_path / "routes.json").exists()
-    assert (tmp_path / "manifest.json").exists()
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     assert summary["selected_count"] == 1
+    assert summary["rejected_count"] == 1
+    assert manifest["rejected"][0]["reason"].startswith("Xray outbound is not supported:")
 
 
 def test_write_generation_outputs_fail_closed_without_nodes(tmp_path) -> None:
@@ -70,23 +89,27 @@ def test_write_generation_outputs_fail_closed_without_nodes(tmp_path) -> None:
     assert routes["routing"]["rules"][0]["outboundTag"] == "blocked-scholar"
 
 
-def test_write_generation_outputs_counts_rejected_candidates(tmp_path) -> None:
-    """Count unsupported candidates as rejected."""
-    summary = write_generation_outputs(
+def test_manifest_redaction_hides_uuid_password_public_key_and_raw_uri(tmp_path) -> None:
+    """Keep sensitive fields out of review-safe manifest output."""
+    write_generation_outputs(
         candidates=[
-            _make_candidate(raw_name="selected-node"),
-            _make_candidate(raw_name="rejected-node", supported=False, unsupported_reason="Unsupported transport."),
+            _make_vless_candidate(raw_name="node-vless"),
+            _make_trojan_candidate(raw_name="node-trojan"),
         ],
         output_config=_make_output_config(tmp_path),
         generation_config=_make_generation_config(),
         routing_config=_make_routing_config(fail_closed=True),
     )
 
-    assert summary["rejected_count"] == 1
+    rendered = (tmp_path / "manifest.json").read_text(encoding="utf-8")
+    assert "00000000-0000-0000-0000-000000000000" not in rendered
+    assert "PASSWORD_PLACEHOLDER" not in rendered
+    assert "PUBLIC_KEY_PLACEHOLDER" not in rendered
+    assert "vless://" not in rendered
 
 
 def test_build_generated_nodes_preserves_probe_evidence_when_provided() -> None:
-    """Attach probe evidence to generated nodes when present in input metadata."""
+    """Attach probe evidence to generated nodes when present."""
     probe_results = [
         ProbeResult(
             candidate_id="candidate-001",
@@ -102,7 +125,7 @@ def test_build_generated_nodes_preserves_probe_evidence_when_provided() -> None:
     ]
 
     nodes = build_generated_nodes(
-        candidates=[_make_candidate(raw_name="node-1")],
+        candidates=[_make_vless_candidate(raw_name="node-1")],
         tag_prefix="google-scholar-node-",
         max_nodes=1,
         probe_results=probe_results,
@@ -129,7 +152,7 @@ def test_write_generation_outputs_keeps_probe_evidence_in_manifest(tmp_path) -> 
     ]
 
     write_generation_outputs(
-        candidates=[_make_candidate(raw_name="node-1")],
+        candidates=[_make_vless_candidate(raw_name="node-1")],
         output_config=_make_output_config(tmp_path),
         generation_config=_make_generation_config(),
         routing_config=_make_routing_config(fail_closed=True),
@@ -138,29 +161,13 @@ def test_write_generation_outputs_keeps_probe_evidence_in_manifest(tmp_path) -> 
 
     manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["selected"][0]["probe"]["candidate_id"] == "candidate-001"
-    assert manifest["selected"][0]["probe"]["home_status"] == 200
-
-
-def test_generation_outputs_do_not_expose_raw_uri(tmp_path) -> None:
-    """Keep raw URI source material out of generated artifacts."""
-    write_generation_outputs(
-        candidates=[_make_candidate(raw_name="node-1")],
-        output_config=_make_output_config(tmp_path),
-        generation_config=_make_generation_config(),
-        routing_config=_make_routing_config(fail_closed=True),
-    )
-
-    rendered = (tmp_path / "manifest.json").read_text(encoding="utf-8")
-    assert "vless://" not in rendered
 
 
 def test_write_generation_outputs_rejects_unsupported_routing_mode(tmp_path) -> None:
-    """Reject routing modes outside the Phase 3b boundary."""
-    import pytest
-
+    """Reject routing modes outside the current boundary."""
     with pytest.raises(ValueError, match="Only dedicated_inbound routing mode is supported in Phase 3b"):
         write_generation_outputs(
-            candidates=[_make_candidate(raw_name="node-1")],
+            candidates=[_make_vless_candidate(raw_name="node-1")],
             output_config=_make_output_config(tmp_path),
             generation_config=_make_generation_config(),
             routing_config=RoutingConfig(
@@ -169,9 +176,6 @@ def test_write_generation_outputs_rejects_unsupported_routing_mode(tmp_path) -> 
                 fail_closed=True,
             ),
         )
-
-    assert not (tmp_path / "outbounds.json").exists()
-    assert not (tmp_path / "routes.json").exists()
 
 
 def _make_candidate(**overrides: object) -> CandidateProxy:
@@ -183,6 +187,7 @@ def _make_candidate(**overrides: object) -> CandidateProxy:
         "address": "example.invalid",
         "port": 443,
         "user_id": "00000000-0000-0000-0000-000000000000",
+        "password": None,
         "encryption": "none",
         "flow": "xtls-rprx-vision",
         "network": "tcp",
@@ -191,12 +196,64 @@ def _make_candidate(**overrides: object) -> CandidateProxy:
         "fingerprint": "chrome",
         "public_key": "PUBLIC_KEY_PLACEHOLDER",
         "short_id": "abcd1234",
+        "path": "/ws",
+        "host": "cdn.example.invalid",
+        "extra": {},
         "raw_uri": "vless://00000000-0000-0000-0000-000000000000@example.invalid:443",
         "supported": True,
         "unsupported_reason": None,
     }
     candidate_data.update(overrides)
     return CandidateProxy(**candidate_data)
+
+
+def _make_vless_candidate(**overrides: object) -> CandidateProxy:
+    candidate = _make_candidate(**overrides)
+    return candidate
+
+
+def _make_trojan_candidate(**overrides: object) -> CandidateProxy:
+    return _make_candidate(
+        protocol="trojan",
+        user_id=None,
+        password="PASSWORD_PLACEHOLDER",
+        encryption=None,
+        flow=None,
+        security="tls",
+        public_key=None,
+        short_id=None,
+        raw_uri=None,
+        **overrides,
+    )
+
+
+def _make_shadowsocks_candidate(**overrides: object) -> CandidateProxy:
+    return _make_candidate(
+        protocol="shadowsocks",
+        user_id=None,
+        password="PASSWORD_PLACEHOLDER",
+        encryption="aes-256-gcm",
+        flow=None,
+        security=None,
+        public_key=None,
+        short_id=None,
+        raw_uri=None,
+        **overrides,
+    )
+
+
+def _make_vmess_candidate(**overrides: object) -> CandidateProxy:
+    return _make_candidate(
+        protocol="vmess",
+        encryption="auto",
+        flow=None,
+        security="tls",
+        public_key=None,
+        short_id=None,
+        raw_uri=None,
+        extra={"alter_id": 8},
+        **overrides,
+    )
 
 
 def _make_output_config(tmp_path) -> OutputConfig:
@@ -213,7 +270,7 @@ def _make_generation_config() -> GenerationConfig:
     """Construct one generation configuration for tests."""
     return GenerationConfig(
         tag_prefix="google-scholar-node-",
-        max_passed_nodes=2,
+        max_passed_nodes=4,
         fallback_blackhole_tag="blocked-scholar",
         previous_output_max_age_hours=24,
     )

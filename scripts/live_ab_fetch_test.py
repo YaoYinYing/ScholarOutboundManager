@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import re
 import subprocess
@@ -127,6 +128,7 @@ def summarize_candidate_artifact(path: str | Path) -> dict[str, object]:
             "unsupported_count": 0,
             "candidate_count": 0,
             "supported_count": 0,
+            "protocol_counts": {},
             "fetch_error_categories": {},
             "fetch_http_statuses": {},
         }
@@ -139,6 +141,14 @@ def summarize_candidate_artifact(path: str | Path) -> dict[str, object]:
         for candidate in candidates
         if isinstance(candidate, dict) and candidate.get("supported") is True
     )
+    protocol_counter: Counter[str] = Counter()
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            protocol = candidate.get("protocol")
+            if isinstance(protocol, str) and protocol:
+                protocol_counter[protocol] += 1
     fetch_error_categories: dict[str, int] = {}
     fetch_http_statuses: dict[str, int] = {}
     if isinstance(fetch_errors, list):
@@ -162,6 +172,7 @@ def summarize_candidate_artifact(path: str | Path) -> dict[str, object]:
         "unsupported_count": payload.get("unsupported_count", 0),
         "candidate_count": len(candidates) if isinstance(candidates, list) else 0,
         "supported_count": supported_count,
+        "protocol_counts": dict(sorted(protocol_counter.items())),
         "fetch_error_categories": dict(sorted(fetch_error_categories.items())),
         "fetch_http_statuses": dict(sorted(fetch_http_statuses.items())),
     }
@@ -241,6 +252,7 @@ def run_group(
         "parsed_count": artifact_summary["parsed_count"],
         "supported_count": artifact_summary["supported_count"],
         "unsupported_count": artifact_summary["unsupported_count"],
+        "protocol_counts": artifact_summary["protocol_counts"],
         "fetch_error_categories": artifact_summary["fetch_error_categories"],
         "fetch_http_statuses": artifact_summary["fetch_http_statuses"],
         "output_path": str(output_path),

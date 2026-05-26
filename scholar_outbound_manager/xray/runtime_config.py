@@ -8,7 +8,7 @@ from pathlib import Path
 from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.models import XrayConfig
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
-from scholar_outbound_manager.xray.outbound_builder import build_vless_outbound
+from scholar_outbound_manager.xray.outbound_builder import build_xray_outbound
 
 
 def build_local_socks_inbound(
@@ -82,7 +82,7 @@ def build_runtime_config_for_candidate(
     if listen_port == 0:
         listen_port = _find_free_tcp_port(xray_config.local_socks_host)
 
-    outbound = build_vless_outbound(candidate, outbound_tag)
+    outbound = build_xray_outbound(candidate, outbound_tag)
     runtime_config = build_runtime_config_from_outbound(
         outbound=outbound,
         listen_host=xray_config.local_socks_host,

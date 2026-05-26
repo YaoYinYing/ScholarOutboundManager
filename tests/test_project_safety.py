@@ -66,6 +66,8 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "runtime backend direction" in readme_text.lower()
     assert "top-level `proxies` list" in readme_text
     assert "checksum-aware" in readme_text.lower()
+    assert "vless, trojan, shadowsocks, and vmess" in readme_text.lower()
+    assert "hysteria2, tuic, and wireguard" in readme_text.lower()
 
 
 def test_security_doc_exists_and_warns_about_sensitive_material() -> None:

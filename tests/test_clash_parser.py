@@ -60,7 +60,7 @@ def test_parse_clash_yaml_subscription_parses_trojan_candidate() -> None:
     assert summary.parsed_count == 1
     assert candidates[0].protocol == "trojan"
     assert candidates[0].extra["clash_type"] == "trojan"
-    assert candidates[0].supported is False
+    assert candidates[0].supported is True
 
 
 def test_parse_clash_yaml_subscription_parses_shadowsocks_candidate() -> None:
@@ -70,6 +70,7 @@ def test_parse_clash_yaml_subscription_parses_shadowsocks_candidate() -> None:
     assert candidates[0].protocol == "shadowsocks"
     assert candidates[0].encryption == "aes-256-gcm"
     assert candidates[0].extra["clash_type"] == "ss"
+    assert candidates[0].supported is True
 
 
 def test_parse_clash_yaml_subscription_preserves_vmess_extra_fields() -> None:
@@ -81,6 +82,26 @@ def test_parse_clash_yaml_subscription_preserves_vmess_extra_fields() -> None:
     assert candidate.encryption == "auto"
     assert candidate.extra["alter_id"] == 8
     assert candidate.extra["clash_type"] == "vmess"
+    assert candidate.supported is True
+
+
+def test_parse_clash_yaml_subscription_marks_grpc_vless_unsupported() -> None:
+    """Keep grpc VLESS unsupported for this phase."""
+    candidates, summary = parse_clash_yaml_subscription(_grpc_vless_yaml(), "fixture-source")
+
+    assert summary.unsupported_count == 1
+    assert candidates[0].supported is False
+    assert "grpc" in (candidates[0].unsupported_reason or "")
+
+
+def test_parse_clash_yaml_subscription_marks_grpc_vmess_unsupported() -> None:
+    """Keep grpc VMess unsupported for this phase."""
+    candidates, summary = parse_clash_yaml_subscription(_grpc_vmess_yaml(), "fixture-source")
+
+    assert summary.unsupported_count == 1
+    assert candidates[0].protocol == "vmess"
+    assert candidates[0].supported is False
+    assert "grpc" in (candidates[0].unsupported_reason or "")
 
 
 def test_parse_clash_yaml_subscription_preserves_unsupported_types() -> None:
@@ -236,4 +257,31 @@ proxies:
     tls: true
     reality-opts:
       public-key: PUBLIC_KEY_PLACEHOLDER
+""".strip()
+
+
+def _grpc_vless_yaml() -> str:
+    return """
+proxies:
+  - name: "gRPC VLESS"
+    type: vless
+    server: example.invalid
+    port: 443
+    uuid: "00000000-0000-0000-0000-000000000000"
+    network: grpc
+    tls: true
+    servername: www.cloudflare.com
+""".strip()
+
+
+def _grpc_vmess_yaml() -> str:
+    return """
+proxies:
+  - name: "gRPC VMess"
+    type: vmess
+    server: vmess.example.invalid
+    port: 443
+    uuid: "00000000-0000-0000-0000-000000000000"
+    network: grpc
+    cipher: auto
 """.strip()

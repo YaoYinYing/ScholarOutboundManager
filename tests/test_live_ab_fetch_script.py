@@ -148,6 +148,7 @@ def test_summary_does_not_include_raw_link(tmp_path) -> None:
     rendered = json.dumps(payload)
     assert "https://example.invalid" not in rendered
     assert "vless://" not in rendered
+    assert payload["groups"]["valid"]["protocol_counts"] == {"vless": 1}
 
 
 def test_summarize_candidate_artifact_reads_fetch_error_counts(tmp_path) -> None:
@@ -188,6 +189,37 @@ def test_summarize_candidate_artifact_reads_fetch_error_counts(tmp_path) -> None
 
     assert summary["fetch_error_categories"] == {"http_error": 1, "timeout": 1}
     assert summary["fetch_http_statuses"] == {"403": 1}
+    assert summary["protocol_counts"] == {}
+
+
+def test_summarize_candidate_artifact_reads_protocol_counts(tmp_path) -> None:
+    """Summarize candidate protocols without exposing node details."""
+    module = _load_script_module()
+    output_path = tmp_path / "candidates.json"
+    output_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "sensitive": True,
+                "source_count": 1,
+                "fetched_count": 1,
+                "failed_count": 0,
+                "parsed_count": 3,
+                "unsupported_count": 1,
+                "fetch_errors": [],
+                "candidates": [
+                    {"protocol": "vless", "supported": True},
+                    {"protocol": "trojan", "supported": True},
+                    {"protocol": "hysteria2", "supported": False},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = module.summarize_candidate_artifact(output_path)
+
+    assert summary["protocol_counts"] == {"hysteria2": 1, "trojan": 1, "vless": 1}
 
 
 def test_run_fetch_command_can_be_simulated_without_network(tmp_path) -> None:

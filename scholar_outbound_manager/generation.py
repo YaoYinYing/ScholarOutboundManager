@@ -13,7 +13,7 @@ from scholar_outbound_manager.models import RoutingConfig
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
 from scholar_outbound_manager.state.manifest import build_manifest
 from scholar_outbound_manager.state.manifest import write_manifest
-from scholar_outbound_manager.xray.outbound_builder import build_vless_outbound
+from scholar_outbound_manager.xray.outbound_builder import build_xray_outbound
 from scholar_outbound_manager.xray.route_builder import build_dedicated_inbound_routes
 
 
@@ -23,7 +23,7 @@ def build_generated_nodes(
     max_nodes: int,
     probe_results: list[ProbeResult | None] | None = None,
 ) -> list[GeneratedNode]:
-    """Build generated nodes from supported VLESS candidates."""
+    """Build generated nodes from supported Xray-compatible candidates."""
     generated_nodes, _ = _select_candidates(candidates, tag_prefix, max_nodes, probe_results)
     return generated_nodes
 
@@ -92,19 +92,25 @@ def _select_candidates(
 
     generated_nodes: list[GeneratedNode] = []
     rejected_candidates: list[CandidateProxy] = []
+    processed_indices: set[int] = set()
 
     for index, candidate in enumerate(candidates):
         if len(generated_nodes) >= max_nodes:
             rejected_candidates.append(candidate)
+            processed_indices.add(index)
             continue
-        if not candidate.supported or candidate.protocol != "vless":
+        if not candidate.supported:
             rejected_candidates.append(candidate)
+            processed_indices.add(index)
             continue
         tag = f"{tag_prefix}{len(generated_nodes) + 1:03d}"
         try:
-            outbound = build_vless_outbound(candidate, tag)
+            outbound = build_xray_outbound(candidate, tag)
         except ValueError as exc:
-            rejected_candidates.append(_with_rejection_reason(candidate, str(exc)))
+            rejected_candidates.append(
+                _with_rejection_reason(candidate, f"Xray outbound is not supported: {exc}")
+            )
+            processed_indices.add(index)
             continue
         generated_nodes.append(
             GeneratedNode(
@@ -114,11 +120,10 @@ def _select_candidates(
                 probe=None if probe_results is None else probe_results[index],
             )
         )
+        processed_indices.add(index)
 
-    selected_ids = {id(node.candidate) for node in generated_nodes}
-    rejected_ids = {id(candidate) for candidate in rejected_candidates}
-    for candidate in candidates:
-        if id(candidate) in selected_ids or id(candidate) in rejected_ids:
+    for index, candidate in enumerate(candidates):
+        if index in processed_indices:
             continue
         rejected_candidates.append(candidate)
 
@@ -129,4 +134,5 @@ def _with_rejection_reason(candidate: CandidateProxy, reason: str) -> CandidateP
     """Return a rejected candidate copy that preserves the rejection reason."""
     candidate_data = candidate.to_dict()
     candidate_data["unsupported_reason"] = reason
+    candidate_data["supported"] = False
     return CandidateProxy(**candidate_data)

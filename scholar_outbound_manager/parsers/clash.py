@@ -129,6 +129,8 @@ def _parse_vless_proxy(item: dict[str, Any], source_name: str, raw_name: str) ->
 
     if network == "grpc":
         unsupported_reasons.append("Clash VLESS grpc nodes are parsed but not yet supported by the Xray runtime builder.")
+    elif network not in {"tcp", "ws"}:
+        unsupported_reasons.append(f"Clash VLESS network '{network}' is not supported by the Xray runtime builder.")
 
     ws_path, ws_host = _ws_values(ws_opts)
     extra = {
@@ -164,9 +166,13 @@ def _parse_vless_proxy(item: dict[str, Any], source_name: str, raw_name: str) ->
 def _parse_trojan_proxy(item: dict[str, Any], source_name: str, raw_name: str) -> CandidateProxy:
     """Parse one Clash Trojan node."""
     ws_path, ws_host = _ws_values(_mapping(item.get("ws-opts")))
-    unsupported_reasons = _unsupported_non_vless_reasons("Trojan")
+    unsupported_reasons: list[str] = []
     if missing_fields := _missing_required_fields(item, ("server", "port", "password")):
         unsupported_reasons.insert(0, f"Missing required Trojan fields: {', '.join(missing_fields)}.")
+    network = _string(item.get("network")) or "tcp"
+    if network not in {"tcp", "ws"}:
+        unsupported_reasons.append(f"Clash Trojan network '{network}' is not supported by the Xray runtime builder.")
+    security = "tls" if _bool(item.get("tls")) else None
     return CandidateProxy(
         source_name=source_name,
         raw_name=raw_name,
@@ -174,26 +180,26 @@ def _parse_trojan_proxy(item: dict[str, Any], source_name: str, raw_name: str) -
         address=_string(item.get("server")),
         port=_int(item.get("port")),
         password=_string(item.get("password")) or None,
-        network=_string(item.get("network")) or None,
-        security="tls" if _bool(item.get("tls")) else None,
+        network=network,
+        security=security,
         server_name=_first_non_empty(item.get("sni"), item.get("servername")),
         path=ws_path,
         host=ws_host,
         raw_uri=None,
-        supported=False,
-        unsupported_reason=" ".join(unsupported_reasons),
+        supported=not unsupported_reasons,
+        unsupported_reason=" ".join(unsupported_reasons) or None,
         extra={
             "clash_type": "trojan",
             "tls": _bool(item.get("tls")),
             "skip_cert_verify": _bool_or_none(item.get("skip-cert-verify")),
-            "runtime_supported_by": [],
+            "runtime_supported_by": ["xray"] if not unsupported_reasons else [],
         },
     )
 
 
 def _parse_shadowsocks_proxy(item: dict[str, Any], source_name: str, raw_name: str) -> CandidateProxy:
     """Parse one Clash Shadowsocks node."""
-    unsupported_reasons = _unsupported_non_vless_reasons("Shadowsocks")
+    unsupported_reasons: list[str] = []
     if missing_fields := _missing_required_fields(item, ("server", "port", "cipher", "password")):
         unsupported_reasons.insert(0, f"Missing required Shadowsocks fields: {', '.join(missing_fields)}.")
     return CandidateProxy(
@@ -205,12 +211,12 @@ def _parse_shadowsocks_proxy(item: dict[str, Any], source_name: str, raw_name: s
         password=_string(item.get("password")) or None,
         encryption=_string(item.get("cipher")) or None,
         raw_uri=None,
-        supported=False,
-        unsupported_reason=" ".join(unsupported_reasons),
+        supported=not unsupported_reasons,
+        unsupported_reason=" ".join(unsupported_reasons) or None,
         extra={
             "clash_type": "ss",
             "udp": _bool_or_none(item.get("udp")),
-            "runtime_supported_by": [],
+            "runtime_supported_by": ["xray"] if not unsupported_reasons else [],
         },
     )
 
@@ -218,9 +224,14 @@ def _parse_shadowsocks_proxy(item: dict[str, Any], source_name: str, raw_name: s
 def _parse_vmess_proxy(item: dict[str, Any], source_name: str, raw_name: str) -> CandidateProxy:
     """Parse one Clash VMess node."""
     ws_path, ws_host = _ws_values(_mapping(item.get("ws-opts")))
-    unsupported_reasons = _unsupported_non_vless_reasons("VMess")
+    unsupported_reasons: list[str] = []
     if missing_fields := _missing_required_fields(item, ("server", "port", "uuid")):
         unsupported_reasons.insert(0, f"Missing required VMess fields: {', '.join(missing_fields)}.")
+    network = _string(item.get("network")) or "tcp"
+    if network == "grpc":
+        unsupported_reasons.append("Clash VMess grpc nodes are parsed but not yet supported by the Xray runtime builder.")
+    elif network not in {"tcp", "ws"}:
+        unsupported_reasons.append(f"Clash VMess network '{network}' is not supported by the Xray runtime builder.")
     return CandidateProxy(
         source_name=source_name,
         raw_name=raw_name,
@@ -229,25 +240,20 @@ def _parse_vmess_proxy(item: dict[str, Any], source_name: str, raw_name: str) ->
         port=_int(item.get("port")),
         user_id=_string(item.get("uuid")) or None,
         encryption=_string(item.get("cipher")) or None,
-        network=_string(item.get("network")) or None,
+        network=network,
         security="tls" if _bool(item.get("tls")) else None,
         server_name=_first_non_empty(item.get("servername"), item.get("sni")),
         path=ws_path,
         host=ws_host,
         raw_uri=None,
-        supported=False,
-        unsupported_reason=" ".join(unsupported_reasons),
+        supported=not unsupported_reasons,
+        unsupported_reason=" ".join(unsupported_reasons) or None,
         extra={
             "clash_type": "vmess",
             "alter_id": item.get("alterId"),
-            "runtime_supported_by": [],
+            "runtime_supported_by": ["xray"] if not unsupported_reasons else [],
         },
     )
-
-
-def _unsupported_non_vless_reasons(protocol_name: str) -> list[str]:
-    """Return the bounded runtime-support reason for non-VLESS protocols."""
-    return [f"{protocol_name} Clash nodes are parsed but not yet supported by the Xray runtime builder."]
 
 
 def _missing_required_fields(item: dict[str, Any], keys: tuple[str, ...]) -> list[str]:

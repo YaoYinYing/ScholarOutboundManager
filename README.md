@@ -79,6 +79,8 @@ Subscription fetching is also explicit opt-in at the CLI layer.
 - Subscription parsing may accept Clash YAML because subconverter can emit Clash-compatible YAML payloads.
 - Only the top-level `proxies` list is parsed from Clash YAML subscriptions.
 - Health-check URLs, provider URLs, and other non-proxy `url:` fields are ignored during parsing.
+- Xray-compatible Clash YAML protocols now include VLESS, Trojan, Shadowsocks, and VMess when required fields are present.
+- Unsupported protocols such as hysteria2, tuic, and wireguard still require a future `mihomo` probe backend.
 - `mihomo` is a useful future probe backend for broader protocol coverage.
 - Xray/XrayR remains the preferred final configuration target for generated runtime artifacts.
 - The project should not reimplement proxy protocol data planes directly.
