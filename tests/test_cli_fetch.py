@@ -479,6 +479,121 @@ def test_fetch_passes_proxy_url_into_transport_options(tmp_path, capsys, monkeyp
     assert observed["transport_options"].proxy_url == "http://127.0.0.1:7890"
 
 
+def test_fetch_passes_explicit_user_agent_into_fetch_layer(tmp_path, capsys, monkeypatch) -> None:
+    """Pass the CLI User-Agent override into the fetch layer."""
+    config_path = _write_config(tmp_path)
+    observed: dict[str, object] = {}
+
+    def fake_fetch_enabled_subscriptions(
+        sources,
+        timeout_seconds,
+        max_bytes,
+        transport_options=None,
+        user_agent=None,
+    ):
+        observed["user_agent"] = user_agent
+        return (
+            [_fetched_subscription()],
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
+        )
+
+    monkeypatch.setattr(cli, "fetch_enabled_subscriptions", fake_fetch_enabled_subscriptions)
+
+    exit_code = cli.main(
+        [
+            "fetch",
+            "--config",
+            str(config_path),
+            "--output",
+            str(tmp_path / "candidates.json"),
+            "--allow-network-fetch",
+            "--user-agent",
+            "Clash.Meta",
+        ]
+    )
+    capsys.readouterr()
+
+    assert exit_code == 0
+    assert observed["user_agent"] == "Clash.Meta"
+
+
+def test_fetch_rejects_user_agent_with_newline(tmp_path, capsys) -> None:
+    """Reject newline-bearing User-Agent overrides."""
+    config_path = _write_config(tmp_path)
+
+    exit_code = cli.main(
+        [
+            "fetch",
+            "--config",
+            str(config_path),
+            "--allow-network-fetch",
+            "--user-agent",
+            "Clash.Meta\nBad",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "User-Agent must not contain newlines" in captured.err
+
+
+def test_fetch_output_does_not_print_user_agent(tmp_path, capsys, monkeypatch) -> None:
+    """Keep the explicit User-Agent out of CLI output."""
+    config_path = _write_config(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "fetch_enabled_subscriptions",
+        lambda sources, timeout_seconds, max_bytes, transport_options=None, user_agent=None: (
+            [_fetched_clash_yaml_subscription()],
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=240),
+        ),
+    )
+
+    exit_code = cli.main(
+        [
+            "fetch",
+            "--config",
+            str(config_path),
+            "--allow-network-fetch",
+            "--output",
+            str(tmp_path / "candidates.json"),
+            "--user-agent",
+            "Clash.Meta",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Clash.Meta" not in (captured.out + captured.err)
+
+
+def test_fetch_clash_yaml_output_contains_vless_candidate_without_unsupported_url(tmp_path, monkeypatch) -> None:
+    """Parse Clash YAML subscriptions without misreading health-check URLs."""
+    config_path = _write_config(tmp_path)
+    output_path = tmp_path / "candidates.json"
+    monkeypatch.setattr(
+        cli,
+        "fetch_enabled_subscriptions",
+        lambda sources, timeout_seconds, max_bytes, transport_options=None, user_agent=None: (
+            [_fetched_clash_yaml_subscription()],
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=240),
+        ),
+    )
+
+    exit_code = cli.main(
+        ["fetch", "--config", str(config_path), "--allow-network-fetch", "--output", str(output_path)]
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["parsed_count"] == 1
+    assert payload["unsupported_count"] == 0
+    assert payload["candidates"][0]["protocol"] == "vless"
+    assert payload["candidates"][0]["raw_name"] == "Test VLESS Reality"
+    assert "unsupported-url" not in json.dumps(payload)
+    assert "http://www.gstatic.com/generate_204" not in json.dumps(payload)
+
+
 def test_fetch_rejects_invalid_proxy_url_without_echoing_it(tmp_path, capsys) -> None:
     """Reject unsupported proxy URLs without printing them."""
     config_path = _write_config(tmp_path)
@@ -648,6 +763,33 @@ def _fetched_subscription() -> FetchedSubscription:
 def _unsupported_fetched_subscription() -> FetchedSubscription:
     """Build one unsupported fetched subscription payload."""
     content = "vmess://example.invalid:443#Unsupported"
+    return FetchedSubscription(source_name="fixture-source", content=content, byte_count=len(content))
+
+
+def _fetched_clash_yaml_subscription() -> FetchedSubscription:
+    """Build one fetched Clash YAML payload with a health-check URL."""
+    content = """
+proxies:
+  - name: "Test VLESS Reality"
+    type: vless
+    server: example.invalid
+    port: 443
+    uuid: "00000000-0000-0000-0000-000000000000"
+    network: tcp
+    tls: true
+    reality-opts:
+      public-key: PUBLIC_KEY_PLACEHOLDER
+      short-id: SHORT_ID_PLACEHOLDER
+    servername: www.cloudflare.com
+    client-fingerprint: chrome
+proxy-groups:
+  - name: Auto
+    type: url-test
+    proxies:
+      - Test VLESS Reality
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+""".strip()
     return FetchedSubscription(source_name="fixture-source", content=content, byte_count=len(content))
 
 

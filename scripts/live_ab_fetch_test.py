@@ -172,6 +172,7 @@ def run_fetch_command(
     output_path: str | Path,
     *,
     proxy_url: str | None = None,
+    user_agent: str | None = None,
     cwd: str | Path | None = None,
     runner: Any = subprocess.run,
 ) -> subprocess.CompletedProcess[str]:
@@ -189,6 +190,8 @@ def run_fetch_command(
     ]
     if proxy_url is not None:
         command.extend(["--proxy-url", proxy_url])
+    if user_agent is not None:
+        command.extend(["--user-agent", user_agent])
     return runner(
         command,
         cwd=str(cwd or REPO_ROOT),
@@ -205,6 +208,7 @@ def run_group(
     work_dir: str | Path,
     xray_binary: str,
     proxy_url: str | None = None,
+    user_agent: str | None = None,
     runner: Any = subprocess.run,
 ) -> tuple[dict[str, object], str, str]:
     """Run one group fetch flow and return its redacted summary plus CLI output."""
@@ -221,6 +225,7 @@ def run_group(
         config_path,
         output_path,
         proxy_url=proxy_url,
+        user_agent=user_agent,
         cwd=REPO_ROOT,
         runner=runner,
     )
@@ -283,6 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--work-dir", required=True)
     parser.add_argument("--xray-binary", required=True)
     parser.add_argument("--proxy-url")
+    parser.add_argument("--user-agent")
     return parser
 
 
@@ -298,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
             work_dir=args.work_dir,
             xray_binary=args.xray_binary,
             proxy_url=args.proxy_url,
+            user_agent=args.user_agent,
         )
         invalid_group, invalid_stdout, invalid_stderr = run_group(
             group_label="invalid",
@@ -305,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             work_dir=args.work_dir,
             xray_binary=args.xray_binary,
             proxy_url=args.proxy_url,
+            user_agent=args.user_agent,
         )
         summary = build_live_ab_summary(valid_group, invalid_group)
         summary_path = Path(args.work_dir) / "summary.json"

@@ -20,6 +20,7 @@ def test_load_candidates_from_top_level_list(tmp_path) -> None:
 
     assert len(candidates) == 1
     assert candidates[0].raw_name == "US Scholar IPv4"
+    assert candidates[0].extra == {}
 
 
 def test_load_candidates_from_candidates_key(tmp_path) -> None:
@@ -86,6 +87,33 @@ def test_dump_candidates_round_trips_through_loader(tmp_path) -> None:
     ]
 
 
+def test_load_candidates_accepts_new_extra_field(tmp_path) -> None:
+    """Load candidates that already include Clash metadata in extra."""
+    candidate_path = tmp_path / "candidates.json"
+    candidate_data = _candidate_mapping()
+    candidate_data["extra"] = {"clash_type": "vmess", "alter_id": 8}
+    candidate_path.write_text(json.dumps({"candidates": [candidate_data]}), encoding="utf-8")
+
+    candidates = load_candidates(candidate_path)
+
+    assert candidates[0].extra == {"clash_type": "vmess", "alter_id": 8}
+
+
+def test_dump_candidates_round_trip_preserves_extra(tmp_path) -> None:
+    """Preserve extra metadata through dump/load round trips."""
+    output_path = tmp_path / "candidates.json"
+    candidate_data = _candidate_mapping()
+    candidate_data["extra"] = {"clash_type": "vless", "tls": True}
+    source_path = tmp_path / "source_candidates.json"
+    source_path.write_text(json.dumps({"candidates": [candidate_data]}), encoding="utf-8")
+
+    original_candidates = load_candidates(source_path)
+    dump_candidates(output_path, original_candidates)
+    loaded_candidates = load_candidates(output_path)
+
+    assert loaded_candidates[0].extra == {"clash_type": "vless", "tls": True}
+
+
 def test_load_candidate_bundle_reads_probe_evidence_from_sensitive_artifact(tmp_path) -> None:
     """Load candidates together with optional probe results from passed-candidate artifacts."""
     candidate_path = tmp_path / "passed_candidates.json"
@@ -97,7 +125,7 @@ def test_load_candidate_bundle_reads_probe_evidence_from_sensitive_artifact(tmp_
                 "passed_candidate_ids": ["candidate-001"],
                 "candidates": [
                     {
-                        "candidate": _candidate_mapping(),
+                        "candidate": {**_candidate_mapping(), "extra": {"clash_type": "vless"}},
                         "probe": {
                             "candidate_id": "candidate-001",
                             "home_status": 200,
@@ -121,6 +149,7 @@ def test_load_candidate_bundle_reads_probe_evidence_from_sensitive_artifact(tmp_
     assert len(bundle.candidates) == 1
     assert bundle.probe_results[0] is not None
     assert bundle.probe_results[0].candidate_id == "candidate-001"
+    assert bundle.candidates[0].extra == {"clash_type": "vless"}
 
 
 def _write_source_candidates(tmp_path):

@@ -65,6 +65,7 @@ def test_parse_subscription_content_supports_vless_candidates() -> None:
     assert parsed.unsupported_count == 0
     assert parsed.candidates[0].protocol == "vless"
     assert parsed.candidates[0].supported is True
+    assert parsed.parser_kind == "uri_lines"
 
 
 def test_parse_subscription_content_preserves_unsupported_non_vless_candidates() -> None:
@@ -108,3 +109,77 @@ def test_parse_fetched_subscriptions_uses_format_map() -> None:
     assert len(parsed) == 1
     assert parsed[0].parsed_count == 1
     assert parsed[0].candidates[0].supported is True
+
+
+def test_parse_subscription_content_uses_clash_parser_for_clash_yaml() -> None:
+    """Detect Clash YAML and parse only the top-level proxies list."""
+    parsed = parse_subscription_content(_clash_yaml_with_health_check(), source_name="fixture-source")
+
+    assert parsed.parser_kind == "clash_yaml"
+    assert parsed.parsed_count == 1
+    assert parsed.unsupported_count == 0
+    assert parsed.candidates[0].raw_name == "Test VLESS Reality"
+
+
+def test_parse_subscription_content_does_not_parse_health_check_url_as_uri() -> None:
+    """Avoid turning proxy-group health-check URLs into unsupported candidates."""
+    parsed = parse_subscription_content(_clash_yaml_with_health_check(), source_name="fixture-source")
+
+    assert all(candidate.protocol != "url" for candidate in parsed.candidates)
+    assert all(candidate.raw_name != "unsupported-url" for candidate in parsed.candidates)
+
+
+def test_parse_subscription_content_still_supports_plain_uri_subscriptions() -> None:
+    """Keep the original URI-line fallback behavior."""
+    parsed = parse_subscription_content("vmess://example.invalid:443#unsupported-node", source_name="fixture-source")
+
+    assert parsed.parser_kind == "uri_lines"
+    assert parsed.parsed_count == 1
+    assert parsed.candidates[0].protocol == "vmess"
+
+
+def test_parse_subscription_content_decodes_base64_wrapped_clash_yaml() -> None:
+    """Support auto-decoding for base64-wrapped Clash YAML payloads."""
+    encoded = base64.b64encode(_clash_yaml_with_health_check().encode("utf-8")).decode("ascii")
+
+    parsed = parse_subscription_content(encoded, source_name="fixture-source")
+
+    assert parsed.parser_kind == "clash_yaml"
+    assert parsed.parsed_count == 1
+    assert parsed.candidates[0].protocol == "vless"
+
+
+def test_parse_subscription_content_falls_back_to_uri_lines_for_invalid_yaml() -> None:
+    """Do not let invalid YAML block the legacy URI-line parser."""
+    content = "proxies: [\nvless://example.invalid:443#not-yaml"
+
+    parsed = parse_subscription_content(content, source_name="fixture-source")
+
+    assert parsed.parser_kind == "uri_lines"
+    assert parsed.parsed_count == 1
+    assert parsed.candidates[0].protocol == "vless"
+
+
+def _clash_yaml_with_health_check() -> str:
+    return """
+proxies:
+  - name: "Test VLESS Reality"
+    type: vless
+    server: example.invalid
+    port: 443
+    uuid: "00000000-0000-0000-0000-000000000000"
+    network: tcp
+    tls: true
+    reality-opts:
+      public-key: PUBLIC_KEY_PLACEHOLDER
+      short-id: SHORT_ID_PLACEHOLDER
+    servername: www.cloudflare.com
+    client-fingerprint: chrome
+proxy-groups:
+  - name: Auto
+    type: url-test
+    proxies:
+      - Test VLESS Reality
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+""".strip()

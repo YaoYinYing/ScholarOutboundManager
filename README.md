@@ -5,6 +5,7 @@ ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager 
 ## Project Status
 
 - `fetch` may download subscription content into a local sensitive `candidates.json` artifact.
+- `fetch` can parse plain URI subscriptions and Clash-compatible YAML subscriptions.
 - `fetch` requires explicit CLI opt-in with `--allow-network-fetch`.
 - `fetch` does not probe Google Scholar and does not start Xray.
 - Current inputs for `probe` and `generate` can come from a locally fetched `candidates.json` file or other offline candidate artifacts.
@@ -70,7 +71,20 @@ Subscription fetching is also explicit opt-in at the CLI layer.
 
 - `fetch` may download remote subscription content.
 - `--allow-network-fetch` is required before any subscription download starts.
+- `--user-agent` may override the request User-Agent for local fetch smoke tests.
 - `fetch` writes a sensitive local candidate artifact and should only be used with a local ignored output path.
+
+## Runtime Backend Direction
+
+- Subscription parsing may accept Clash YAML because subconverter can emit Clash-compatible YAML payloads.
+- Only the top-level `proxies` list is parsed from Clash YAML subscriptions.
+- Health-check URLs, provider URLs, and other non-proxy `url:` fields are ignored during parsing.
+- `mihomo` is a useful future probe backend for broader protocol coverage.
+- Xray/XrayR remains the preferred final configuration target for generated runtime artifacts.
+- The project should not reimplement proxy protocol data planes directly.
+- Xray binary availability is not assumed on the target machine.
+- Future work may add explicit Xray binary acquisition or update support, but it must stay opt-in and checksum-aware.
+- Fetch and parse workflows do not require Xray or `mihomo`.
 
 ## Typical Workflow
 
@@ -97,10 +111,11 @@ Option A: fetch candidates from enabled subscriptions.
 scholar-outbound-manager fetch \
   --config config.yaml \
   --output candidates.json \
-  --allow-network-fetch
+  --allow-network-fetch \
+  --user-agent "Clash.Meta"
 ```
 
-`fetch` may download subscription content. `--allow-network-fetch` is required. `candidates.json` is sensitive and must not be committed. `fetch` does not probe Scholar and does not start Xray.
+`fetch` may download subscription content. `--allow-network-fetch` is required. `--user-agent` is optional and is useful when the subscription endpoint applies User-Agent filtering. `candidates.json` is sensitive and must not be committed. `fetch` does not probe Scholar and does not start Xray.
 
 Option B: use an existing offline `candidates.json` artifact.
 
@@ -227,6 +242,33 @@ Exit codes:
 - TUN routing can contaminate the effective Xray outbound path even when the local workflow looks correct.
 - The `environment` command only provides a local hint. It cannot prove routing isolation.
 - Final confidence comes from running `probe` on the target VPS.
+
+## Live A/B Fetch Smoke Test
+
+Use the local harness when you need to compare a known-valid subscription set against a known-invalid set without printing subscription URLs or proxy credentials.
+
+```bash
+python scripts/live_ab_fetch_test.py \
+  --valid-links live_test_data/sublinks/valid.txt \
+  --invalid-links live_test_data/sublinks/invalid.txt \
+  --work-dir state_data/live_ab/ \
+  --xray-binary fake-xray \
+  --user-agent "Clash.Meta"
+```
+
+Optional transport proxy:
+
+```bash
+python scripts/live_ab_fetch_test.py \
+  --valid-links live_test_data/sublinks/valid.txt \
+  --invalid-links live_test_data/sublinks/invalid.txt \
+  --work-dir state_data/live_ab/ \
+  --xray-binary fake-xray \
+  --user-agent "Clash.Meta" \
+  --proxy-url http://127.0.0.1:7890
+```
+
+The live A/B fetch smoke test downloads subscription content, parses candidates, writes only local sensitive artifacts under `state_data/live_ab/`, and does not probe Scholar.
 
 ### `inspect`
 

@@ -144,6 +144,7 @@ class CandidateProxy:
     alpn: str | None = None
     path: str | None = None
     host: str | None = None
+    extra: dict[str, object] = field(default_factory=dict)
     raw_uri: str | None = None
     supported: bool = True
     unsupported_reason: str | None = None

@@ -61,6 +61,11 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "sensitive" in readme_text.lower()
     assert "credentials" in readme_text.lower()
     assert "must not be committed" in readme_text.lower()
+    assert "clash-compatible yaml" in readme_text.lower()
+    assert "--user-agent" in readme_text
+    assert "runtime backend direction" in readme_text.lower()
+    assert "top-level `proxies` list" in readme_text
+    assert "checksum-aware" in readme_text.lower()
 
 
 def test_security_doc_exists_and_warns_about_sensitive_material() -> None:

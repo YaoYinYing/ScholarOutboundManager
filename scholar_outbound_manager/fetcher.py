@@ -71,6 +71,7 @@ def fetch_subscription(
     timeout_seconds: float,
     max_bytes: int = 1_048_576,
     transport_options: FetchTransportOptions | None = None,
+    user_agent: str | None = None,
 ) -> FetchedSubscription:
     """Download one enabled subscription using the standard library only."""
     if not source.enabled:
@@ -85,7 +86,13 @@ def fetch_subscription(
         raise ValueError(f"Subscription source '{source.name}' must use http or https.")
 
     request_headers = dict(source.headers)
-    if not any(str(key).lower() == "user-agent" for key in request_headers):
+    validated_user_agent = _validate_user_agent(user_agent)
+    if validated_user_agent is not None:
+        request_headers = {
+            key: value for key, value in request_headers.items() if str(key).lower() != "user-agent"
+        }
+        request_headers["User-Agent"] = validated_user_agent
+    elif not any(str(key).lower() == "user-agent" for key in request_headers):
         request_headers["User-Agent"] = "ScholarOutboundManager/0.1"
     request = Request(source.url, headers=request_headers)
     opener = build_url_opener(transport_options)
@@ -110,8 +117,10 @@ def fetch_enabled_subscriptions(
     max_bytes: int = 1_048_576,
     fetch_func: Callable[..., FetchedSubscription] = fetch_subscription,
     transport_options: FetchTransportOptions | None = None,
+    user_agent: str | None = None,
 ) -> tuple[list[FetchedSubscription], FetchSummary]:
     """Fetch enabled subscriptions sequentially without failing the full batch."""
+    validated_user_agent = _validate_user_agent(user_agent)
     fetched: list[FetchedSubscription] = []
     errors: list[str] = []
     error_records: list[FetchErrorRecord] = []
@@ -129,6 +138,7 @@ def fetch_enabled_subscriptions(
                 timeout_seconds,
                 max_bytes,
                 transport_options,
+                validated_user_agent,
             )
         except Exception as exc:  # pragma: no cover - defensive boundary
             error_record = _classify_fetch_exception(source.name, exc)
@@ -222,11 +232,26 @@ def _call_fetch_func(
     timeout_seconds: float,
     max_bytes: int,
     transport_options: FetchTransportOptions | None,
+    user_agent: str | None,
 ) -> FetchedSubscription:
     """Call one injected fetch function with transport options when supported."""
     try:
-        return fetch_func(source, timeout_seconds, max_bytes, transport_options)
+        return fetch_func(source, timeout_seconds, max_bytes, transport_options, user_agent)
     except TypeError as exc:
         if "positional argument" not in str(exc) and "given" not in str(exc):
             raise
-        return fetch_func(source, timeout_seconds, max_bytes)
+        try:
+            return fetch_func(source, timeout_seconds, max_bytes, transport_options)
+        except TypeError as inner_exc:
+            if "positional argument" not in str(inner_exc) and "given" not in str(inner_exc):
+                raise
+            return fetch_func(source, timeout_seconds, max_bytes)
+
+
+def _validate_user_agent(user_agent: str | None) -> str | None:
+    """Validate one explicit User-Agent override."""
+    if user_agent is None:
+        return None
+    if "\n" in user_agent or "\r" in user_agent:
+        raise ValueError("User-Agent must not contain newlines.")
+    return user_agent

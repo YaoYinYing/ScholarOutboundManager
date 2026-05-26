@@ -232,6 +232,27 @@ def test_run_fetch_command_includes_proxy_url_when_provided(tmp_path) -> None:
     assert "--proxy-url" in observed["command"]
 
 
+def test_run_fetch_command_includes_user_agent_when_provided(tmp_path) -> None:
+    """Append the explicit User-Agent flag when provided."""
+    module = _load_script_module()
+    observed: dict[str, object] = {}
+
+    def fake_runner(command, cwd, text, capture_output, check):
+        observed["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    module.run_fetch_command(
+        tmp_path / "config.yaml",
+        tmp_path / "candidates.json",
+        user_agent="Clash.Meta",
+        cwd=tmp_path,
+        runner=fake_runner,
+    )
+
+    assert "--user-agent" in observed["command"]
+    assert "Clash.Meta" in observed["command"]
+
+
 def test_run_fetch_command_omits_proxy_url_when_not_provided(tmp_path) -> None:
     """Avoid adding the proxy flag when it is not provided."""
     module = _load_script_module()
@@ -271,7 +292,7 @@ def test_main_uses_fake_runner_and_writes_redacted_summary(tmp_path, monkeypatch
     valid_links.write_text("https://example.invalid/subscription-a\n", encoding="utf-8")
     invalid_links.write_text("# comment only\n", encoding="utf-8")
 
-    def fake_run_fetch_command(config_path, output_path, *, proxy_url=None, cwd=None, runner=None):
+    def fake_run_fetch_command(config_path, output_path, *, proxy_url=None, user_agent=None, cwd=None, runner=None):
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
         if Path(config_path).parent.name == "valid":
@@ -351,6 +372,8 @@ def test_main_uses_fake_runner_and_writes_redacted_summary(tmp_path, monkeypatch
             str(work_dir),
             "--xray-binary",
             "fake-xray",
+            "--user-agent",
+            "Clash.Meta",
         ]
     )
     captured = capsys.readouterr()
@@ -358,6 +381,7 @@ def test_main_uses_fake_runner_and_writes_redacted_summary(tmp_path, monkeypatch
     assert exit_code == 0
     assert "https://example.invalid/subscription-a" not in captured.out
     assert "vless://" not in captured.out
+    assert "Clash.Meta" not in captured.out
     summary = json.loads((work_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["groups"]["valid"]["parsed_count"] == 1
     assert summary["groups"]["invalid"]["parsed_count"] == 0
@@ -365,6 +389,7 @@ def test_main_uses_fake_runner_and_writes_redacted_summary(tmp_path, monkeypatch
     assert summary["groups"]["invalid"]["fetch_http_statuses"] == {"403": 1}
     assert summary["interpretation"]["secrets_redacted"] is True
     assert "https://example.invalid" not in json.dumps(summary)
+    assert "Clash.Meta" not in json.dumps(summary)
 
 
 def test_parser_accepts_proxy_url_argument() -> None:
@@ -388,6 +413,72 @@ def test_parser_accepts_proxy_url_argument() -> None:
     )
 
     assert args.proxy_url == "http://127.0.0.1:7890"
+
+
+def test_parser_accepts_user_agent_argument() -> None:
+    """Accept one optional User-Agent override."""
+    module = _load_script_module()
+    parser = module.build_parser()
+
+    args = parser.parse_args(
+        [
+            "--valid-links",
+            "valid.txt",
+            "--invalid-links",
+            "invalid.txt",
+            "--work-dir",
+            "state_data/live_ab",
+            "--xray-binary",
+            "fake-xray",
+            "--user-agent",
+            "Clash.Meta",
+        ]
+    )
+
+    assert args.user_agent == "Clash.Meta"
+
+
+def test_run_group_summary_does_not_include_user_agent(tmp_path, monkeypatch) -> None:
+    """Keep the explicit User-Agent out of the group summary and output."""
+    module = _load_script_module()
+    links_path = tmp_path / "valid.txt"
+    links_path.write_text("https://example.invalid/subscription-a\n", encoding="utf-8")
+
+    def fake_run_fetch_command(config_path, output_path, *, proxy_url=None, user_agent=None, cwd=None, runner=None):
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "sensitive": True,
+                    "source_count": 1,
+                    "fetched_count": 1,
+                    "failed_count": 0,
+                    "parsed_count": 1,
+                    "unsupported_count": 0,
+                    "fetch_errors": [],
+                    "candidates": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(["python"], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module, "run_fetch_command", fake_run_fetch_command)
+
+    summary, stdout_redacted, stderr_redacted = module.run_group(
+        group_label="valid",
+        link_file=links_path,
+        work_dir=tmp_path / "state_data" / "live_ab",
+        xray_binary="fake-xray",
+        user_agent="Clash.Meta",
+    )
+
+    assert summary["parsed_count"] == 1
+    assert "Clash.Meta" not in json.dumps(summary)
+    assert "Clash.Meta" not in stdout_redacted
+    assert "Clash.Meta" not in stderr_redacted
 
 
 def _load_script_module():

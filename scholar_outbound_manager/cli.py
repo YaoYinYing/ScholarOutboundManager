@@ -61,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_parser.add_argument("--timeout", type=float)
     fetch_parser.add_argument("--max-bytes", type=int, default=1_048_576)
     fetch_parser.add_argument("--proxy-url")
+    fetch_parser.add_argument("--user-agent")
     fetch_parser.set_defaults(handler=_handle_fetch)
 
     doctor_parser = subparsers.add_parser("doctor")
@@ -144,11 +145,12 @@ def _handle_fetch(args: argparse.Namespace) -> int:
         timeout_seconds = config.probe.timeout_seconds if args.timeout is None else args.timeout
         transport_options = FetchTransportOptions(proxy_url=args.proxy_url)
         build_url_opener(transport_options)
-        fetched, fetch_summary = fetch_enabled_subscriptions(
+        fetched, fetch_summary = _call_fetch_enabled_subscriptions(
             config.subscriptions,
             timeout_seconds=timeout_seconds,
             max_bytes=args.max_bytes,
             transport_options=transport_options,
+            user_agent=args.user_agent,
         )
         parsed_subscriptions = parse_fetched_subscriptions(
             fetched,
@@ -224,6 +226,34 @@ def _handle_generate(args: argparse.Namespace) -> int:
     print(f"routes_path: {summary['routes_path']}")
     print(f"manifest_path: {summary['manifest_path']}")
     return 0
+
+
+def _call_fetch_enabled_subscriptions(
+    sources,
+    *,
+    timeout_seconds: float,
+    max_bytes: int,
+    transport_options: FetchTransportOptions | None,
+    user_agent: str | None,
+):
+    """Call the fetch layer while remaining compatible with older test doubles."""
+    try:
+        return fetch_enabled_subscriptions(
+            sources,
+            timeout_seconds=timeout_seconds,
+            max_bytes=max_bytes,
+            transport_options=transport_options,
+            user_agent=user_agent,
+        )
+    except TypeError as exc:
+        if "user_agent" not in str(exc):
+            raise
+        return fetch_enabled_subscriptions(
+            sources,
+            timeout_seconds=timeout_seconds,
+            max_bytes=max_bytes,
+            transport_options=transport_options,
+        )
 
 
 def _handle_doctor(args: argparse.Namespace) -> int:

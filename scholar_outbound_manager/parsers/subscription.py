@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 from scholar_outbound_manager.fetcher import FetchedSubscription
 from scholar_outbound_manager.models import CandidateProxy
+from scholar_outbound_manager.parsers.clash import looks_like_clash_yaml
+from scholar_outbound_manager.parsers.clash import parse_clash_yaml_subscription
 from scholar_outbound_manager.parsers.uri import parse_proxy_uri
 from scholar_outbound_manager.parsers.vless import parse_vless_uri
 
@@ -21,6 +23,7 @@ class ParsedSubscription:
     raw_line_count: int
     parsed_count: int
     unsupported_count: int
+    parser_kind: str = "uri_lines"
 
 
 def decode_subscription_text(content: str, fmt: str = "auto") -> str:
@@ -38,7 +41,9 @@ def decode_subscription_text(content: str, fmt: str = "auto") -> str:
         decoded = _decode_base64_text(content)
     except ValueError:
         return content
-    return decoded if "://" in decoded else content
+    if "://" in decoded or looks_like_clash_yaml(decoded):
+        return decoded
+    return content
 
 
 def extract_proxy_uris(content: str) -> list[str]:
@@ -60,6 +65,17 @@ def parse_subscription_content(
 ) -> ParsedSubscription:
     """Decode and parse one subscription body into candidate models."""
     decoded_text = decode_subscription_text(content, fmt=fmt)
+    if looks_like_clash_yaml(decoded_text):
+        candidates, summary = parse_clash_yaml_subscription(decoded_text, source_name)
+        return ParsedSubscription(
+            source_name=source_name,
+            candidates=candidates,
+            raw_line_count=len(decoded_text.splitlines()),
+            parsed_count=summary.parsed_count,
+            unsupported_count=summary.unsupported_count,
+            parser_kind="clash_yaml",
+        )
+
     proxy_uris = extract_proxy_uris(decoded_text)
     candidates: list[CandidateProxy] = []
     for uri in proxy_uris:
@@ -74,6 +90,7 @@ def parse_subscription_content(
         raw_line_count=len(decoded_text.splitlines()),
         parsed_count=len(candidates),
         unsupported_count=unsupported_count,
+        parser_kind="uri_lines",
     )
 
 
