@@ -6,9 +6,15 @@ ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager 
 
 - `fetch` is still not implemented.
 - Current inputs come from a local `candidates.json` file, not from live subscription fetching.
+- `probe` is protected by a two-key network safety gate.
+- `probe.allow_network_probe` must be `true` in config.
+- `--allow-network-probe` must also be passed on the CLI.
+- Without both, `probe` fails before starting Xray or sending Scholar HTTP requests.
 - `probe` runs sequentially.
 - There is no concurrency.
 - There is no retry or cache layer in the current CLI workflow.
+- `probe` and `generate` apply configured candidate filters before probing or generation.
+- Passed-candidates artifacts may preserve `ProbeResult` evidence for later manifest generation.
 - `generate` only writes JSON artifacts and does not start Xray.
 - `run` prepares one local runtime config and can optionally execute `xray run -test`, but it does not probe Google Scholar.
 - `inspect` only performs safe local review of existing artifacts.
@@ -31,7 +37,7 @@ These artifacts are intended for review and should avoid raw proxy credentials.
 - Runtime configs under `.runtime/`
 - Any file containing proxy URI, UUID, public key, token, or subscription material
 
-`passed_candidates.json` contains selected proxy credentials. It must not be committed.
+`passed_candidates.json` contains selected proxy credentials. It may also contain `ProbeResult` evidence used later by `generate`. It must not be committed.
 
 `config.yaml` must not be committed.
 
@@ -47,6 +53,14 @@ These artifacts are intended for review and should avoid raw proxy credentials.
 
 These artifacts are produced locally from offline candidate input and are meant for controlled downstream use.
 
+### Network probe safety gate
+
+Network probing is opt-in at both config and CLI layers.
+
+- The config default should remain `allow_network_probe: false`.
+- Users should only enable it in a local, ignored `config.yaml`.
+- The CLI flag is an intentional second confirmation.
+
 ## Typical Workflow
 
 ### Step 1: prepare local config
@@ -54,6 +68,15 @@ These artifacts are produced locally from offline candidate input and are meant 
 ```bash
 cp config.example.yaml config.yaml
 ```
+
+Enable network probing only in your local `config.yaml`:
+
+```yaml
+probe:
+  allow_network_probe: true
+```
+
+Only enable this in local `config.yaml`. Do not change shared examples to real credentials. Do not commit `config.yaml`.
 
 ### Step 2: prepare local candidates JSON
 
@@ -66,7 +89,8 @@ scholar-outbound-manager probe \
   --config config.yaml \
   --candidates candidates.json \
   --summary-output state_data/probe_summary.json \
-  --passed-candidates-output state_data/passed_candidates.json
+  --passed-candidates-output state_data/passed_candidates.json \
+  --allow-network-probe
 ```
 
 ### Step 4: inspect probe result
@@ -113,6 +137,13 @@ Required arguments:
 - `--config`
 - `--candidates`
 
+Notes:
+
+- `generate` can consume plain candidates JSON.
+- `generate` can also consume sensitive passed-candidates artifacts.
+- When probe evidence is present, the generated manifest preserves redacted probe evidence.
+- `generate` applies configured candidate filters before generation.
+
 Output files:
 
 - outbounds JSON
@@ -143,6 +174,12 @@ Important arguments:
 - `--request-timeout`
 - `--xray-test-timeout`
 - `--runtime-config-name`
+- `--allow-network-probe`
+
+Safety:
+
+- `--allow-network-probe` is required together with `probe.allow_network_probe: true`.
+- This command may start local Xray and issue Scholar HTTP requests only after both are enabled.
 
 Output files:
 
@@ -152,7 +189,7 @@ Output files:
 Exit codes:
 
 - `0`: probe completed and at least one candidate passed
-- `1`: config, input, validation, probe, or write error
+- `1`: config, input, validation, probe, write error, or safety-gate refusal
 - `2`: probe completed but no candidate passed
 
 ### `inspect`
@@ -165,9 +202,10 @@ Important arguments:
 - `--manifest`
 - `--passed-candidates`
 
-Guarantee:
+Guarantees:
 
-- `inspect` does not print sensitive candidate contents from passed-candidate artifacts.
+- `inspect` may show redacted generated probe evidence from manifest.
+- `inspect` does not print sensitive candidate credentials.
 
 Exit codes:
 
@@ -204,17 +242,17 @@ Exit codes:
 | `config.yaml` | user | sensitive | local configuration | no |
 | `candidates.json` | user or offline parser | sensitive | offline candidate input | no |
 | `state_data/probe_summary.json` | `probe` | review-safe | redacted probe report | no |
-| `state_data/passed_candidates.json` | `probe` | sensitive | selected proxy credentials for later `generate` | no |
+| `state_data/passed_candidates.json` | `probe` | sensitive | selected proxy credentials and optional `ProbeResult` evidence for later `generate` | no |
 | `generated/google_scholar_outbounds.json` | `generate` | local generated | Xray outbound fragments | no |
 | `generated/google_scholar_routes.json` | `generate` | local generated | Xray route fragments | no |
-| `generated/google_scholar_manifest.json` | `generate` | review-safe | generated manifest for inspection | no |
+| `generated/google_scholar_manifest.json` | `generate` | review-safe | generated manifest for inspection, including redacted probe evidence when available | no |
 | `.runtime/` | `run` and probe runtime prep | sensitive | local runtime configs and temporary execution material | no |
 | `state_data/history/` | local workflow | local generated | retained local history artifacts | no |
 
 ## Exit Codes
 
 - `0`: success
-- `1`: command, config, input, validation, write, or runtime error
+- `1`: command, config, input, validation, write, runtime, or safety-gate error
 - `2`: no passed candidate for `probe`, or placeholder/unimplemented command such as `fetch`
 
 ## Development Notes

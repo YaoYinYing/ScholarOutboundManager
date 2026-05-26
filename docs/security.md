@@ -23,6 +23,18 @@ These files can contain proxy URI, UUID, public key, token, runtime config, or o
 
 The redacted probe summary is intended for safe sharing inside reviews. The passed-candidates artifact intentionally preserves selected proxy credentials for later offline generation and must remain local.
 
+`passed_candidates.json` may contain nested candidate credentials and probe evidence. It remains sensitive even if probe evidence is useful for debugging. It must not be committed.
+
+## Network Probe Safety Gate
+
+Real probing is disabled by default.
+
+- `probe.allow_network_probe: false` is the safe default.
+- To run live network probing, the user must set `probe.allow_network_probe: true` in local config and pass `--allow-network-probe`.
+- This two-key gate prevents accidental Xray startup and accidental Google Scholar HTTP requests.
+- Do not enable it in committed examples.
+- Do not paste live probe logs containing credentials or real endpoints.
+
 ## What Not to Paste Into Issues
 
 Do not paste any of the following into issues, pull requests, chats, or screenshots:

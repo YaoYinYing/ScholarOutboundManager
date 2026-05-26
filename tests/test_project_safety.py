@@ -43,6 +43,12 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "inspect" in readme_text
     assert "generate" in readme_text
     assert "run" in readme_text
+    assert "--allow-network-probe" in readme_text
+    assert "probe.allow_network_probe" in readme_text
+    assert "required together" in readme_text.lower() or "without both" in readme_text.lower()
+    assert "proberesult" in readme_text.lower() or "probe evidence" in readme_text.lower()
+    assert "can consume plain candidates json" in readme_text.lower()
+    assert "passed-candidates artifacts" in readme_text.lower()
     assert "sensitive" in readme_text.lower()
     assert "credentials" in readme_text.lower()
     assert "must not be committed" in readme_text.lower()
@@ -54,9 +60,19 @@ def test_security_doc_exists_and_warns_about_sensitive_material() -> None:
     security_text = security_doc.read_text(encoding="utf-8")
 
     assert security_doc.exists()
+    assert "--allow-network-probe" in security_text
+    assert "probe.allow_network_probe" in security_text
+    assert "two-key" in security_text.lower() or "two key" in security_text.lower() or "dual" in security_text.lower()
     assert "vless://" in security_text
     assert "UUID" in security_text
     assert "public key" in security_text
     assert "passed_candidates" in security_text
     assert "config.yaml" in security_text
     assert "must not be committed" in security_text.lower()
+
+
+def test_config_example_keeps_network_probe_disabled_by_default() -> None:
+    """Require the example config to keep live probing disabled by default."""
+    example_text = (PROJECT_ROOT / "config.example.yaml").read_text(encoding="utf-8")
+
+    assert "allow_network_probe: false" in example_text
