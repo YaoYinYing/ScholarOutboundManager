@@ -41,6 +41,9 @@ from scholar_outbound_manager.state.probe_state import write_probe_artifacts
 from scholar_outbound_manager.xray.binary import detect_xray_platform
 from scholar_outbound_manager.xray.binary import inspect_xray_binary
 from scholar_outbound_manager.xray.binary import install_xray_binary
+from scholar_outbound_manager.xray.process import is_managed_xray_process_alive
+from scholar_outbound_manager.xray.process import read_managed_pid_file
+from scholar_outbound_manager.xray.process import terminate_managed_xray_from_pid_file
 from scholar_outbound_manager.xray.process import test_xray_config
 
 UNIMPLEMENTED_MESSAGE = "Subcommand '{name}' is not implemented in Phase 0.5."
@@ -135,6 +138,18 @@ def build_parser() -> argparse.ArgumentParser:
     xray_install_parser.add_argument("--os")
     xray_install_parser.add_argument("--arch")
     xray_install_parser.set_defaults(handler=_handle_xray_install)
+
+    xray_managed_status_parser = xray_subparsers.add_parser("managed-status")
+    xray_managed_status_parser.add_argument("--pid-file", required=True)
+    xray_managed_status_parser.add_argument("--binary-path", required=True)
+    xray_managed_status_parser.add_argument("--config-path")
+    xray_managed_status_parser.set_defaults(handler=_handle_xray_managed_status)
+
+    xray_managed_clean_parser = xray_subparsers.add_parser("managed-clean")
+    xray_managed_clean_parser.add_argument("--pid-file", required=True)
+    xray_managed_clean_parser.add_argument("--binary-path", required=True)
+    xray_managed_clean_parser.add_argument("--config-path")
+    xray_managed_clean_parser.set_defaults(handler=_handle_xray_managed_clean)
 
     return parser
 
@@ -478,6 +493,63 @@ def _handle_xray_install(args: argparse.Namespace) -> int:
 
     print(f"Error: {result.error or 'Xray installation failed.'}", file=sys.stderr)
     return 1
+
+
+def _handle_xray_managed_status(args: argparse.Namespace) -> int:
+    """Report managed Xray ownership status for one pid file."""
+    pid_payload = read_managed_pid_file(args.pid_file)
+    alive = is_managed_xray_process_alive(
+        args.pid_file,
+        expected_binary_path=args.binary_path,
+        expected_config_path=args.config_path,
+    )
+    if pid_payload is None:
+        ownership = "missing"
+    elif alive:
+        ownership = "matched"
+    else:
+        ownership = "unmatched"
+
+    print("Managed Xray process:")
+    print(f"pid_file: {args.pid_file}")
+    print(f"alive: {'true' if alive else 'false'}")
+    print(f"ownership: {ownership}")
+    return 0
+
+
+def _handle_xray_managed_clean(args: argparse.Namespace) -> int:
+    """Terminate one project-managed Xray process only when ownership matches."""
+    pid_payload = read_managed_pid_file(args.pid_file)
+    if pid_payload is None:
+        terminated = terminate_managed_xray_from_pid_file(
+            args.pid_file,
+            expected_binary_path=args.binary_path,
+            expected_config_path=args.config_path,
+        )
+        print(f"managed_process_terminated: {'true' if terminated else 'false'}")
+        return 0
+
+    if not is_managed_xray_process_alive(
+        args.pid_file,
+        expected_binary_path=args.binary_path,
+        expected_config_path=args.config_path,
+    ):
+        terminated = terminate_managed_xray_from_pid_file(
+            args.pid_file,
+            expected_binary_path=args.binary_path,
+            expected_config_path=args.config_path,
+        )
+        print(f"managed_process_terminated: {'true' if terminated else 'false'}")
+        pid_file_exists = Path(args.pid_file).exists()
+        return 0 if not pid_file_exists else 1
+
+    terminated = terminate_managed_xray_from_pid_file(
+        args.pid_file,
+        expected_binary_path=args.binary_path,
+        expected_config_path=args.config_path,
+    )
+    print(f"managed_process_terminated: {'true' if terminated else 'false'}")
+    return 0 if terminated else 1
 
 
 def _validate_runtime_config_name(config_name: str) -> None:

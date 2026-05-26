@@ -145,6 +145,70 @@ def test_xray_install_does_not_modify_config_yaml(tmp_path, capsys, monkeypatch)
     assert config_path.read_text(encoding="utf-8") == "xray:\n  binary_path: fake-xray\n"
 
 
+def test_xray_managed_status_missing_pid_file_returns_alive_false(tmp_path, capsys) -> None:
+    """Report a missing managed pid file without failing the command."""
+    exit_code = cli.main(
+        [
+            "xray",
+            "managed-status",
+            "--pid-file",
+            str(tmp_path / "missing.pid.json"),
+            "--binary-path",
+            str(tmp_path / "xray"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "alive: false" in captured.out
+    assert "ownership: missing" in captured.out
+
+
+def test_xray_managed_clean_missing_pid_file_returns_false_ok(tmp_path, capsys) -> None:
+    """Treat a missing managed pid file as an already-clean state."""
+    exit_code = cli.main(
+        [
+            "xray",
+            "managed-clean",
+            "--pid-file",
+            str(tmp_path / "missing.pid.json"),
+            "--binary-path",
+            str(tmp_path / "xray"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "managed_process_terminated: false" in captured.out
+
+
+def test_xray_managed_clean_refuses_mismatched_binary(tmp_path, capsys, monkeypatch) -> None:
+    """Refuse cleanup when pid-file ownership does not match."""
+    pid_file_path = tmp_path / "managed.pid.json"
+    pid_file_path.write_text(
+        '{"schema_version":1,"pid":123,"binary_path":"/tmp/other-xray","config_path":"/tmp/runtime.json"}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "is_managed_xray_process_alive", lambda *args, **kwargs: False)
+    monkeypatch.setattr(cli, "terminate_managed_xray_from_pid_file", lambda *args, **kwargs: False)
+
+    exit_code = cli.main(
+        [
+            "xray",
+            "managed-clean",
+            "--pid-file",
+            str(pid_file_path),
+            "--binary-path",
+            str(tmp_path / "xray"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "managed_process_terminated: false" in captured.out
+
+
 def test_existing_subcommands_remain_available_after_xray_addition(tmp_path, capsys, monkeypatch) -> None:
     """Keep the existing command surface available."""
     config_path = _write_config(tmp_path, allow_network_probe=True)
@@ -201,6 +265,7 @@ def test_xray_cli_output_does_not_contain_token_secret_or_password(tmp_path, cap
     assert "token=" not in rendered
     assert "secret=" not in rendered
     assert "password=" not in rendered
+    assert "public_key" not in rendered
 
 
 def _write_config(tmp_path: Path, *, allow_network_probe: bool) -> Path:

@@ -120,6 +120,16 @@ xray:
 - Tests do not download real binaries.
 - Final VPS probing should use a known Xray binary version.
 
+## Managed Xray Process Ownership
+
+- ScholarOutboundManager never manages Xray by process name alone.
+- It only terminates the `Popen` object it started or a PID recorded in a project-managed pid file.
+- Managed ownership is defined by the expected Xray binary path and runtime config path.
+- External Xray services such as `x-ui` are not blockers and are never killed by this project.
+- Cleanup must match the expected binary path and may also require the expected runtime config path.
+- Do not use `killall xray` or `pkill xray` for this project.
+- For manual checks, use project-managed pid files under `.runtime/` instead of global process-name scans.
+
 On a VPS, the intended manual chain is:
 
 ```bash
@@ -129,6 +139,17 @@ scholar-outbound-manager probe --config config.yaml --candidates candidates.json
 scholar-outbound-manager inspect --probe-summary state_data/probe_summary.json
 scholar-outbound-manager generate --config config.yaml --candidates state_data/passed_candidates.json
 ```
+
+Before a VPS probe:
+
+- Do not block on `pgrep xray` globally.
+- Check only project-owned pid files under `.runtime/`.
+- External `/usr/local/x-ui` Xray may coexist.
+
+After a VPS probe:
+
+- Confirm no project-managed pid file remains alive.
+- Ignore unrelated external Xray processes.
 
 ## Typical Workflow
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -53,7 +54,7 @@ class CandidateProbeSummary:
 
 
 HttpProbeCallable = Callable[[HttpProbeTarget, SocksEndpoint, float], HttpProbeResponse]
-StartXrayCallable = Callable[[str, str | Path], ManagedXrayProcess]
+StartXrayCallable = Callable[[str, str | Path, str | Path | None], ManagedXrayProcess]
 TestXrayConfigCallable = Callable[[str, str | Path, float], XrayCommandResult]
 WaitForTcpEndpointCallable = Callable[[str, int, float], bool]
 
@@ -92,6 +93,7 @@ def probe_candidate(
     runtime_config_path = runtime_summary["runtime_config_path"]
     local_socks_host = runtime_summary["local_socks_host"]
     local_socks_port = runtime_summary["local_socks_port"]
+    pid_file_path = _build_managed_xray_pid_file_path(xray_config.runtime_dir, candidate_id)
 
     if probe_options.xray_test_timeout_seconds is not None:
         test_result = test_xray_config_func(
@@ -115,7 +117,11 @@ def probe_candidate(
         xray_test_passed = None
 
     try:
-        managed_process = start_xray_func(xray_config.binary_path, runtime_config_path)
+        managed_process = start_xray_func(
+            xray_config.binary_path,
+            runtime_config_path,
+            pid_file_path=pid_file_path,
+        )
     except (OSError, ValueError) as exc:
         return _summary_from_failure(
             candidate_id=candidate_id,
@@ -210,6 +216,14 @@ def _validate_runtime_config_name(config_name: str) -> None:
         raise ValueError("runtime_config_name must be a file name.")
     if "/" in config_name or "\\" in config_name:
         raise ValueError("runtime_config_name must not contain path separators.")
+
+
+def _build_managed_xray_pid_file_path(runtime_dir: str | Path, candidate_id: str) -> Path:
+    """Build one sanitized managed Xray pid-file path under the runtime directory."""
+    safe_candidate_id = re.sub(r"[^0-9A-Za-z]+", "_", candidate_id).strip("_")
+    if not safe_candidate_id:
+        safe_candidate_id = "candidate"
+    return Path(runtime_dir) / f"managed_xray_{safe_candidate_id}.pid.json"
 
 
 def _summary_from_failure(

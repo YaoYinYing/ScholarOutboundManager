@@ -20,17 +20,22 @@ def test_probe_candidate_success_path(capsys, tmp_path) -> None:
     """Run the successful single-candidate probe workflow."""
     fake_process = _FakeManagedProcess()
     captured_calls: list[tuple[str, str, int, float]] = []
+    start_calls: list[tuple[str, str, str | None]] = []
 
     def fake_http_probe(target, socks, timeout_seconds):
         captured_calls.append((target.url, socks.host, socks.port, timeout_seconds))
         return _make_response(url=target.url, status_code=200, body_prefix="ok", elapsed_ms=10)
+
+    def fake_start(binary_path, config_path, pid_file_path=None):
+        start_calls.append((binary_path, str(config_path), None if pid_file_path is None else str(pid_file_path)))
+        return fake_process
 
     summary = probe_candidate(
         candidate=_make_candidate(),
         xray_config=_make_xray_config(tmp_path),
         candidate_id="candidate-1",
         http_probe=fake_http_probe,
-        start_xray_func=lambda binary_path, config_path: fake_process,
+        start_xray_func=fake_start,
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
     )
     captured = capsys.readouterr()
@@ -41,6 +46,13 @@ def test_probe_candidate_success_path(capsys, tmp_path) -> None:
     assert summary.xray_started is True
     assert summary.startup_ready is True
     assert fake_process.terminate_called is True
+    assert start_calls == [
+        (
+            "fake-xray",
+            str(tmp_path / "runtime" / "candidate_probe_runtime.json"),
+            str(tmp_path / "runtime" / "managed_xray_candidate_1.pid.json"),
+        )
+    ]
     assert captured_calls[0][1] == summary.local_socks_host
     assert captured_calls[0][2] == summary.local_socks_port
     assert captured.out == ""
@@ -63,7 +75,7 @@ def test_probe_candidate_can_skip_query_probe(tmp_path) -> None:
         candidate_id="candidate-1",
         options=CandidateProbeOptions(probe_query=False),
         http_probe=fake_http_probe,
-        start_xray_func=lambda binary_path, config_path: fake_process,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
     )
 
@@ -93,7 +105,7 @@ def test_probe_candidate_runs_xray_config_test_when_enabled(tmp_path) -> None:
         candidate_id="candidate-1",
         options=CandidateProbeOptions(xray_test_timeout_seconds=2.0),
         http_probe=lambda target, socks, timeout_seconds: _make_response(url=target.url),
-        start_xray_func=lambda binary_path, config_path: fake_process,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
         test_xray_config_func=fake_test,
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
     )
@@ -104,14 +116,14 @@ def test_probe_candidate_runs_xray_config_test_when_enabled(tmp_path) -> None:
 
 def test_probe_candidate_stops_after_xray_config_test_failure(tmp_path) -> None:
     """Do not start Xray after a failed config test."""
-    start_calls: list[tuple[str, str]] = []
+    start_calls: list[tuple[str, str, str | None]] = []
 
     summary = probe_candidate(
         candidate=_make_candidate(),
         xray_config=_make_xray_config(tmp_path),
         candidate_id="candidate-1",
         options=CandidateProbeOptions(xray_test_timeout_seconds=2.0),
-        start_xray_func=lambda binary_path, config_path: start_calls.append((binary_path, str(config_path))) or _FakeManagedProcess(),
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: start_calls.append((binary_path, str(config_path), None if pid_file_path is None else str(pid_file_path))) or _FakeManagedProcess(),
         test_xray_config_func=lambda binary_path, config_path, timeout_seconds: XrayCommandResult(
             command=["fake-xray"],
             returncode=1,
@@ -134,7 +146,7 @@ def test_probe_candidate_reports_xray_start_failure(tmp_path) -> None:
         candidate=_make_candidate(),
         xray_config=_make_xray_config(tmp_path),
         candidate_id="candidate-1",
-        start_xray_func=lambda binary_path, config_path: (_ for _ in ()).throw(OSError("spawn failed")),
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: (_ for _ in ()).throw(OSError("spawn failed")),
     )
 
     assert summary.xray_started is False
@@ -149,7 +161,7 @@ def test_probe_candidate_reports_socks_startup_timeout_and_terminates(tmp_path) 
         candidate=_make_candidate(),
         xray_config=_make_xray_config(tmp_path),
         candidate_id="candidate-1",
-        start_xray_func=lambda binary_path, config_path: fake_process,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: False,
     )
 
@@ -167,7 +179,7 @@ def test_probe_candidate_reports_probe_exception_and_terminates(tmp_path) -> Non
         xray_config=_make_xray_config(tmp_path),
         candidate_id="candidate-1",
         http_probe=lambda target, socks, timeout_seconds: (_ for _ in ()).throw(RuntimeError("boom")),
-        start_xray_func=lambda binary_path, config_path: fake_process,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
     )
 
@@ -200,7 +212,7 @@ def test_probe_candidate_terminates_on_home_blocked_response(tmp_path) -> None:
             status_code=403,
             body_prefix="forbidden",
         ),
-        start_xray_func=lambda binary_path, config_path: fake_process,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
     )
 
@@ -222,7 +234,7 @@ def test_probe_candidate_terminates_on_query_blocked_response(tmp_path) -> None:
         xray_config=_make_xray_config(tmp_path),
         candidate_id="candidate-1",
         http_probe=fake_http_probe,
-        start_xray_func=lambda binary_path, config_path: fake_process,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
     )
 
@@ -244,7 +256,7 @@ def test_probe_candidate_merges_scholar_failure_markers(tmp_path) -> None:
         xray_config=_make_xray_config(tmp_path),
         candidate_id="candidate-1",
         http_probe=fake_http_probe,
-        start_xray_func=lambda binary_path, config_path: fake_process,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
     )
 
@@ -265,7 +277,7 @@ def test_probe_candidate_summary_excludes_sensitive_values(tmp_path) -> None:
         xray_config=_make_xray_config(tmp_path),
         candidate_id="candidate-1",
         http_probe=lambda target, socks, timeout_seconds: _make_response(url=target.url),
-        start_xray_func=lambda binary_path, config_path: fake_process,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
     )
 
@@ -273,6 +285,28 @@ def test_probe_candidate_summary_excludes_sensitive_values(tmp_path) -> None:
     assert "raw_uri" not in rendered
     assert "PUBLIC_KEY_PLACEHOLDER" not in rendered
     assert "00000000-0000-0000-0000-000000000000" not in rendered
+
+
+def test_probe_candidate_sanitizes_pid_file_path_under_runtime_dir(tmp_path) -> None:
+    """Place the managed pid file under runtime_dir with a sanitized candidate id."""
+    fake_process = _FakeManagedProcess()
+    start_calls: list[str] = []
+
+    def fake_start(binary_path, config_path, pid_file_path=None):
+        del binary_path, config_path
+        start_calls.append(str(pid_file_path))
+        return fake_process
+
+    probe_candidate(
+        candidate=_make_candidate(),
+        xray_config=_make_xray_config(tmp_path),
+        candidate_id="candidate/1:unsafe name",
+        http_probe=lambda target, socks, timeout_seconds: _make_response(url=target.url),
+        start_xray_func=fake_start,
+        wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
+    )
+
+    assert start_calls == [str(tmp_path / "runtime" / "managed_xray_candidate_1_unsafe_name.pid.json")]
 
 
 def test_probe_candidate_rejects_invalid_startup_timeout(tmp_path) -> None:
@@ -327,7 +361,7 @@ def test_probe_candidate_checked_at_uses_utc_z_suffix(tmp_path) -> None:
         xray_config=_make_xray_config(tmp_path),
         candidate_id="candidate-1",
         http_probe=lambda target, socks, timeout_seconds: _make_response(url=target.url),
-        start_xray_func=lambda binary_path, config_path: fake_process,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
         wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
     )
 
