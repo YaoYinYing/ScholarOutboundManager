@@ -289,3 +289,59 @@ def _payload() -> dict[str, object]:
             },
         ],
     }
+
+
+def test_historical_payload_without_passed_field_policy_first_fallback() -> None:
+    """Choose a passed record from a historical payload without an explicit passed flag."""
+    payload = {
+        "schema_version": 1,
+        "sensitive": True,
+        "candidates": [
+            {
+                "candidate": {
+                    "source_name": "fixture",
+                    "raw_name": "node-a",
+                    "protocol": "vless",
+                    "address": "example.invalid",
+                    "port": 443,
+                    "user_id": "00000000-0000-0000-0000-000000000000",
+                    "security": "reality",
+                    "server_name": "www.cloudflare.com",
+                    "public_key": "PUBLIC_KEY_PLACEHOLDER",
+                    "supported": True,
+                    "raw_uri": "vless://00000000-0000-0000-0000-000000000000@example.invalid:443",
+                },
+                "probe": {
+                    "candidate_id": "candidate-001",
+                    "home_status": 200,
+                    "query_status": 200,
+                    "blocked": False,
+                    "timeout": False,
+                    "error": None,
+                    "failure_markers": [],
+                    "latency_ms": 10,
+                    "checked_at": "2026-05-27T00:00:00Z",
+                    # Explicitly omit the top-level "passed" field
+                },
+            }
+        ]
+    }
+
+    # Verify first strategy selects it as passed
+    candidate, probe, decision = select_candidate_with_policy(
+        payload,
+        SelectionPolicyOptions(strategy="first"),
+    )
+    assert candidate.protocol == "vless"
+    assert decision.selected_candidate_id == "candidate-001"
+    # It must not have warning "no_passed_candidate"
+    assert "no_passed_candidate" not in decision.warnings
+
+    # Explain must not have "no_passed_candidate" warning either
+    explanation = explain_selection_policy(
+        payload,
+        SelectionPolicyOptions(strategy="first"),
+    )
+    assert explanation["decision"]["selected_candidate_id"] == "candidate-001"
+    assert "no_passed_candidate" not in explanation["decision"]["warnings"]
+    assert explanation["catalog"][0]["passed"] is True

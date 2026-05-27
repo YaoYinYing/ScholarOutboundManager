@@ -340,3 +340,66 @@ def _assert_no_secrets(rendered: str) -> None:
     assert "00000000-0000-0000-0000-000000000000" not in lowered
     assert "public_key_placeholder" not in lowered
     assert "password_placeholder" not in lowered
+
+
+def test_select_choose_strategy_auto_historical_passed(tmp_path: Path, capsys) -> None:
+    """Select from historical passed candidates artifact omitting explicit top-level passed flag."""
+    candidates_path = tmp_path / "historical_candidates.json"
+    candidates_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "sensitive": True,
+                "candidates": [
+                    {
+                        "candidate": {
+                            "source_name": "fixture",
+                            "raw_name": "node",
+                            "protocol": "vless",
+                            "address": "example.invalid",
+                            "port": 443,
+                            "user_id": "00000000-0000-0000-0000-000000000000",
+                            "security": "reality",
+                            "server_name": "www.cloudflare.com",
+                            "public_key": "PUBLIC_KEY_PLACEHOLDER",
+                            "password": "PASSWORD_PLACEHOLDER",
+                            "supported": True,
+                            "raw_uri": "vless://00000000-0000-0000-0000-000000000000@example.invalid:443",
+                        },
+                        "probe": {
+                            "candidate_id": "candidate-001",
+                            "home_status": 200,
+                            "query_status": 200,
+                            "blocked": False,
+                            "timeout": False,
+                            "error": None,
+                            "failure_markers": [],
+                            "latency_ms": 10,
+                            "checked_at": "2026-05-27T00:00:00Z",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "select",
+            "choose",
+            "--candidates",
+            str(candidates_path),
+            "--strategy",
+            "auto",
+            "--output",
+            str(tmp_path / "selected_candidate.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "selection_method: first" in captured.out or "selection_method: fallback:first" in captured.out
+    assert "no_passed_candidate" not in captured.out
+    assert "no_passed_candidate" not in captured.err
+    _assert_no_secrets(captured.out + captured.err)

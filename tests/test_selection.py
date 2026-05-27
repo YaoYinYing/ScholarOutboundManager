@@ -13,6 +13,7 @@ from scholar_outbound_manager.selection import catalog_to_dicts
 from scholar_outbound_manager.selection import format_candidate_catalog_table
 from scholar_outbound_manager.selection import load_selected_candidate_artifact
 from scholar_outbound_manager.selection import select_candidate_by_id
+from scholar_outbound_manager.selection import infer_probe_passed
 from scholar_outbound_manager.selection import select_candidate_by_index
 from scholar_outbound_manager.selection import write_selected_candidate_artifact
 
@@ -188,3 +189,54 @@ def _make_candidate(**overrides: object) -> CandidateProxy:
     }
     candidate_data.update(overrides)
     return CandidateProxy(**candidate_data)
+
+
+def test_infer_probe_passed_scenarios() -> None:
+    """Cover infer_probe_passed logic for standard and historical-style payloads."""
+    # 1. infer_probe_passed() returns True when:
+    #    - probe has no explicit `passed`
+    #    - home_status=200
+    #    - query_status=200
+    #    - failure_markers=[]
+    payload_1 = {
+        "home_status": 200,
+        "query_status": 200,
+        "failure_markers": [],
+    }
+    assert infer_probe_passed(payload_1) is True
+
+    # 2. infer_probe_passed() returns True when:
+    #    - home_status=200
+    #    - query_status=302
+    #    - failure_markers=[]
+    payload_2 = {
+        "home_status": 200,
+        "query_status": 302,
+        "failure_markers": [],
+    }
+    assert infer_probe_passed(payload_2) is True
+
+    # 3. infer_probe_passed() returns False when:
+    #    - home_status=200
+    #    - query_status=403
+    #    - failure_markers contains stage_query_blocked
+    payload_3 = {
+        "home_status": 200,
+        "query_status": 403,
+        "failure_markers": ["stage_query_blocked"],
+    }
+    assert infer_probe_passed(payload_3) is False
+
+    # 4. infer_probe_passed() returns False when:
+    #    - passed=True
+    #    - failure_markers non-empty
+    payload_4 = {
+        "passed": True,
+        "failure_markers": ["stage_home_blocked"],
+    }
+    assert infer_probe_passed(payload_4) is False
+
+    # 5. Additional edge cases
+    assert infer_probe_passed(None) is False
+    assert infer_probe_passed({"passed": False}) is False
+    assert infer_probe_passed({"passed": True}) is True

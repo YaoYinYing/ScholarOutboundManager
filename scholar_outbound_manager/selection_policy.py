@@ -18,6 +18,7 @@ from scholar_outbound_manager.selection import build_candidate_catalog
 from scholar_outbound_manager.selection import extract_candidate_selection_records
 from scholar_outbound_manager.selection import load_selected_candidate_artifact
 from scholar_outbound_manager.selection import select_candidate_by_id
+from scholar_outbound_manager.selection import infer_probe_passed
 from scholar_outbound_manager.selection import select_candidate_by_index
 
 
@@ -279,11 +280,7 @@ def _record_to_selection(
 
 def _record_is_passed(record: CandidateSelectionRecord) -> bool:
     """Return whether the selection record qualifies as passed."""
-    if record.probe_payload is None:
-        return False
-    if record.probe_payload.get("passed") is True:
-        return not record.probe_payload.get("failure_markers")
-    return False
+    return infer_probe_passed(record.probe_payload)
 
 
 def _load_host_geo_for_policy(options: SelectionPolicyOptions, warnings: list[str]) -> GeoPoint | None:

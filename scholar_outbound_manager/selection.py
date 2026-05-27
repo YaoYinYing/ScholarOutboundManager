@@ -113,9 +113,10 @@ def build_candidate_catalog(payload: dict[str, object]) -> list[CandidateCatalog
     for record in extract_candidate_selection_records(payload):
         probe = record.probe_payload or {}
         failure_markers = _extract_failure_markers(probe)
-        passed = _coerce_optional_bool(probe.get("passed"))
-        if passed is None:
-            passed = _infer_passed(probe)
+        if record.probe_payload is None:
+            passed = None
+        else:
+            passed = infer_probe_passed(record.probe_payload)
         scholar_stage = _infer_scholar_stage(probe, passed, failure_markers)
         entries.append(
             CandidateCatalogEntry(
@@ -338,6 +339,26 @@ def _extract_tags(candidate_payload: dict[str, object]) -> list[str]:
         if isinstance(nested_tags, list):
             return [tag for tag in nested_tags if isinstance(tag, str) and tag]
     return []
+
+def infer_probe_passed(probe_payload: dict[str, object] | None) -> bool:
+    """
+    Return whether a probe payload qualifies as passed.
+
+    This helper preserves compatibility with older passed-candidates artifacts
+    that may not contain an explicit top-level ``passed`` flag but still contain
+    home/query status codes and failure markers.
+    """
+    if probe_payload is None:
+        return False
+    passed_flag = _coerce_optional_bool(probe_payload.get("passed"))
+    if passed_flag is True:
+        return not _extract_failure_markers(probe_payload)
+    if passed_flag is False:
+        return False
+    inferred = _infer_passed(probe_payload)
+    if inferred is True:
+        return True
+    return False
 
 
 def _infer_passed(probe_payload: dict[str, object]) -> bool | None:

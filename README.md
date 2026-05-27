@@ -350,6 +350,7 @@ If the current single-node service already owns `127.0.0.1:19080`, stop it first
 - Phase 23A only implements cached geo ranking. It does not do live egress IP lookup.
 - Phase 23C adds `geo refresh-plan`, but it is dry-run only in this phase.
 - Geo ranking is a sorting heuristic only. It does not determine Scholar availability.
+- Selection can infer passed status from Scholar home/query evidence for older passed-candidates artifacts that do not contain an explicit passed flag.
 - Raw egress IP values should not be stored by default. If stored metadata is needed, prefer a hash such as `sha256:...`.
 - `candidate_geo_cache.json` should remain local and should not be committed.
 - The core project does not currently depend on `maxminddb`. If MMDB lookup is added later, it should live behind a dedicated extra such as `geo`.
