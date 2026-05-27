@@ -507,6 +507,24 @@ scholar-outbound-manager sidecar start \
   --listen-port 19080
 ```
 
+`select list` prints redacted human-readable labels by default. Labels are derived from subscription node names and source labels, are for human review only, and continue to hide raw URIs, UUIDs, public keys, passwords, tokens, addresses, and other secrets. Region hints are heuristic and are not a substitute for GeoIP cache or egress verification. Use `candidate_id` for stable selection.
+
+Example:
+
+```bash
+scholar-outbound-manager select list \
+  --candidates state_data/passed_candidates.json
+```
+
+Example output:
+
+```text
+index  candidate_id   protocol  label      region  passed  stage
+0      candidate-001  vless     US-LA-01   US-LA   yes     full_access
+```
+
+Use `--no-label` if you want the older compact table. `select explain` includes the same redacted label and region hint in its JSON catalog.
+
 ### Step 6: stage production sidecar files
 
 ```bash
@@ -549,6 +567,8 @@ scholar-outbound-manager-tui \
   --candidates state_data/passed_candidates.json \
   --output state_data/selected_candidate.json
 ```
+
+The optional TUI shows the same redacted label and heuristic region columns without exposing proxy credentials.
 
 ## Legacy Offline Fragment Export
 

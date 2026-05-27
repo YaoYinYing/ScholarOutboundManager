@@ -10,6 +10,8 @@ def build_candidate_table_rows(entries: list[CandidateCatalogEntry]) -> list[dic
     return [
         {
             "index": entry.index,
+            "label": entry.label or entry.source_label or "<unnamed>",
+            "region": entry.region_hint,
             "candidate_id": entry.candidate_id,
             "protocol": entry.protocol,
             "passed": entry.passed,

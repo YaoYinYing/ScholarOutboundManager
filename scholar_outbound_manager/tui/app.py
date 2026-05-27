@@ -156,10 +156,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         def _load_table(self) -> None:
             table = self.query_one("#candidate-table", DataTable)
             table.clear(columns=True)
-            table.add_columns("index", "candidate_id", "protocol", "passed", "stage", "home", "query", "markers")
+            table.add_columns("index", "label", "region", "candidate_id", "protocol", "passed", "stage", "home", "query", "markers")
             for row in self.dashboard["rows"]:
                 table.add_row(
                     str(row["index"]),
+                    str(row["label"]),
+                    "" if row["region"] is None else str(row["region"]),
                     str(row["candidate_id"]),
                     str(row["protocol"]),
                     "" if row["passed"] is None else ("yes" if row["passed"] else "no"),

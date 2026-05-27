@@ -45,6 +45,8 @@ class SelectionDecision:
     method: str
     reason: str
     candidate_protocol: str
+    selected_label: str | None = None
+    selected_region_hint: str | None = None
     geo_score: float | None = None
     geo_distance_km: float | None = None
     warnings: list[str] = field(default_factory=list)
@@ -76,6 +78,8 @@ def select_candidate_with_policy(
             method="manual:selected_candidate",
             reason="selected_candidate_path provided",
             candidate_protocol=record.candidate.protocol,
+            selected_label=build_candidate_catalog({"candidates": [{"candidate": record.candidate_payload, "probe": record.probe_payload or {}}]})[0].label,
+            selected_region_hint=build_candidate_catalog({"candidates": [{"candidate": record.candidate_payload, "probe": record.probe_payload or {}}]})[0].region_hint,
         )
 
     if options.preferred_candidate_id is not None:
@@ -136,6 +140,8 @@ def explain_selection_policy(
             "method": decision.method,
             "reason": decision.reason,
             "candidate_protocol": decision.candidate_protocol,
+            "selected_label": decision.selected_label,
+            "selected_region_hint": decision.selected_region_hint,
             "geo_score": decision.geo_score,
             "geo_distance_km": decision.geo_distance_km,
             "warnings": list(decision.warnings),
@@ -145,6 +151,8 @@ def explain_selection_policy(
                 "index": entry.index,
                 "candidate_id": entry.candidate_id,
                 "protocol": entry.protocol,
+                "label": entry.label,
+                "region_hint": entry.region_hint,
                 "passed": entry.passed,
                 "stage": entry.scholar_stage,
                 "home_status": entry.home_status,
@@ -220,6 +228,8 @@ def _select_geo_nearest(
         method="geo_nearest",
         reason="selected nearest candidate from local geo cache",
         candidate_protocol=record.candidate.protocol,
+        selected_label=selected_entry.label,
+        selected_region_hint=selected_entry.region_hint,
         geo_score=None if geo_distance is None else -geo_distance,
         geo_distance_km=geo_distance,
         warnings=warnings,
@@ -269,12 +279,15 @@ def _record_to_selection(
     reason: str,
 ) -> tuple[CandidateProxy, dict[str, object] | None, SelectionDecision]:
     """Convert one record into the selection tuple."""
+    label = build_candidate_catalog({"candidates": [{"candidate": record.candidate_payload, "probe": record.probe_payload or {}}]})[0]
     return record.candidate, record.probe_payload, SelectionDecision(
         selected_candidate_id=record.candidate_id,
         selected_index=record.index,
         method=method,
         reason=reason,
         candidate_protocol=record.candidate.protocol,
+        selected_label=label.label,
+        selected_region_hint=label.region_hint,
     )
 
 

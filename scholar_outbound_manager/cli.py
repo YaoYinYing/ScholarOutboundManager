@@ -186,6 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
     select_list_parser = select_subparsers.add_parser("list")
     select_list_parser.add_argument("--candidates", required=True)
     select_list_parser.add_argument("--json", action="store_true")
+    select_list_parser.add_argument("--no-label", action="store_true")
     select_list_parser.set_defaults(handler=_handle_select_list)
 
     select_choose_parser = select_subparsers.add_parser("choose")
@@ -491,7 +492,7 @@ def _handle_select_list(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(catalog_to_dicts(catalog), indent=2, ensure_ascii=False, sort_keys=True))
     else:
-        print(format_candidate_catalog_table(catalog))
+        print(format_candidate_catalog_table(catalog, include_label=not args.no_label))
     return 0
 
 
@@ -522,6 +523,10 @@ def _handle_select_choose(args: argparse.Namespace) -> int:
     print(f"selected_index: {decision.selected_index}")
     print(f"selection_method: {decision.method}")
     print(f"reason: {decision.reason}")
+    if decision.selected_label:
+        print(f"selected_label: {decision.selected_label}")
+    if decision.selected_region_hint:
+        print(f"selected_region_hint: {decision.selected_region_hint}")
     if decision.geo_distance_km is not None:
         print(f"geo_distance_km: {decision.geo_distance_km:.2f}")
     print(f"output_path: {args.output}")

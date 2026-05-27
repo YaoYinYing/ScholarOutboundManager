@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +23,9 @@ class CandidateCatalogEntry:
     index: int
     candidate_id: str
     protocol: str
+    label: str | None
+    source_label: str | None
+    region_hint: str | None
     source_name: str | None
     supported: bool
     scholar_stage: str | None
@@ -118,11 +122,15 @@ def build_candidate_catalog(payload: dict[str, object]) -> list[CandidateCatalog
         else:
             passed = infer_probe_passed(record.probe_payload)
         scholar_stage = _infer_scholar_stage(probe, passed, failure_markers)
+        label = build_candidate_display_label(record.candidate_payload)
         entries.append(
             CandidateCatalogEntry(
                 index=record.index,
                 candidate_id=record.candidate_id,
                 protocol=record.candidate.protocol,
+                label=label,
+                source_label=redact_candidate_label(record.candidate.source_name),
+                region_hint=infer_region_hint(label),
                 source_name=record.candidate.source_name or None,
                 supported=record.candidate.supported,
                 scholar_stage=scholar_stage,
@@ -141,25 +149,44 @@ def build_candidate_catalog(payload: dict[str, object]) -> list[CandidateCatalog
 
 def catalog_to_dicts(entries: list[CandidateCatalogEntry]) -> list[dict[str, object]]:
     """Convert catalog entries to plain dictionaries."""
-    return [asdict(entry) for entry in entries]
+    payloads: list[dict[str, object]] = []
+    for entry in entries:
+        payload = asdict(entry)
+        payload.pop("source_name", None)
+        payloads.append(payload)
+    return payloads
 
 
-def format_candidate_catalog_table(entries: list[CandidateCatalogEntry]) -> str:
+def format_candidate_catalog_table(
+    entries: list[CandidateCatalogEntry],
+    *,
+    include_label: bool = True,
+) -> str:
     """Render one secret-safe candidate catalog table."""
-    headers = ["index", "candidate_id", "protocol", "passed", "stage", "home", "query", "markers"]
-    rows = [
-        [
-            str(entry.index),
-            entry.candidate_id,
-            entry.protocol,
-            _render_optional_bool(entry.passed),
-            entry.scholar_stage or "",
-            _render_optional_int(entry.home_status),
-            _render_optional_int(entry.query_status),
-            str(entry.failure_marker_count),
-        ]
-        for entry in entries
-    ]
+    headers = ["index", "candidate_id", "protocol"]
+    if include_label:
+        headers.extend(["label", "region"])
+    headers.extend(["passed", "stage", "home", "query", "markers"])
+    rows: list[list[str]] = []
+    for entry in entries:
+        row = [str(entry.index), entry.candidate_id, entry.protocol]
+        if include_label:
+            row.extend(
+                [
+                    _truncate_display_value(entry.label or entry.source_label or "<unnamed>", limit=48),
+                    entry.region_hint or "",
+                ]
+            )
+        row.extend(
+            [
+                _render_optional_bool(entry.passed),
+                entry.scholar_stage or "",
+                _render_optional_int(entry.home_status),
+                _render_optional_int(entry.query_status),
+                str(entry.failure_marker_count),
+            ]
+        )
+        rows.append(row)
     widths = [
         max(len(header), *(len(row[column]) for row in rows)) if rows else len(header)
         for column, header in enumerate(headers)
@@ -340,6 +367,82 @@ def _extract_tags(candidate_payload: dict[str, object]) -> list[str]:
             return [tag for tag in nested_tags if isinstance(tag, str) and tag]
     return []
 
+
+def redact_candidate_label(value: object) -> str | None:
+    """Redact one free-form candidate label while preserving useful geography hints."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        text = re.sub(r"(?i)\b(?:vless|vmess|trojan|ss)://\S+", " ", text)
+        text = re.sub(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+            "<UUID>",
+            text,
+        )
+        text = re.sub(
+            r"(?i)\b(public[_ -]?key|password|token|secret)\b\s*[:=]\s*\S+",
+            r"\1=<REDACTED>",
+            text,
+        )
+        text = re.sub(
+            r"(?i)\b(public[_ -]?key|password|token|secret)\b(?:\s+\S+)+",
+            lambda match: f"{match.group(1)} <REDACTED>",
+            text,
+        )
+        text = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "<IP>", text)
+        if _looks_like_host_label(text):
+            return "<HOST>"
+        text = re.sub(r"\s+", " ", text).strip(" \t\r\n,;|/")
+        if not text:
+            return None
+        if len(text) > 120:
+            text = f"{text[:117].rstrip()}..."
+        return text
+    except Exception:
+        return None
+
+
+def build_candidate_display_label(candidate_payload: dict[str, object]) -> str:
+    """Build one redacted display label from raw candidate metadata."""
+    extra = candidate_payload.get("extra")
+    extra_mapping = extra if isinstance(extra, dict) else {}
+    for candidate in (
+        candidate_payload.get("raw_name"),
+        candidate_payload.get("source_name"),
+        extra_mapping.get("display_name"),
+        extra_mapping.get("name"),
+        extra_mapping.get("label"),
+    ):
+        redacted = redact_candidate_label(candidate)
+        if redacted:
+            return redacted
+    return "<unnamed>"
+
+
+def infer_region_hint(label: str | None) -> str | None:
+    """Infer one coarse region hint from the redacted label."""
+    if not label:
+        return None
+    upper_label = label.upper()
+    if "LOS ANGELES" in upper_label or re.search(r"\bLA\b", upper_label):
+        return "US-LA"
+    if any(token in label for token in ("United States", "美国")) or re.search(r"\bUSA?\b", upper_label):
+        return "US"
+    if any(token in label for token in ("Japan", "Tokyo", "日本", "东京")) or re.search(r"\bJP\b", upper_label):
+        return "JP"
+    if any(token in label for token in ("Taiwan", "台湾")) or re.search(r"\bTW\b", upper_label):
+        return "TW"
+    if any(token in label for token in ("Hong Kong", "香港")) or re.search(r"\bHK\b", upper_label):
+        return "HK"
+    if any(token in label for token in ("Singapore", "新加坡")) or re.search(r"\bSG\b", upper_label):
+        return "SG"
+    if any(token in label for token in ("Korea", "韩国", "首尔")) or re.search(r"\bKR\b", upper_label):
+        return "KR"
+    return None
+
 def infer_probe_passed(probe_payload: dict[str, object] | None) -> bool:
     """
     Return whether a probe payload qualifies as passed.
@@ -447,6 +550,23 @@ def _string_key_mapping(mapping: object) -> dict[str, object]:
     if not isinstance(mapping, dict):
         return {}
     return {str(key): value for key, value in mapping.items()}
+
+
+def _truncate_display_value(value: str, *, limit: int) -> str:
+    """Truncate one display value to keep table alignment stable."""
+    if len(value) <= limit:
+        return value
+    return f"{value[: limit - 3].rstrip()}..."
+
+
+def _looks_like_host_label(value: str) -> bool:
+    """Return whether a label is effectively just one host token."""
+    stripped = value.strip()
+    if not stripped or " " in stripped:
+        return False
+    if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", stripped):
+        return True
+    return re.fullmatch(r"(?i)(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d{1,5})?", stripped) is not None
 
 
 def _utc_now_iso8601() -> str:

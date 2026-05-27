@@ -14,6 +14,9 @@ def test_build_candidate_table_rows_hides_secrets() -> None:
                 index=0,
                 candidate_id="candidate-001",
                 protocol="vless",
+                label="US-LA-01",
+                source_label="fixture",
+                region_hint="US-LA",
                 source_name="fixture",
                 supported=True,
                 scholar_stage="full_access",
@@ -30,6 +33,8 @@ def test_build_candidate_table_rows_hides_secrets() -> None:
     )
 
     rendered = str(rows[0])
+    assert rows[0]["label"] == "US-LA-01"
+    assert rows[0]["region"] == "US-LA"
     assert rows[0]["candidate_id"] == "candidate-001"
     assert "address" not in rendered
     assert "raw_uri" not in rendered

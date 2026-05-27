@@ -8,10 +8,13 @@ import pytest
 
 from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.selection import build_candidate_catalog
+from scholar_outbound_manager.selection import build_candidate_display_label
 from scholar_outbound_manager.selection import build_selected_candidate_artifact
 from scholar_outbound_manager.selection import catalog_to_dicts
 from scholar_outbound_manager.selection import format_candidate_catalog_table
+from scholar_outbound_manager.selection import infer_region_hint
 from scholar_outbound_manager.selection import load_selected_candidate_artifact
+from scholar_outbound_manager.selection import redact_candidate_label
 from scholar_outbound_manager.selection import select_candidate_by_id
 from scholar_outbound_manager.selection import infer_probe_passed
 from scholar_outbound_manager.selection import select_candidate_by_index
@@ -23,7 +26,10 @@ def test_catalog_hides_sensitive_fields_and_keeps_redacted_fields() -> None:
     catalog = build_candidate_catalog(_passed_candidates_payload())
 
     rendered = str(catalog_to_dicts(catalog))
+    assert "source_name" not in catalog_to_dicts(catalog)[0]
     assert catalog[0].candidate_id == "candidate-001"
+    assert catalog[0].label == "US-LA Scholar 01"
+    assert catalog[0].region_hint == "US-LA"
     assert catalog[0].scholar_stage == "full_access"
     assert catalog[0].passed is True
     assert "raw_uri" not in rendered
@@ -37,11 +43,52 @@ def test_catalog_table_hides_secrets() -> None:
     table = format_candidate_catalog_table(build_candidate_catalog(_passed_candidates_payload()))
 
     assert "candidate-001" in table
+    assert "US-LA Scholar 01" in table
     assert "full_access" in table
     assert "raw_uri" not in table
     assert "PUBLIC_KEY_PLACEHOLDER" not in table
     assert "PASSWORD_PLACEHOLDER" not in table
     assert "00000000-0000-0000-0000-000000000000" not in table
+
+
+def test_redact_candidate_label_removes_uuid() -> None:
+    assert redact_candidate_label("Tokyo 00000000-0000-0000-0000-000000000000") == "Tokyo <UUID>"
+
+
+def test_redact_candidate_label_removes_vless_uri() -> None:
+    assert redact_candidate_label("US vless://abc@example.invalid:443") == "US"
+
+
+def test_redact_candidate_label_removes_secret_fields() -> None:
+    redacted = redact_candidate_label("HK public_key=abc password=def token=ghi secret=jkl")
+    assert redacted == "HK public_key=<REDACTED> password=<REDACTED> token=<REDACTED> secret=<REDACTED>"
+
+
+def test_redact_candidate_label_removes_obvious_ip() -> None:
+    assert redact_candidate_label("SG 1.2.3.4") == "SG <IP>"
+
+
+def test_build_candidate_display_label_prefers_raw_name() -> None:
+    assert build_candidate_display_label(
+        {
+            "raw_name": "US-LA Scholar 01",
+            "source_name": "source-jp",
+            "extra": {"display_name": "display"},
+        }
+    ) == "US-LA Scholar 01"
+
+
+def test_build_candidate_display_label_falls_back_to_source_name() -> None:
+    assert build_candidate_display_label({"raw_name": "", "source_name": "Japan Tokyo 02"}) == "Japan Tokyo 02"
+
+
+def test_build_candidate_display_label_falls_back_to_extra_display_name() -> None:
+    assert build_candidate_display_label({"raw_name": "", "source_name": "", "extra": {"display_name": "HK Edge"}}) == "HK Edge"
+
+
+def test_infer_region_hint_uses_simple_heuristics() -> None:
+    assert infer_region_hint("Los Angeles premium") == "US-LA"
+    assert infer_region_hint("Tokyo premium") == "JP"
 
 
 def test_select_candidate_by_id_returns_requested_record() -> None:
@@ -168,7 +215,7 @@ def _make_candidate(**overrides: object) -> CandidateProxy:
     """Construct one placeholder candidate for selection tests."""
     candidate_data: dict[str, object] = {
         "source_name": "fixture-source",
-        "raw_name": "US Scholar IPv4",
+        "raw_name": "US-LA Scholar 01",
         "protocol": "vless",
         "address": "example.invalid",
         "port": 443,
@@ -185,7 +232,7 @@ def _make_candidate(**overrides: object) -> CandidateProxy:
         "raw_uri": "vless://00000000-0000-0000-0000-000000000000@example.invalid:443",
         "supported": True,
         "unsupported_reason": None,
-        "extra": {"tags": ["scholar", "us"]},
+        "extra": {"tags": ["scholar", "us"], "display_name": "Tokyo Backup"},
     }
     candidate_data.update(overrides)
     return CandidateProxy(**candidate_data)

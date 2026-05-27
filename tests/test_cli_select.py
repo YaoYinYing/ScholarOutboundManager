@@ -17,6 +17,8 @@ def test_select_list_outputs_redacted_table(tmp_path: Path, capsys) -> None:
 
     assert exit_code == 0
     assert "candidate_id" in captured.out
+    assert "label" in captured.out
+    assert "US-LA-01" in captured.out
     assert "candidate-001" in captured.out
     _assert_no_secrets(captured.out + captured.err)
 
@@ -31,7 +33,24 @@ def test_select_list_json_outputs_redacted_catalog(tmp_path: Path, capsys) -> No
     assert exit_code == 0
     payload = json.loads(captured.out)
     assert payload[0]["candidate_id"] == "candidate-001"
+    assert payload[0]["label"] == "US-LA-01"
+    assert payload[0]["region_hint"] == "US-LA"
     assert "address" not in payload[0]
+    assert "source_name" not in payload[0]
+    _assert_no_secrets(captured.out + captured.err)
+
+
+def test_select_list_no_label_restores_compact_table(tmp_path: Path, capsys) -> None:
+    """Allow hiding label and region columns."""
+    candidates_path = _write_passed_candidates(tmp_path)
+
+    exit_code = cli.main(["select", "list", "--candidates", str(candidates_path), "--no-label"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "candidate_id" in captured.out
+    assert "label" not in captured.out.splitlines()[0]
+    assert "region" not in captured.out.splitlines()[0]
     _assert_no_secrets(captured.out + captured.err)
 
 
@@ -83,6 +102,7 @@ def test_select_choose_strategy_auto_with_manual_candidate_id(tmp_path: Path, ca
 
     assert exit_code == 0
     assert "selection_method: manual:candidate_id" in captured.out
+    assert "selected_label: US-LA-01" in captured.out
 
 
 def test_select_choose_strategy_geo_nearest_with_cache(tmp_path: Path, capsys) -> None:
@@ -181,6 +201,9 @@ def test_select_explain_outputs_redacted_explanation(tmp_path: Path, capsys) -> 
     assert exit_code == 0
     payload = json.loads(captured.out)
     assert payload["decision"]["method"] == "geo_nearest"
+    assert payload["decision"]["selected_label"] == "US-LA-01"
+    assert payload["decision"]["selected_region_hint"] == "US-LA"
+    assert payload["catalog"][0]["label"] == "US-LA-01"
     assert "geo_distance_km" in payload["catalog"][0]
     _assert_no_secrets(captured.out + captured.err)
 
@@ -218,7 +241,7 @@ def _write_passed_candidates(tmp_path: Path) -> Path:
                     {
                         "candidate": {
                             "source_name": "fixture",
-                            "raw_name": "node",
+                            "raw_name": "US-LA-01",
                             "protocol": "vless",
                             "address": "example.invalid",
                             "port": 443,
@@ -229,6 +252,7 @@ def _write_passed_candidates(tmp_path: Path) -> Path:
                             "password": "PASSWORD_PLACEHOLDER",
                             "supported": True,
                             "raw_uri": "vless://00000000-0000-0000-0000-000000000000@example.invalid:443",
+                            "extra": {"display_name": "US-West display"},
                         },
                         "probe": {
                             "candidate_id": "candidate-001",
@@ -246,7 +270,7 @@ def _write_passed_candidates(tmp_path: Path) -> Path:
                     {
                         "candidate": {
                             "source_name": "fixture",
-                            "raw_name": "node-b",
+                            "raw_name": "Tokyo-02 password=hidden",
                             "protocol": "trojan",
                             "address": "example-b.invalid",
                             "port": 443,
@@ -340,6 +364,7 @@ def _assert_no_secrets(rendered: str) -> None:
     assert "00000000-0000-0000-0000-000000000000" not in lowered
     assert "public_key_placeholder" not in lowered
     assert "password_placeholder" not in lowered
+    assert "token_placeholder" not in lowered
 
 
 def test_select_choose_strategy_auto_historical_passed(tmp_path: Path, capsys) -> None:

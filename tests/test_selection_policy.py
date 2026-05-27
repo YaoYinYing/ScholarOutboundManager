@@ -99,6 +99,8 @@ def test_geo_nearest_works_with_cache(tmp_path: Path) -> None:
     assert candidate.protocol == "vless"
     assert decision.method == "geo_nearest"
     assert decision.geo_distance_km is not None
+    assert decision.selected_label == "US-LA-01"
+    assert decision.selected_region_hint == "US-LA"
 
 
 def test_geo_nearest_falls_back_to_first_when_cache_missing(tmp_path: Path) -> None:
@@ -167,6 +169,7 @@ def test_select_explain_hides_secrets(tmp_path: Path) -> None:
 
     rendered = json.dumps(explanation, ensure_ascii=False, sort_keys=True)
     assert "candidate-001" in rendered
+    assert "US-LA-01" in rendered
     assert "example.invalid" not in rendered
     assert "raw_uri" not in rendered
     assert "PUBLIC_KEY_PLACEHOLDER" not in rendered
@@ -238,7 +241,7 @@ def _payload() -> dict[str, object]:
             {
                 "candidate": {
                     "source_name": "fixture",
-                    "raw_name": "node-a",
+                    "raw_name": "US-LA-01",
                     "protocol": "vless",
                     "address": "example.invalid",
                     "port": 443,
@@ -265,7 +268,7 @@ def _payload() -> dict[str, object]:
             {
                 "candidate": {
                     "source_name": "fixture",
-                    "raw_name": "node-b",
+                    "raw_name": "Tokyo-02",
                     "protocol": "trojan",
                     "address": "example-b.invalid",
                     "port": 443,
