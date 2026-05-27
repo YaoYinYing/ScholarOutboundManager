@@ -54,6 +54,7 @@ def serialize_batch_probe_record(record: BatchProbeRecord) -> dict[str, object]:
         "index": record.index,
         "candidate_id": record.candidate_id,
         "candidate_name": _redact_free_text(record.candidate_name),
+        "candidate_protocol": record.candidate_protocol,
         "attempted": record.attempted,
         "passed": record.passed,
         "skipped": record.skipped,

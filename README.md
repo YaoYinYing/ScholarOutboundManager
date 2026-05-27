@@ -651,10 +651,14 @@ scholar-outbound-manager run \
 ## Hysteria2 support through Xray
 
 - Xray names the outbound protocol `hysteria`, even when the source candidate protocol is Clash `hysteria2`.
-- This project maps supported Hysteria2 candidates to Xray with `settings.version = 2`, `streamSettings.network = "hysteria"`, and `hysteriaSettings.version = 2`.
+- This project maps supported Hysteria2 candidates to Xray with `settings.version = 2`, `streamSettings.network = "hysteria"`, `streamSettings.security = "tls"`, and `hysteriaSettings.version = 2`.
+- Hysteria2 auth is written to `streamSettings.hysteriaSettings.auth`.
+- Clash `sni` and `servername` are mapped to `streamSettings.tlsSettings.serverName`.
+- Clash `skip-cert-verify` is mapped to `streamSettings.tlsSettings.allowInsecure`.
 - Initial support is conservative and intended for the existing sidecar-first workflow only.
 - obfs and obfs-password are preserved for review but remain fail-closed until the Xray mapping is validated.
-- `sni`, `alpn`, `skip-cert-verify`, `up`, and `down` may be preserved from Clash input without being written into the runtime config yet.
+- `up` and `down` may be preserved from Clash input without being written into the runtime config.
+- SSL EOF during live probe usually indicates transport-layer handshake failure, not Scholar 403 classification.
 - Production Xray, XrayR, and `x-ui` configuration remain unchanged.
 
 ## CLI Reference

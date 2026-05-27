@@ -46,6 +46,7 @@ class BatchProbeRecord:
     skipped: bool
     skip_reason: str | None
     summary: CandidateProbeSummary | None
+    candidate_protocol: str | None = None
 
 
 @dataclass(slots=True)
@@ -214,6 +215,7 @@ def _probe_candidates_sequential(
                     skipped=True,
                     skip_reason=candidate.unsupported_reason or "Candidate is marked unsupported.",
                     summary=None,
+                    candidate_protocol=candidate.protocol,
                 )
             )
             continue
@@ -241,6 +243,7 @@ def _probe_candidates_sequential(
                 skipped=False,
                 skip_reason=None,
                 summary=summary,
+                candidate_protocol=candidate.protocol,
             )
         )
 
@@ -278,6 +281,7 @@ def _probe_candidates_parallel(
                         skipped=True,
                         skip_reason=candidate.unsupported_reason or "Candidate is marked unsupported.",
                         summary=None,
+                        candidate_protocol=candidate.protocol,
                     )
                 )
                 continue
@@ -318,6 +322,7 @@ def _probe_candidates_parallel(
                 skipped=False,
                 skip_reason=None,
                 summary=summary,
+                candidate_protocol=candidate.protocol,
             )
 
     ordered_records.extend(

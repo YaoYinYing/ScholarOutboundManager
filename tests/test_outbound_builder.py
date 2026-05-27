@@ -40,6 +40,11 @@ def test_build_hysteria2_outbound() -> None:
         "port": 443,
     }
     assert outbound["streamSettings"]["network"] == "hysteria"
+    assert outbound["streamSettings"]["security"] == "tls"
+    assert outbound["streamSettings"]["tlsSettings"] == {
+        "serverName": "hy2.example.invalid",
+        "allowInsecure": True,
+    }
     assert outbound["streamSettings"]["hysteriaSettings"] == {
         "version": 2,
         "auth": "HY2_PASSWORD_PLACEHOLDER",
@@ -60,6 +65,35 @@ def test_build_hysteria2_outbound_rejects_obfs() -> None:
     with pytest.raises(ValueError, match="obfs is not mapped to Xray yet"):
         build_hysteria2_outbound(
             _make_hysteria2_candidate(extra={"obfs": "salamander", "obfs-password": "OBFS_PASSWORD_PLACEHOLDER"}),
+            "google-scholar-node-001",
+        )
+
+
+def test_build_hysteria2_outbound_preserves_skip_cert_verify_false() -> None:
+    """Default TLS verification should stay enabled when false is configured."""
+    outbound = build_hysteria2_outbound(
+        _make_hysteria2_candidate(extra={"skip_cert_verify": False}),
+        "google-scholar-node-001",
+    )
+
+    assert outbound["streamSettings"]["tlsSettings"]["allowInsecure"] is False
+
+
+def test_build_hysteria2_outbound_falls_back_to_address_for_server_name() -> None:
+    """Fallback to address when the Clash node omits an explicit SNI value."""
+    outbound = build_hysteria2_outbound(
+        _make_hysteria2_candidate(server_name=None),
+        "google-scholar-node-001",
+    )
+
+    assert outbound["streamSettings"]["tlsSettings"]["serverName"] == "hy2.example.invalid"
+
+
+def test_build_hysteria2_outbound_rejects_alpn() -> None:
+    """Fail closed when ALPN is still unmapped for Hysteria2."""
+    with pytest.raises(ValueError, match="alpn is not mapped to Xray yet"):
+        build_hysteria2_outbound(
+            _make_hysteria2_candidate(alpn="h3,h2"),
             "google-scholar-node-001",
         )
 
@@ -330,10 +364,10 @@ def _make_hysteria2_candidate(**overrides: object) -> CandidateProxy:
         "fingerprint": None,
         "public_key": None,
         "short_id": None,
-        "alpn": "h3,h2",
+        "alpn": None,
         "path": None,
         "host": None,
-        "extra": {},
+        "extra": {"skip_cert_verify": True},
         "raw_uri": None,
         "supported": True,
         "unsupported_reason": None,

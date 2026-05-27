@@ -126,9 +126,10 @@ def test_build_multi_port_sidecar_runtime_config_supports_hysteria2_and_vless() 
             fingerprint=None,
             public_key=None,
             short_id=None,
-            alpn="h3,h2",
+            alpn=None,
             raw_uri=None,
             address="hy2.example.invalid",
+            extra={"skip_cert_verify": True},
         ),
     }
 
@@ -266,9 +267,10 @@ def _passed_candidates_payload_hysteria2() -> dict[str, object]:
                     fingerprint=None,
                     public_key=None,
                     short_id=None,
-                    alpn="h3,h2",
+                    alpn=None,
                     raw_uri=None,
                     address="hy2.example.invalid",
+                    extra={"skip_cert_verify": True},
                 ).to_dict(),
                 "probe": {
                     "candidate_id": "candidate-002",

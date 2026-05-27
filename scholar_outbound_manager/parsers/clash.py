@@ -273,13 +273,11 @@ def _parse_hysteria2_proxy(item: dict[str, Any], source_name: str, raw_name: str
     if obfs or obfs_password:
         unsupported_reasons.append("Hysteria2 obfs is not mapped to Xray yet.")
 
+    alpn = _csv_or_none(item.get("alpn"))
+    if alpn:
+        unsupported_reasons.append("Hysteria2 alpn is not mapped to Xray yet.")
+
     runtime_warnings: list[str] = []
-    if _first_non_empty(item.get("sni"), item.get("servername")):
-        runtime_warnings.append("Hysteria2 sni/servername is preserved but not mapped to Xray runtime config yet.")
-    if item.get("skip-cert-verify") is not None:
-        runtime_warnings.append("Hysteria2 skip-cert-verify is preserved but not mapped to Xray runtime config yet.")
-    if item.get("alpn") is not None:
-        runtime_warnings.append("Hysteria2 alpn is preserved but not mapped to Xray runtime config yet.")
     if item.get("up") is not None or item.get("down") is not None:
         runtime_warnings.append("Hysteria2 up/down is preserved for review but not mapped to Xray runtime config.")
 
@@ -305,7 +303,7 @@ def _parse_hysteria2_proxy(item: dict[str, Any], source_name: str, raw_name: str
         security="hysteria",
         server_name=_first_non_empty(item.get("sni"), item.get("servername")),
         fingerprint=_string(item.get("fingerprint")) or _string(item.get("client-fingerprint")) or None,
-        alpn=_csv_or_none(item.get("alpn")),
+        alpn=alpn,
         raw_uri=None,
         supported=not unsupported_reasons,
         unsupported_reason=" ".join(unsupported_reasons) or None,

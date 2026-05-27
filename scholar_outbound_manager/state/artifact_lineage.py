@@ -164,6 +164,9 @@ def build_probe_explanation(
     *,
     label_regex: str | None = None,
     candidate_id: str | None = None,
+    protocol: str | None = None,
+    error_category: str | None = None,
+    marker: str | None = None,
 ) -> dict[str, object]:
     """Build one redacted probe explanation payload from a probe summary artifact."""
     raw_records = payload.get("records")
@@ -176,24 +179,36 @@ def build_probe_explanation(
             continue
         record_candidate_id = _coerce_optional_str(raw_record.get("candidate_id")) or ""
         record_name = _coerce_optional_str(raw_record.get("candidate_name")) or ""
+        record_protocol = _coerce_optional_str(raw_record.get("candidate_protocol"))
         if candidate_id and record_candidate_id != candidate_id:
             continue
         if pattern and not pattern.search(record_name):
             continue
         summary = raw_record.get("summary")
         result = summary.get("result") if isinstance(summary, dict) else None
+        failure_markers = _safe_failure_markers(result)
+        record_error_category = _probe_error_category(result, failure_markers)
+        if protocol and record_protocol != protocol:
+            continue
+        if error_category and record_error_category != error_category:
+            continue
+        if marker and marker not in failure_markers:
+            continue
         records.append(
             {
                 "index": _coerce_optional_int(raw_record.get("index")),
                 "candidate_id": record_candidate_id,
-                "candidate_name": record_name or None,
+                "protocol": record_protocol,
+                "label": record_name or None,
+                "region_hint": _infer_region_hint(record_name),
                 "attempted": bool(raw_record.get("attempted")),
                 "skipped": bool(raw_record.get("skipped")),
                 "passed": bool(raw_record.get("passed")),
                 "skip_reason": _coerce_optional_str(raw_record.get("skip_reason")),
                 "home_status": _coerce_optional_int(result.get("home_status")) if isinstance(result, dict) else None,
                 "query_status": _coerce_optional_int(result.get("query_status")) if isinstance(result, dict) else None,
-                "failure_markers": _safe_failure_markers(result),
+                "failure_markers": failure_markers,
+                "error_category": record_error_category,
             }
         )
     return {
@@ -264,6 +279,44 @@ def _safe_failure_markers(result: object) -> list[str]:
     if not isinstance(raw_markers, list):
         return []
     return [marker for marker in raw_markers if isinstance(marker, str) and marker]
+
+
+def _probe_error_category(result: object, failure_markers: list[str]) -> str | None:
+    """Classify one review-safe probe error category from result text and markers."""
+    if not isinstance(result, dict):
+        return None
+    error_text = (_coerce_optional_str(result.get("error")) or "").lower()
+    if "tls/ssl connection has been closed (eof)" in error_text:
+        return "ssl_eof"
+    if "ssl" in error_text and "eof" in error_text:
+        return "ssl_eof"
+    if "timeout" in failure_markers:
+        return "timeout"
+    if "transport_error" in failure_markers or "stage_transport_failed" in failure_markers:
+        return "transport_error"
+    return None
+
+
+def _infer_region_hint(label: str | None) -> str | None:
+    """Infer one coarse region hint from a redacted label."""
+    if not label:
+        return None
+    upper_label = label.upper()
+    if "LOS ANGELES" in upper_label or re.search(r"\bLA\b", upper_label):
+        return "US-LA"
+    if any(token in label for token in ("United States", "美国")) or re.search(r"\bUSA?\b", upper_label):
+        return "US"
+    if any(token in label for token in ("Japan", "Tokyo", "日本", "东京")) or re.search(r"\bJP\b", upper_label):
+        return "JP"
+    if any(token in label for token in ("Taiwan", "台湾")) or re.search(r"\bTW\b", upper_label):
+        return "TW"
+    if any(token in label for token in ("Hong Kong", "香港")) or re.search(r"\bHK\b", upper_label):
+        return "HK"
+    if any(token in label for token in ("Singapore", "新加坡")) or re.search(r"\bSG\b", upper_label):
+        return "SG"
+    if any(token in label for token in ("Korea", "韩国", "首尔")) or re.search(r"\bKR\b", upper_label):
+        return "KR"
+    return None
 
 
 def _payload_value(payload: dict[str, object] | None, field_name: str) -> str | None:

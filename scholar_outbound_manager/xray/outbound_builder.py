@@ -217,6 +217,8 @@ def build_hysteria2_outbound(candidate: CandidateProxy, tag: str) -> dict[str, o
     _require_base_endpoint(candidate, protocol_name="Hysteria2")
     _require_non_empty(candidate.password, "Hysteria2 outbound requires a non-empty authentication secret.")
     _require_hysteria2_supported_fields(candidate)
+    server_name = candidate.server_name or candidate.address
+    allow_insecure = _hysteria2_allow_insecure(candidate)
 
     return {
         "tag": tag,
@@ -228,6 +230,13 @@ def build_hysteria2_outbound(candidate: CandidateProxy, tag: str) -> dict[str, o
         },
         "streamSettings": {
             "network": "hysteria",
+            "security": "tls",
+            "tlsSettings": {
+                # Fall back to the endpoint address so Xray still sends SNI/hostname-based TLS
+                # when the Clash node omits an explicit server name field.
+                "serverName": server_name,
+                "allowInsecure": allow_insecure,
+            },
             "hysteriaSettings": {
                 "version": 2,
                 "auth": candidate.password,
@@ -322,6 +331,17 @@ def _require_hysteria2_supported_fields(candidate: CandidateProxy) -> None:
     obfs_password = candidate.extra.get("obfs-password")
     if obfs or obfs_password:
         raise ValueError("Hysteria2 obfs is not mapped to Xray yet.")
+    if candidate.alpn:
+        raise ValueError("Hysteria2 alpn is not mapped to Xray yet.")
+
+
+def _hysteria2_allow_insecure(candidate: CandidateProxy) -> bool:
+    """Resolve Hysteria2 TLS allowInsecure from normalized parser metadata."""
+    for key in ("skip_cert_verify", "skip-cert-verify"):
+        value = candidate.extra.get(key)
+        if isinstance(value, bool):
+            return value
+    return False
 
 
 def _normalize_alpn(value: str | None) -> list[str] | str | None:

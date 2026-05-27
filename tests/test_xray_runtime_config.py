@@ -134,6 +134,9 @@ def test_build_runtime_config_for_hysteria2_candidate() -> None:
     assert config["outbounds"][0]["protocol"] == "hysteria"
     assert config["outbounds"][0]["settings"]["version"] == 2
     assert config["outbounds"][0]["streamSettings"]["network"] == "hysteria"
+    assert config["outbounds"][0]["streamSettings"]["security"] == "tls"
+    assert config["outbounds"][0]["streamSettings"]["tlsSettings"]["serverName"] == "hy2.example.invalid"
+    assert config["outbounds"][0]["streamSettings"]["tlsSettings"]["allowInsecure"] is True
 
 
 def test_runtime_config_does_not_expose_raw_uri() -> None:
@@ -249,10 +252,10 @@ def _make_hysteria2_candidate(**overrides: object) -> CandidateProxy:
         fingerprint=None,
         public_key=None,
         short_id=None,
-        alpn="h3,h2",
+        alpn=None,
         raw_uri=None,
         address="hy2.example.invalid",
-        extra={},
+        extra={"skip_cert_verify": True},
         **overrides,
     )
 

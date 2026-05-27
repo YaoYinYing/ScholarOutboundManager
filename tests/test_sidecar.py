@@ -340,9 +340,10 @@ def _make_hysteria2_candidate(**overrides: object) -> CandidateProxy:
         fingerprint=None,
         public_key=None,
         short_id=None,
-        alpn="h3,h2",
+        alpn=None,
         raw_uri=None,
         address="hy2.example.invalid",
+        extra={"skip_cert_verify": True},
         **overrides,
     )
 

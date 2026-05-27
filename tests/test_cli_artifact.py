@@ -79,12 +79,20 @@ def test_artifact_explain_probe_filters_by_candidate_id(tmp_path: Path, capsys) 
                     {
                         "index": 0,
                         "candidate_id": "candidate-001",
+                        "candidate_protocol": "hysteria2",
                         "candidate_name": "US-LA-01",
                         "attempted": True,
                         "passed": False,
                         "skipped": False,
                         "skip_reason": None,
-                        "summary": {"result": {"home_status": 403, "query_status": 403, "failure_markers": ["stage_home_blocked"]}},
+                        "summary": {
+                            "result": {
+                                "home_status": None,
+                                "query_status": None,
+                                "error": "TLS/SSL connection has been closed (EOF)",
+                                "failure_markers": ["transport_error", "stage_transport_failed"],
+                            }
+                        },
                     }
                 ],
             }
@@ -94,6 +102,84 @@ def test_artifact_explain_probe_filters_by_candidate_id(tmp_path: Path, capsys) 
 
     exit_code = cli.main(
         ["artifact", "explain-probe", "--probe-summary", str(probe_path), "--candidate-id", "candidate-001"]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["record_count"] == 1
+    assert payload["records"][0]["candidate_id"] == "candidate-001"
+    assert payload["records"][0]["protocol"] == "hysteria2"
+    assert payload["records"][0]["region_hint"] == "US-LA"
+    assert payload["records"][0]["error_category"] == "ssl_eof"
+    _assert_no_secrets(captured.out + captured.err)
+
+
+def test_artifact_explain_probe_filters_by_protocol_error_category_and_marker(tmp_path: Path, capsys) -> None:
+    probe_path = tmp_path / "probe_summary.json"
+    probe_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_type": "probe_summary",
+                "run_id": "probe-1",
+                "created_at": "2026-05-27T00:00:00Z",
+                "records": [
+                    {
+                        "index": 0,
+                        "candidate_id": "candidate-001",
+                        "candidate_protocol": "hysteria2",
+                        "candidate_name": "HK-01",
+                        "attempted": True,
+                        "passed": False,
+                        "skipped": False,
+                        "skip_reason": None,
+                        "summary": {
+                            "result": {
+                                "home_status": None,
+                                "query_status": None,
+                                "error": "TLS/SSL connection has been closed (EOF)",
+                                "failure_markers": ["transport_error", "stage_transport_failed"],
+                            }
+                        },
+                    },
+                    {
+                        "index": 1,
+                        "candidate_id": "candidate-002",
+                        "candidate_protocol": "vless",
+                        "candidate_name": "US-02",
+                        "attempted": True,
+                        "passed": False,
+                        "skipped": False,
+                        "skip_reason": None,
+                        "summary": {
+                            "result": {
+                                "home_status": 403,
+                                "query_status": 403,
+                                "error": None,
+                                "failure_markers": ["stage_home_blocked"],
+                            }
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "artifact",
+            "explain-probe",
+            "--probe-summary",
+            str(probe_path),
+            "--protocol",
+            "hysteria2",
+            "--error-category",
+            "ssl_eof",
+            "--marker",
+            "stage_transport_failed",
+        ]
     )
     captured = capsys.readouterr()
 
@@ -150,4 +236,6 @@ def _assert_no_secrets(rendered: str) -> None:
     assert "raw_uri" not in lowered
     assert "public_key_placeholder" not in lowered
     assert "password_placeholder" not in lowered
+    assert "server_name" not in lowered
+    assert "hy2.example.invalid" not in lowered
     assert "00000000-0000-0000-0000-000000000000" not in lowered

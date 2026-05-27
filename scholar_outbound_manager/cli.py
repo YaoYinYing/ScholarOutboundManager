@@ -202,6 +202,9 @@ def build_parser() -> argparse.ArgumentParser:
     artifact_explain_probe_parser.add_argument("--probe-summary", required=True)
     artifact_explain_probe_parser.add_argument("--label-regex")
     artifact_explain_probe_parser.add_argument("--candidate-id")
+    artifact_explain_probe_parser.add_argument("--protocol")
+    artifact_explain_probe_parser.add_argument("--error-category")
+    artifact_explain_probe_parser.add_argument("--marker")
     artifact_explain_probe_parser.set_defaults(handler=_handle_artifact_explain_probe)
 
     select_parser = subparsers.add_parser("select")
@@ -562,6 +565,9 @@ def _handle_artifact_explain_probe(args: argparse.Namespace) -> int:
             payload,
             label_regex=args.label_regex,
             candidate_id=args.candidate_id,
+            protocol=args.protocol,
+            error_category=args.error_category,
+            marker=args.marker,
         )
     except (FileNotFoundError, ValueError, json.JSONDecodeError, re.error) as exc:
         print(f"Error: {exc}", file=sys.stderr)

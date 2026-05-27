@@ -113,9 +113,27 @@ def test_parse_clash_yaml_subscription_parses_hysteria2_candidate() -> None:
     assert candidates[0].supported is True
     assert candidates[0].password == "HY2_PASSWORD_PLACEHOLDER"
     assert candidates[0].server_name == "hy2.example.invalid"
-    assert candidates[0].alpn == "h3,h2"
     assert candidates[0].security == "hysteria"
     assert candidates[0].extra["runtime_supported_by"] == ["xray"]
+    assert candidates[0].extra["skip_cert_verify"] is True
+
+
+def test_parse_clash_yaml_subscription_maps_hysteria2_servername_to_server_name() -> None:
+    """Accept either Clash sni or servername for Hysteria2 TLS naming."""
+    candidates, summary = parse_clash_yaml_subscription(_hysteria2_servername_yaml(), "fixture-source")
+
+    assert summary.unsupported_count == 0
+    assert candidates[0].server_name == "hy2-servername.example.invalid"
+
+
+def test_parse_clash_yaml_subscription_preserves_hysteria2_skip_cert_verify_false() -> None:
+    """Keep explicit false values instead of dropping them."""
+    candidates, summary = parse_clash_yaml_subscription(_hysteria2_skip_verify_false_yaml(), "fixture-source")
+
+    assert summary.unsupported_count == 0
+    assert candidates[0].supported is True
+    assert "skip_cert_verify" in candidates[0].extra
+    assert candidates[0].extra["skip_cert_verify"] is False
 
 
 def test_parse_clash_yaml_subscription_marks_hysteria2_missing_password_unsupported() -> None:
@@ -154,6 +172,17 @@ def test_parse_clash_yaml_subscription_marks_hysteria2_obfs_unsupported() -> Non
     assert candidates[0].extra["obfs"] == "salamander"
     assert candidates[0].extra["obfs-password"] == "OBFS_PASSWORD_PLACEHOLDER"
     assert "obfs is not mapped to Xray yet" in (candidates[0].unsupported_reason or "")
+
+
+def test_parse_clash_yaml_subscription_marks_hysteria2_alpn_unsupported() -> None:
+    """Fail closed when Hysteria2 ALPN is present but not mapped."""
+    candidates, summary = parse_clash_yaml_subscription(_hysteria2_alpn_yaml(), "fixture-source")
+
+    assert summary.unsupported_count == 1
+    assert candidates[0].protocol == "hysteria2"
+    assert candidates[0].supported is False
+    assert candidates[0].alpn == "h3,h2"
+    assert "alpn is not mapped to Xray yet" in (candidates[0].unsupported_reason or "")
 
 
 def test_parse_clash_yaml_subscription_marks_incomplete_vless_unsupported() -> None:
@@ -291,11 +320,34 @@ proxies:
     password: HY2_PASSWORD_PLACEHOLDER
     sni: hy2.example.invalid
     skip-cert-verify: true
-    alpn:
-      - h3
-      - h2
     up: "100 Mbps"
     down: "100 Mbps"
+""".strip()
+
+
+def _hysteria2_servername_yaml() -> str:
+    return """
+proxies:
+  - name: "Hysteria Servername"
+    type: hysteria2
+    server: hy2.example.invalid
+    port: 443
+    password: HY2_PASSWORD_PLACEHOLDER
+    servername: hy2-servername.example.invalid
+    skip-cert-verify: true
+""".strip()
+
+
+def _hysteria2_skip_verify_false_yaml() -> str:
+    return """
+proxies:
+  - name: "Hysteria Skip Verify False"
+    type: hysteria2
+    server: hy2.example.invalid
+    port: 443
+    password: HY2_PASSWORD_PLACEHOLDER
+    sni: hy2.example.invalid
+    skip-cert-verify: false
 """.strip()
 
 
@@ -339,6 +391,21 @@ proxies:
     password: HY2_PASSWORD_PLACEHOLDER
     obfs: salamander
     obfs-password: OBFS_PASSWORD_PLACEHOLDER
+""".strip()
+
+
+def _hysteria2_alpn_yaml() -> str:
+    return """
+proxies:
+  - name: "Hysteria With ALPN"
+    type: hysteria2
+    server: hy2.example.invalid
+    port: 443
+    password: HY2_PASSWORD_PLACEHOLDER
+    sni: hy2.example.invalid
+    alpn:
+      - h3
+      - h2
 """.strip()
 
 
