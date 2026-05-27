@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import sys
 from collections import Counter
 from collections.abc import Sequence
@@ -35,6 +36,11 @@ from scholar_outbound_manager.parsers.subscription import parse_fetched_subscrip
 from scholar_outbound_manager.probe.batch_probe import BatchProbeOptions
 from scholar_outbound_manager.probe.batch_probe import probe_candidates_sequential
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeOptions
+from scholar_outbound_manager.probe.http_probe import SocksEndpoint
+from scholar_outbound_manager.probe.http_probe import probe_http_via_socks
+from scholar_outbound_manager.probe.scholar_classifier import build_scholar_home_target
+from scholar_outbound_manager.probe.scholar_classifier import build_scholar_query_target
+from scholar_outbound_manager.probe.scholar_classifier import classify_scholar_access
 from scholar_outbound_manager.runtime import prepare_candidate_runtime
 from scholar_outbound_manager.selection import select_candidate_by_index
 from scholar_outbound_manager.sidecar import SidecarRuntimeOptions
@@ -54,6 +60,8 @@ from scholar_outbound_manager.systemd_sidecar import render_sidecar_systemd_unit
 from scholar_outbound_manager.systemd_sidecar import render_socks_outbound_snippet_for_sidecar
 from scholar_outbound_manager.systemd_sidecar import run_systemctl
 from scholar_outbound_manager.systemd_sidecar import stage_systemd_sidecar_files
+from scholar_outbound_manager.systemd_sidecar import summarize_command_results
+from scholar_outbound_manager.systemd_sidecar import summarize_system_user_results
 from scholar_outbound_manager.xray.binary import detect_xray_platform
 from scholar_outbound_manager.xray.binary import inspect_xray_binary
 from scholar_outbound_manager.xray.binary import install_xray_binary
@@ -224,6 +232,14 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser = sidecar_subparsers.add_parser(f"service-{action}")
         action_parser.add_argument("--unit-name", default="scholar-outbound-sidecar.service")
         action_parser.set_defaults(handler=_make_sidecar_service_action_handler(action))
+
+    sidecar_service_validate_parser = sidecar_subparsers.add_parser("service-validate")
+    sidecar_service_validate_parser.add_argument("--unit-name", default="scholar-outbound-sidecar.service")
+    sidecar_service_validate_parser.add_argument("--listen-host", default="127.0.0.1")
+    sidecar_service_validate_parser.add_argument("--listen-port", type=int, default=19080)
+    sidecar_service_validate_parser.add_argument("--query", default="ppr")
+    sidecar_service_validate_parser.add_argument("--request-timeout", type=float, default=15.0)
+    sidecar_service_validate_parser.set_defaults(handler=_handle_sidecar_service_validate)
 
     sidecar_service_snippet_parser = sidecar_subparsers.add_parser("service-snippet")
     sidecar_service_snippet_parser.add_argument("--listen-host", default="127.0.0.1")
@@ -835,9 +851,14 @@ def _handle_sidecar_service_install(args: argparse.Namespace) -> int:
     print("user_ensured: true")
     print(f"unit_path: {paths.unit_path}")
     print("installed: true")
-    if any(not result.ok for result in [*user_results, *install_results]):
+    user_ok, user_messages = summarize_system_user_results(user_results)
+    install_ok, install_messages = summarize_command_results(install_results)
+    messages = [*user_messages, *install_messages]
+    if messages:
+        for message in messages:
+            print(f"Error: {message}", file=sys.stderr)
         return 1
-    return 0
+    return 0 if user_ok and install_ok else 1
 
 
 def _make_sidecar_service_action_handler(action: str):
@@ -870,6 +891,53 @@ def _handle_sidecar_service_snippet(args: argparse.Namespace) -> int:
         return 1
     print(json.dumps(snippet, indent=2, ensure_ascii=False, sort_keys=True))
     return 0
+
+
+def _handle_sidecar_service_validate(args: argparse.Namespace) -> int:
+    """Validate one running production sidecar without mutating service state."""
+    try:
+        if args.listen_port <= 0:
+            raise ValueError("listen-port must be greater than 0.")
+        _validate_positive_float(args.request_timeout, "request-timeout")
+        active_result = run_systemctl("is-active", args.unit_name)
+        enabled_result = run_systemctl("is-enabled", args.unit_name)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    socks_tcp_connect = _check_tcp_connect(args.listen_host, args.listen_port, args.request_timeout)
+    home = probe_http_via_socks(
+        build_scholar_home_target(),
+        SocksEndpoint(args.listen_host, args.listen_port),
+        args.request_timeout,
+    )
+    query = probe_http_via_socks(
+        build_scholar_query_target(args.query),
+        SocksEndpoint(args.listen_host, args.listen_port),
+        args.request_timeout,
+    )
+    decision = classify_scholar_access(home, query)
+
+    service_active = active_result.ok and (active_result.stdout.strip() == "active" or active_result.returncode == 0)
+    service_enabled = enabled_result.ok and enabled_result.stdout.strip() == "enabled"
+
+    print(f"service_active: {str(service_active).lower()}")
+    print(f"service_enabled: {str(service_enabled).lower()}")
+    print(f"socks_tcp_connect: {str(socks_tcp_connect).lower()}")
+    print(f"scholar_stage: {decision.stage}")
+    print(f"scholar_passed: {str(decision.passed).lower()}")
+    print(f"home_status: {home.status_code}")
+    print(f"query_status: {query.status_code}")
+    return 0 if service_active and service_enabled and socks_tcp_connect and decision.passed else 1
+
+
+def _check_tcp_connect(host: str, port: int, timeout_seconds: float) -> bool:
+    """Return whether a TCP connection to the SOCKS endpoint succeeds."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout_seconds):
+            return True
+    except OSError:
+        return False
 
 
 def _validate_runtime_config_name(config_name: str) -> None:

@@ -13,6 +13,7 @@ from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.models import XrayConfig
 from scholar_outbound_manager.systemd_sidecar import SystemdCommandResult
 from scholar_outbound_manager.systemd_sidecar import SystemdSidecarOptions
+from scholar_outbound_manager.systemd_sidecar import all_command_results_ok
 from scholar_outbound_manager.systemd_sidecar import build_ensure_system_user_commands
 from scholar_outbound_manager.systemd_sidecar import build_systemd_sidecar_paths
 from scholar_outbound_manager.systemd_sidecar import ensure_system_user
@@ -21,6 +22,7 @@ from scholar_outbound_manager.systemd_sidecar import render_sidecar_systemd_unit
 from scholar_outbound_manager.systemd_sidecar import render_socks_outbound_snippet_for_sidecar
 from scholar_outbound_manager.systemd_sidecar import run_systemctl
 from scholar_outbound_manager.systemd_sidecar import stage_systemd_sidecar_files
+from scholar_outbound_manager.systemd_sidecar import summarize_command_results
 from scholar_outbound_manager.systemd_sidecar import validate_system_user_name
 from scholar_outbound_manager.systemd_sidecar import validate_systemd_unit_name
 
@@ -170,6 +172,43 @@ def test_ensure_system_user_runs_expected_flow() -> None:
     assert any(command[:2] == ["useradd", "--system"] for command in commands_seen)
 
 
+def test_ensure_system_user_accepts_existing_group_and_user() -> None:
+    """Treat existing system user and group checks as a successful result set."""
+    responses = {
+        ("getent", "group", "scholar-sidecar"): subprocess.CompletedProcess(
+            ["getent", "group", "scholar-sidecar"], 0, "scholar-sidecar:x:992:\n", ""
+        ),
+        ("id", "-u", "scholar-sidecar"): subprocess.CompletedProcess(
+            ["id", "-u", "scholar-sidecar"], 0, "994\n", ""
+        ),
+    }
+
+    def fake_runner(command, capture_output, text, check):
+        del capture_output, text, check
+        return responses[tuple(command)]
+
+    results = ensure_system_user(SystemdSidecarOptions(), runner=fake_runner)
+
+    assert len(results) == 2
+    assert all_command_results_ok(results) is True
+    ok, messages = summarize_command_results(results)
+    assert ok is True
+    assert messages == []
+
+
+def test_summarize_command_results_reports_failures() -> None:
+    """Return a compact failure summary for nonzero command results."""
+    ok, messages = summarize_command_results(
+        [
+            SystemdCommandResult(["groupadd", "--system", "scholar-sidecar"], 0, "", "", True),
+            SystemdCommandResult(["systemctl", "daemon-reload"], 1, "", "boom", False),
+        ]
+    )
+
+    assert ok is False
+    assert messages == ["systemctl daemon-reload: returncode=1"]
+
+
 def test_install_systemd_unit_writes_unit_and_calls_daemon_reload(tmp_path) -> None:
     """Write the unit file and call daemon-reload through the injected runner."""
     commands_seen: list[list[str]] = []
@@ -200,6 +239,21 @@ def test_run_systemctl_allows_allowlisted_actions() -> None:
 
     assert result.command == ["systemctl", "status", "scholar-outbound-sidecar.service"]
     assert commands_seen == [["systemctl", "status", "scholar-outbound-sidecar.service"]]
+
+
+def test_run_systemctl_allows_is_enabled() -> None:
+    """Allow systemctl is-enabled for read-only validation flows."""
+    commands_seen: list[list[str]] = []
+
+    def fake_runner(command, capture_output, text, check):
+        del capture_output, text, check
+        commands_seen.append(list(command))
+        return subprocess.CompletedProcess(command, 0, "enabled", "")
+
+    result = run_systemctl("is-enabled", "scholar-outbound-sidecar.service", runner=fake_runner)
+
+    assert result.command == ["systemctl", "is-enabled", "scholar-outbound-sidecar.service"]
+    assert commands_seen == [["systemctl", "is-enabled", "scholar-outbound-sidecar.service"]]
 
 
 def test_run_systemctl_rejects_arbitrary_action() -> None:

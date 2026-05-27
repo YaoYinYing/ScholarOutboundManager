@@ -79,6 +79,10 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "sidecar service-install" in readme_text
     assert "sidecar service-start" in readme_text
     assert "sidecar service-enable" in readme_text
+    assert "sidecar service-status" in readme_text
+    assert "sidecar service-validate" in readme_text
+    assert "sidecar service-stop" in readme_text
+    assert "sidecar service-disable" in readme_text
     assert "sidecar service-snippet" in readme_text
     assert "--parallel 4" in readme_text
     assert "--keep-all-passed" in readme_text
@@ -92,6 +96,8 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "does not modify production xray" in readme_text.lower() or "does not modify production xrayr" in readme_text.lower()
     assert "does not kill external xray processes" in readme_text.lower()
     assert "docker is not the default lifecycle manager" in readme_text.lower()
+    assert "do not use `killall xray`" in readme_text.lower()
+    assert "do not use `pkill xray`" in readme_text.lower()
     assert "step 5: generate xray fragments from passed candidates" not in readme_text.lower()
 
 

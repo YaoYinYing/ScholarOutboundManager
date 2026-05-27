@@ -6,8 +6,8 @@ import subprocess
 from pathlib import Path
 
 from scholar_outbound_manager import cli
+from scholar_outbound_manager.probe.http_probe import HttpProbeResponse
 from scholar_outbound_manager.systemd_sidecar import SystemdCommandResult
-from scholar_outbound_manager.systemd_sidecar import SystemdSidecarPaths
 
 
 def test_sidecar_service_render_prints_unit(tmp_path, capsys) -> None:
@@ -110,6 +110,192 @@ def test_sidecar_service_install_uses_monkeypatched_installer_and_does_not_start
     assert called["run_systemctl"] is False
 
 
+def test_sidecar_service_install_returns_zero_when_group_user_exist_and_reload_succeeds(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    """Return 0 when preparation and daemon-reload all succeed."""
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        cli,
+        "ensure_system_user",
+        lambda options: [
+            SystemdCommandResult(["getent", "group", options.service_group], 0, "", "", True),
+            SystemdCommandResult(["id", "-u", options.service_user], 0, "", "", True),
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_systemd_unit",
+        lambda unit_text, unit_path: [SystemdCommandResult(["systemctl", "daemon-reload"], 0, "", "", True)],
+    )
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "service-install",
+            "--install-root",
+            str(tmp_path / "opt"),
+            "--config-dir",
+            str(tmp_path / "etc"),
+            "--state-dir",
+            str(tmp_path / "var"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "installed: true" in captured.out
+    assert captured.err == ""
+
+
+def test_sidecar_service_install_returns_zero_when_group_user_created_successfully(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    """Return 0 when missing dedicated accounts are created successfully."""
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        cli,
+        "ensure_system_user",
+        lambda options: [
+            SystemdCommandResult(["getent", "group", options.service_group], 2, "", "", False),
+            SystemdCommandResult(["groupadd", "--system", options.service_group], 0, "", "", True),
+            SystemdCommandResult(["id", "-u", options.service_user], 1, "", "", False),
+            SystemdCommandResult(["useradd", "--system", options.service_user], 0, "", "", True),
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_systemd_unit",
+        lambda unit_text, unit_path: [SystemdCommandResult(["systemctl", "daemon-reload"], 0, "", "", True)],
+    )
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "service-install",
+            "--install-root",
+            str(tmp_path / "opt"),
+            "--config-dir",
+            str(tmp_path / "etc"),
+            "--state-dir",
+            str(tmp_path / "var"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "installed: true" in captured.out
+    assert captured.err == ""
+
+
+def test_sidecar_service_install_returns_one_when_groupadd_fails(tmp_path, capsys, monkeypatch) -> None:
+    """Return 1 when the dedicated group cannot be created."""
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        cli,
+        "ensure_system_user",
+        lambda options: [
+            SystemdCommandResult(["getent", "group", options.service_group], 2, "", "", False),
+            SystemdCommandResult(["groupadd", "--system", options.service_group], 1, "", "", False),
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_systemd_unit",
+        lambda unit_text, unit_path: [SystemdCommandResult(["systemctl", "daemon-reload"], 0, "", "", True)],
+    )
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "service-install",
+            "--install-root",
+            str(tmp_path / "opt"),
+            "--config-dir",
+            str(tmp_path / "etc"),
+            "--state-dir",
+            str(tmp_path / "var"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "installed: true" in captured.out
+    assert "groupadd --system" in captured.err
+
+
+def test_sidecar_service_install_returns_one_when_useradd_fails(tmp_path, capsys, monkeypatch) -> None:
+    """Return 1 when the dedicated user cannot be created."""
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        cli,
+        "ensure_system_user",
+        lambda options: [
+            SystemdCommandResult(["getent", "group", options.service_group], 0, "", "", True),
+            SystemdCommandResult(["id", "-u", options.service_user], 1, "", "", False),
+            SystemdCommandResult(["useradd", "--system", options.service_user], 1, "", "", False),
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_systemd_unit",
+        lambda unit_text, unit_path: [SystemdCommandResult(["systemctl", "daemon-reload"], 0, "", "", True)],
+    )
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "service-install",
+            "--install-root",
+            str(tmp_path / "opt"),
+            "--config-dir",
+            str(tmp_path / "etc"),
+            "--state-dir",
+            str(tmp_path / "var"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "useradd --system" in captured.err
+
+
+def test_sidecar_service_install_returns_one_when_daemon_reload_fails(tmp_path, capsys, monkeypatch) -> None:
+    """Return 1 when daemon-reload fails after successful preparation."""
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        cli,
+        "ensure_system_user",
+        lambda options: [SystemdCommandResult(["id", "-u", options.service_user], 0, "", "", True)],
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_systemd_unit",
+        lambda unit_text, unit_path: [SystemdCommandResult(["systemctl", "daemon-reload"], 1, "", "", False)],
+    )
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "service-install",
+            "--install-root",
+            str(tmp_path / "opt"),
+            "--config-dir",
+            str(tmp_path / "etc"),
+            "--state-dir",
+            str(tmp_path / "var"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "systemctl daemon-reload" in captured.err
+
+
 def test_sidecar_service_actions_call_expected_systemctl(tmp_path, capsys, monkeypatch) -> None:
     """Route service lifecycle commands through the expected systemctl action."""
     observed: list[str] = []
@@ -136,6 +322,94 @@ def test_sidecar_service_snippet_prints_socks_outbound_json(capsys) -> None:
     assert exit_code == 0
     assert '"protocol": "socks"' in captured.out
     assert '"port": 19080' in captured.out
+
+
+def test_sidecar_service_validate_returns_zero_when_all_checks_pass(capsys, monkeypatch) -> None:
+    """Return 0 when service state, TCP reachability, and Scholar validation all pass."""
+    monkeypatch.setattr(
+        cli,
+        "run_systemctl",
+        lambda action, unit_name: SystemdCommandResult(
+            ["systemctl", action, unit_name],
+            0,
+            "active\n" if action == "is-active" else "enabled\n",
+            "",
+            True,
+        ),
+    )
+    monkeypatch.setattr(cli, "_check_tcp_connect", lambda host, port, timeout_seconds: True)
+    monkeypatch.setattr(cli, "probe_http_via_socks", lambda target, socks, timeout: _make_http_response(target.url, 200))
+
+    exit_code = cli.main(["sidecar", "service-validate"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "service_active: true" in captured.out
+    assert "service_enabled: true" in captured.out
+    assert "socks_tcp_connect: true" in captured.out
+    assert "scholar_passed: true" in captured.out
+    _assert_no_secrets(captured.out + captured.err)
+
+
+def test_sidecar_service_validate_returns_one_when_service_inactive(capsys, monkeypatch) -> None:
+    """Return 1 when the unit is not active."""
+    monkeypatch.setattr(
+        cli,
+        "run_systemctl",
+        lambda action, unit_name: SystemdCommandResult(
+            ["systemctl", action, unit_name],
+            3 if action == "is-active" else 0,
+            "inactive\n" if action == "is-active" else "enabled\n",
+            "",
+            action != "is-active",
+        ),
+    )
+    monkeypatch.setattr(cli, "_check_tcp_connect", lambda host, port, timeout_seconds: True)
+    monkeypatch.setattr(cli, "probe_http_via_socks", lambda target, socks, timeout: _make_http_response(target.url, 200))
+
+    exit_code = cli.main(["sidecar", "service-validate"])
+
+    assert exit_code == 1
+
+
+def test_sidecar_service_validate_returns_one_when_tcp_connect_fails(capsys, monkeypatch) -> None:
+    """Return 1 when the SOCKS listener is not reachable."""
+    monkeypatch.setattr(
+        cli,
+        "run_systemctl",
+        lambda action, unit_name: SystemdCommandResult(["systemctl", action, unit_name], 0, "active\n" if action == "is-active" else "enabled\n", "", True),
+    )
+    monkeypatch.setattr(cli, "_check_tcp_connect", lambda host, port, timeout_seconds: False)
+    monkeypatch.setattr(cli, "probe_http_via_socks", lambda target, socks, timeout: _make_http_response(target.url, 200))
+
+    exit_code = cli.main(["sidecar", "service-validate"])
+
+    assert exit_code == 1
+
+
+def test_sidecar_service_validate_returns_one_when_scholar_query_blocked(capsys, monkeypatch) -> None:
+    """Return 1 when Scholar access through the sidecar does not pass."""
+    monkeypatch.setattr(
+        cli,
+        "run_systemctl",
+        lambda action, unit_name: SystemdCommandResult(["systemctl", action, unit_name], 0, "active\n" if action == "is-active" else "enabled\n", "", True),
+    )
+    monkeypatch.setattr(cli, "_check_tcp_connect", lambda host, port, timeout_seconds: True)
+
+    def fake_probe(target, socks, timeout):
+        del socks, timeout
+        if "scholar.google.com/schhp" in target.url:
+            return _make_http_response(target.url, 200)
+        return _make_http_response(target.url, 403)
+
+    monkeypatch.setattr(cli, "probe_http_via_socks", fake_probe)
+
+    exit_code = cli.main(["sidecar", "service-validate"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "scholar_passed: false" in captured.out
+    _assert_no_secrets(captured.out + captured.err)
 
 
 def test_sidecar_service_invalid_unit_name_returns_one(capsys) -> None:
@@ -241,3 +515,16 @@ def _assert_no_secrets(rendered: str) -> None:
     assert "password" not in lowered
     assert "token" not in lowered
     assert "secret" not in lowered
+
+
+def _make_http_response(url: str, status_code: int) -> HttpProbeResponse:
+    return HttpProbeResponse(
+        url=url,
+        status_code=status_code,
+        reason="OK" if status_code == 200 else "Forbidden",
+        headers={},
+        body_prefix="",
+        elapsed_ms=10,
+        timed_out=False,
+        error=None,
+    )

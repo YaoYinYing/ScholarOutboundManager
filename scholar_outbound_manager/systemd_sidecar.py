@@ -61,6 +61,57 @@ class SystemdCommandResult:
     ok: bool
 
 
+def all_command_results_ok(results: list[SystemdCommandResult]) -> bool:
+    """Return True only when every system command result succeeded."""
+    return all(result.ok for result in results)
+
+
+def summarize_command_results(results: list[SystemdCommandResult]) -> tuple[bool, list[str]]:
+    """Summarize command failures without echoing full subprocess output."""
+    failures = [result for result in results if not result.ok]
+    if not failures:
+        return True, []
+    messages = [
+        f"{' '.join(result.command[:3])}: returncode={result.returncode}"
+        for result in failures
+    ]
+    return False, messages
+
+
+def system_user_preparation_ok(results: list[SystemdCommandResult]) -> bool:
+    """Return True when system user/group checks either pass or recover via create commands."""
+    command_map = {tuple(result.command): result for result in results}
+    group_check = next((result for result in results if result.command[:2] == ["getent", "group"]), None)
+    user_check = next((result for result in results if result.command[:2] == ["id", "-u"]), None)
+
+    group_ok = group_check is not None and (
+        group_check.ok
+        or command_map.get(("groupadd", "--system", group_check.command[-1])) is not None
+        and command_map[("groupadd", "--system", group_check.command[-1])].ok
+    )
+    user_ok = user_check is not None and (
+        user_check.ok
+        or any(
+            result.command[:2] == ["useradd", "--system"] and result.ok
+            for result in results
+        )
+    )
+    return group_ok and user_ok
+
+
+def summarize_system_user_results(results: list[SystemdCommandResult]) -> tuple[bool, list[str]]:
+    """Summarize only unrecovered user/group preparation failures."""
+    if system_user_preparation_ok(results):
+        return True, []
+    relevant = [
+        result
+        for result in results
+        if result.command[:2] in (["getent", "group"], ["groupadd", "--system"], ["id", "-u"], ["useradd", "--system"])
+        and not result.ok
+    ]
+    return summarize_command_results(relevant)
+
+
 def validate_systemd_unit_name(unit_name: str) -> None:
     """Validate one systemd unit file name."""
     if not unit_name:
@@ -283,7 +334,7 @@ def run_systemctl(
 ) -> SystemdCommandResult:
     """Run one allowlisted systemctl action for the configured unit."""
     validate_systemd_unit_name(unit_name)
-    if action not in {"start", "stop", "restart", "status", "enable", "disable", "is-active"}:
+    if action not in {"start", "stop", "restart", "status", "enable", "disable", "is-active", "is-enabled"}:
         raise ValueError("action is not allowed for run_systemctl.")
     return _run_command(["systemctl", action, unit_name], runner)
 

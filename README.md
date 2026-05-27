@@ -277,6 +277,38 @@ scholar-outbound-manager sidecar service-snippet \
 - Docker is not the default lifecycle manager.
 - In production, the preferred sequence is: full probe, select a passed candidate, stage the sidecar, install the unit, start the unit, check service status, then manually point production Xray or XrayR at the localhost SOCKS sidecar.
 
+## Production operations
+
+Validate the deployed sidecar without printing runtime config content:
+
+```bash
+scholar-outbound-manager sidecar service-status \
+  --unit-name scholar-outbound-sidecar.service
+
+scholar-outbound-manager sidecar service-validate \
+  --unit-name scholar-outbound-sidecar.service \
+  --listen-host 127.0.0.1 \
+  --listen-port 19080
+
+systemctl is-active scholar-outbound-sidecar.service
+systemctl is-enabled scholar-outbound-sidecar.service
+```
+
+Rollback or stop the sidecar without touching external Xray services:
+
+```bash
+scholar-outbound-manager sidecar service-stop \
+  --unit-name scholar-outbound-sidecar.service
+
+scholar-outbound-manager sidecar service-disable \
+  --unit-name scholar-outbound-sidecar.service
+```
+
+Do not print `/etc/scholar-outbound-manager/scholar_sidecar_runtime.json`.
+Do not use `killall xray`.
+Do not use `pkill xray`.
+Do not modify production Xray, XrayR, or `x-ui` from this project.
+
 ## Typical Workflow
 
 ### Step 1: prepare local config
