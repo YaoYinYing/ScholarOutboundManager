@@ -152,6 +152,51 @@ def test_select_choose_strategy_first(tmp_path: Path, capsys) -> None:
     assert "selection_method: first" in captured.out
 
 
+def test_select_choose_strategy_region_hint(tmp_path: Path, capsys) -> None:
+    """Allow region-hint selection from the passed pool."""
+    candidates_path = _write_passed_candidates(tmp_path)
+
+    exit_code = cli.main(
+        [
+            "select",
+            "choose",
+            "--candidates",
+            str(candidates_path),
+            "--strategy",
+            "region_hint",
+            "--preferred-region-hint",
+            "JP",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "selection_method: region_hint" in captured.out
+    assert "selected_region_hint: JP" in captured.out
+
+
+def test_select_choose_region_hint_falls_back_when_missing(tmp_path: Path, capsys) -> None:
+    """Fall back safely when no passed candidate matches the preferred region hint."""
+    candidates_path = _write_passed_candidates(tmp_path)
+
+    exit_code = cli.main(
+        [
+            "select",
+            "choose",
+            "--candidates",
+            str(candidates_path),
+            "--strategy",
+            "region_hint",
+            "--preferred-region-hint",
+            "SG",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "selection_method: fallback:first" in captured.out
+
+
 def test_select_choose_missing_geo_cache_falls_back_when_allowed(tmp_path: Path, capsys) -> None:
     """Fall back to first when geo cache is unavailable."""
     candidates_path = _write_passed_candidates(tmp_path)
@@ -278,6 +323,7 @@ def _write_passed_candidates(tmp_path: Path) -> Path:
                             "security": "tls",
                             "server_name": "www.cloudflare.com",
                             "supported": True,
+                            "extra": {"display_name": "Tokyo Display"},
                         },
                         "probe": {
                             "candidate_id": "candidate-002",
@@ -293,6 +339,11 @@ def _write_passed_candidates(tmp_path: Path) -> Path:
                         },
                     },
                 ],
+                "artifact_type": "passed_candidates",
+                "run_id": "probe-1",
+                "created_at": "2026-05-27T00:00:00Z",
+                "source_candidates_hash": "abcd1234abcd1234",
+                "source_probe_summary_hash": "beef5678beef5678",
             }
         ),
         encoding="utf-8",

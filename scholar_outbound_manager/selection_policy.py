@@ -28,11 +28,13 @@ class SelectionPolicyOptions:
 
     preferred_candidate_id: str | None = None
     preferred_candidate_index: int | None = None
+    preferred_region_hint: str | None = None
     selected_candidate_path: str | None = None
     strategy: str = "auto"
     geo_cache_path: str | None = "state_data/geo/candidate_geo_cache.json"
     host_geo_path: str | None = "state_data/geo/host_geo.json"
     prefer_geo: bool = True
+    prefer_region_hint: bool = False
     fallback_to_first: bool = True
 
 
@@ -61,11 +63,13 @@ def select_candidate_with_policy(
     options = SelectionPolicyOptions(
         preferred_candidate_id=options.preferred_candidate_id,
         preferred_candidate_index=options.preferred_candidate_index,
+        preferred_region_hint=options.preferred_region_hint,
         selected_candidate_path=options.selected_candidate_path,
         strategy=normalized_strategy,
         geo_cache_path=options.geo_cache_path,
         host_geo_path=options.host_geo_path,
         prefer_geo=options.prefer_geo,
+        prefer_region_hint=options.prefer_region_hint,
         fallback_to_first=options.fallback_to_first,
     )
     _validate_strategy(options.strategy)
@@ -100,6 +104,8 @@ def select_candidate_with_policy(
             reason="selected first available candidate",
             fallback_to_first=options.fallback_to_first,
         )
+    if strategy == "region_hint":
+        return _select_region_hint(payload, options)
     if strategy == "manual":
         raise ValueError("manual strategy requires selected_candidate_path, preferred_candidate_id, or preferred_candidate_index.")
     raise ValueError(f"Unsupported selection strategy: {strategy}")
@@ -124,11 +130,13 @@ def explain_selection_policy(
     options = SelectionPolicyOptions(
         preferred_candidate_id=options.preferred_candidate_id,
         preferred_candidate_index=options.preferred_candidate_index,
+        preferred_region_hint=options.preferred_region_hint,
         selected_candidate_path=options.selected_candidate_path,
         strategy=normalized_strategy,
         geo_cache_path=options.geo_cache_path,
         host_geo_path=options.host_geo_path,
         prefer_geo=options.prefer_geo,
+        prefer_region_hint=options.prefer_region_hint,
         fallback_to_first=options.fallback_to_first,
     )
     return {
@@ -173,6 +181,8 @@ def _resolve_effective_strategy(payload: dict[str, object], options: SelectionPo
         return "geo_nearest"
     if options.strategy == "first":
         return "first"
+    if options.strategy == "region_hint":
+        return "region_hint"
 
     if (
         options.selected_candidate_path is not None
@@ -190,6 +200,9 @@ def _resolve_effective_strategy(payload: dict[str, object], options: SelectionPo
             candidate_geo = {}
         if host_geo is not None and candidate_geo:
             return "geo_nearest"
+
+    if options.prefer_region_hint and options.preferred_region_hint:
+        return "region_hint"
 
     if options.fallback_to_first:
         return "first"
@@ -263,6 +276,40 @@ def _select_first_available(
     raise ValueError("No candidates are available for selection.")
 
 
+def _select_region_hint(
+    payload: dict[str, object],
+    options: SelectionPolicyOptions,
+) -> tuple[CandidateProxy, dict[str, object] | None, SelectionDecision]:
+    """Select the first passed candidate matching the preferred region hint."""
+    preferred_region_hint = (options.preferred_region_hint or "").strip().upper()
+    if not preferred_region_hint:
+        raise ValueError("region_hint strategy requires preferred_region_hint.")
+    catalog = _build_eligible_catalog(payload)
+    matched_entry = next(
+        (
+            entry
+            for entry in catalog
+            if entry.passed and isinstance(entry.region_hint, str) and entry.region_hint.upper() == preferred_region_hint
+        ),
+        None,
+    )
+    if matched_entry is not None:
+        record = select_candidate_by_id(payload, matched_entry.candidate_id)
+        return _record_to_selection(
+            record,
+            method="region_hint",
+            reason=f"selected first passed candidate matching preferred region hint: {preferred_region_hint}",
+        )
+    candidate, probe, decision = _select_first_available(
+        payload,
+        method="fallback:first",
+        reason="preferred region hint was not found; selected first available candidate",
+        fallback_to_first=options.fallback_to_first,
+    )
+    decision.warnings.append("preferred_region_hint_not_found")
+    return candidate, probe, decision
+
+
 def _build_eligible_catalog(payload: dict[str, object]) -> list[CandidateCatalogEntry]:
     """Build the catalog entries eligible for geo ranking."""
     catalog = build_candidate_catalog(payload)
@@ -333,14 +380,16 @@ def _safe_load_candidate_geo_cache(path: str | None) -> dict[str, CandidateGeoRe
 
 def _validate_strategy(strategy: str) -> None:
     """Validate one strategy option."""
-    if strategy not in {"manual", "geo_nearest", "first", "auto"}:
-        raise ValueError("strategy must be one of: manual, geo_nearest, first, auto.")
+    if strategy not in {"manual", "geo_nearest", "region_hint", "first", "auto"}:
+        raise ValueError("strategy must be one of: manual, geo_nearest, region_hint, first, auto.")
 
 
 def _normalize_strategy(strategy: str) -> str:
     """Normalize user-facing strategy spellings."""
     if strategy == "geo-nearest":
         return "geo_nearest"
+    if strategy == "region-hint":
+        return "region_hint"
     return strategy
 
 

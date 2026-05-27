@@ -24,6 +24,9 @@ def test_build_candidate_artifact_includes_schema_version() -> None:
     )
 
     assert payload["schema_version"] == 1
+    assert payload["artifact_type"] == "candidates"
+    assert isinstance(payload["run_id"], str)
+    assert isinstance(payload["created_at"], str)
 
 
 def test_build_candidate_artifact_marks_output_sensitive() -> None:

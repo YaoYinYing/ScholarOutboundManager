@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -219,6 +220,7 @@ def stage_systemd_sidecar_files(
     xray_config: XrayConfig,
     options: SystemdSidecarOptions,
     source_xray_binary_path: str | Path | None = None,
+    skip_xray_binary_copy: bool = False,
     file_ops: object | None = None,
 ) -> SystemdSidecarPaths:
     """Stage production sidecar files without starting systemd or Xray."""
@@ -235,8 +237,12 @@ def stage_systemd_sidecar_files(
     _ops_mkdir(file_ops, runtime_config_path.parent, mode=0o750)
     _ops_mkdir(file_ops, state_dir, mode=0o750)
 
-    if source_binary_path.resolve() != destination_binary_path.resolve():
-        _ops_copy2(file_ops, source_binary_path, destination_binary_path)
+    binary_copy_mode = _stage_xray_binary(
+        source_binary_path=source_binary_path,
+        destination_binary_path=destination_binary_path,
+        skip_xray_binary_copy=skip_xray_binary_copy,
+        file_ops=file_ops,
+    )
     _ops_chmod(file_ops, destination_binary_path, 0o755)
     _ops_chown(file_ops, destination_binary_path, options.service_user, options.service_group)
 
@@ -260,6 +266,7 @@ def stage_systemd_sidecar_files(
             "listen_host": options.listen_host,
             "listen_port": options.listen_port,
             "xray_binary_path": paths.xray_binary_path,
+            "xray_binary_copy_mode": binary_copy_mode,
             "runtime_config_path": paths.runtime_config_path,
             "metadata_path": paths.metadata_path,
             "state_dir": paths.state_dir,
@@ -281,6 +288,7 @@ def stage_single_xray_pool_files(
     xray_config: XrayConfig,
     options: SystemdSidecarOptions,
     source_xray_binary_path: str | Path | None = None,
+    skip_xray_binary_copy: bool = False,
     file_ops: object | None = None,
     allow_port_conflict: bool = False,
 ) -> SystemdSidecarPaths:
@@ -302,15 +310,11 @@ def stage_single_xray_pool_files(
     metadata_path = Path(paths.metadata_path)
 
     port_availability = check_pool_ports_available(plan)
-    unavailable_ports = [
-        entry.listen_port
-        for entry in plan.entries
-        if not port_availability.get(entry.pool_index, False)
-    ]
+    unavailable_ports = [entry.listen_port for entry in plan.entries if not port_availability.get(entry.pool_index, False)]
     if unavailable_ports and not allow_port_conflict:
         unavailable_text = ", ".join(str(port) for port in unavailable_ports)
         raise ValueError(
-            "Pool listen ports are not available: "
+            "Pool listen ports are already in use: "
             f"{unavailable_text}. Stop the running sidecar service first or choose a different base port."
         )
 
@@ -327,8 +331,12 @@ def stage_single_xray_pool_files(
     _ops_mkdir(file_ops, runtime_config_path.parent, mode=0o750)
     _ops_mkdir(file_ops, state_dir, mode=0o750)
 
-    if source_binary_path.resolve() != destination_binary_path.resolve():
-        _ops_copy2(file_ops, source_binary_path, destination_binary_path)
+    binary_copy_mode = _stage_xray_binary(
+        source_binary_path=source_binary_path,
+        destination_binary_path=destination_binary_path,
+        skip_xray_binary_copy=skip_xray_binary_copy,
+        file_ops=file_ops,
+    )
     _ops_chmod(file_ops, destination_binary_path, 0o755)
     _ops_chown(file_ops, destination_binary_path, options.service_user, options.service_group)
 
@@ -346,6 +354,7 @@ def stage_single_xray_pool_files(
             "base_port": plan.base_port,
             "ports_available": port_availability,
             "xray_binary_path": paths.xray_binary_path,
+            "xray_binary_copy_mode": binary_copy_mode,
             "runtime_config_path": paths.runtime_config_path,
             "metadata_path": paths.metadata_path,
             "state_dir": paths.state_dir,
@@ -481,6 +490,50 @@ def _ops_chown(file_ops: object | None, path: Path, user: str, group: str) -> No
         file_ops.chown(path, user, group)
         return
     shutil.chown(path, user=user, group=group)
+
+
+def _stage_xray_binary(
+    *,
+    source_binary_path: Path,
+    destination_binary_path: Path,
+    skip_xray_binary_copy: bool,
+    file_ops: object | None,
+) -> str:
+    """Stage the Xray binary without overwriting a differing existing target."""
+    if skip_xray_binary_copy:
+        _require_existing_executable_binary(destination_binary_path)
+        return "skipped"
+    if source_binary_path.resolve() == destination_binary_path.resolve():
+        _require_existing_executable_binary(destination_binary_path)
+        return "in_place"
+    if destination_binary_path.exists():
+        source_hash = _compute_file_sha256(source_binary_path)
+        destination_hash = _compute_file_sha256(destination_binary_path)
+        if source_hash == destination_hash:
+            _require_existing_executable_binary(destination_binary_path)
+            return "unchanged"
+        raise ValueError(
+            "target Xray binary differs; stop service first or use explicit binary upgrade workflow"
+        )
+    _ops_copy2(file_ops, source_binary_path, destination_binary_path)
+    return "copied"
+
+
+def _require_existing_executable_binary(path: Path) -> None:
+    """Require one existing executable Xray binary."""
+    if not path.exists():
+        raise ValueError("target Xray binary does not exist; cannot skip binary copy.")
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise ValueError("target Xray binary is not executable; cannot skip binary copy.")
+
+
+def _compute_file_sha256(path: Path) -> str:
+    """Compute one SHA-256 digest for a local file."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _validate_plain_file_name(value: str, field_name: str) -> None:

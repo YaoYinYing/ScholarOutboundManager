@@ -63,6 +63,84 @@ def test_sidecar_service_stage_with_tmp_paths_stages_files(tmp_path, capsys, mon
     _assert_no_secrets(captured.out + captured.err)
 
 
+def test_sidecar_service_stage_skip_binary_copy_uses_existing_target(tmp_path, capsys, monkeypatch) -> None:
+    """Allow runtime restaging without overwriting the Xray binary."""
+    config_path = _write_config(tmp_path)
+    candidates_path = _write_candidates(tmp_path)
+    existing_binary = tmp_path / "opt" / "xray" / "xray"
+    existing_binary.parent.mkdir(parents=True, exist_ok=True)
+    existing_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    existing_binary.chmod(0o755)
+
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr("scholar_outbound_manager.systemd_sidecar.shutil.chown", lambda *args, **kwargs: None)
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "service-stage",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--candidate-index",
+            "0",
+            "--install-root",
+            str(tmp_path / "opt"),
+            "--config-dir",
+            str(tmp_path / "etc"),
+            "--state-dir",
+            str(tmp_path / "var"),
+            "--skip-xray-binary-copy",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "staged: true" in captured.out
+
+
+def test_sidecar_service_stage_rejects_different_existing_binary(tmp_path, capsys, monkeypatch) -> None:
+    """Return a safe error instead of overwriting a differing target binary."""
+    config_path = _write_config(tmp_path)
+    candidates_path = _write_candidates(tmp_path)
+    source_binary = tmp_path / "source-xray"
+    source_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    source_binary.chmod(0o755)
+    existing_binary = tmp_path / "opt" / "xray" / "xray"
+    existing_binary.parent.mkdir(parents=True, exist_ok=True)
+    existing_binary.write_text("#!/bin/sh\necho different\n", encoding="utf-8")
+    existing_binary.chmod(0o755)
+
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr("scholar_outbound_manager.systemd_sidecar.shutil.chown", lambda *args, **kwargs: None)
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "service-stage",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--candidate-index",
+            "0",
+            "--install-root",
+            str(tmp_path / "opt"),
+            "--config-dir",
+            str(tmp_path / "etc"),
+            "--state-dir",
+            str(tmp_path / "var"),
+            "--source-xray-binary",
+            str(source_binary),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "explicit binary upgrade workflow" in captured.err
+
+
 def test_sidecar_service_stage_accepts_selected_candidate_artifact(tmp_path, capsys, monkeypatch) -> None:
     """Allow service-stage to read one selected-candidate artifact."""
     config_path = _write_config(tmp_path)

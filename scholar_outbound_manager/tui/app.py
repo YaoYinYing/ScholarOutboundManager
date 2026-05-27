@@ -21,9 +21,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="scholar-outbound-manager-tui")
     parser.add_argument("--candidates", required=True)
     parser.add_argument("--output", default="state_data/selected_candidate.json")
-    parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "first"))
+    parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "region_hint", "region-hint", "first"))
     parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
     parser.add_argument("--host-geo", default="state_data/geo/host_geo.json")
+    parser.add_argument("--preferred-region-hint")
     parser.add_argument("--prefer-geo", dest="prefer_geo", action="store_true", default=True)
     parser.add_argument("--no-prefer-geo", dest="prefer_geo", action="store_false")
     return parser
@@ -37,6 +38,7 @@ def load_dashboard_state(
     geo_cache_path: str = "state_data/geo/candidate_geo_cache.json",
     host_geo_path: str = "state_data/geo/host_geo.json",
     prefer_geo: bool = True,
+    preferred_region_hint: str | None = None,
 ) -> dict[str, object]:
     """Load the redacted dashboard state without importing Textual."""
     payload = load_candidate_payload(candidates_path)
@@ -49,6 +51,8 @@ def load_dashboard_state(
             geo_cache_path=geo_cache_path,
             host_geo_path=host_geo_path,
             prefer_geo=prefer_geo,
+            preferred_region_hint=preferred_region_hint,
+            prefer_region_hint=preferred_region_hint is not None,
             fallback_to_first=True,
         ),
     )
@@ -102,6 +106,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         geo_cache_path=args.geo_cache,
         host_geo_path=args.host_geo,
         prefer_geo=args.prefer_geo,
+        preferred_region_hint=args.preferred_region_hint,
     )
 
     class ScholarOutboundManagerTui(App[None]):
@@ -136,6 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 geo_cache_path=args.geo_cache,
                 host_geo_path=args.host_geo,
                 prefer_geo=args.prefer_geo,
+                preferred_region_hint=args.preferred_region_hint,
             )
             self._load_table()
             self._render_status("Reloaded catalog.")

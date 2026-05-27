@@ -62,6 +62,9 @@ def test_serialize_batch_probe_summary_includes_schema_version_and_records() -> 
     serialized = serialize_batch_probe_summary(_make_batch_probe_summary())
 
     assert serialized["schema_version"] == 1
+    assert serialized["artifact_type"] == "probe_summary"
+    assert isinstance(serialized["run_id"], str)
+    assert isinstance(serialized["created_at"], str)
     assert serialized["parallel_workers"] == 1
     assert serialized["keep_all_passed"] is False
     assert serialized["retained_passed_count"] == 1
@@ -118,6 +121,7 @@ def test_build_passed_candidates_payload_marks_sensitive_and_keeps_credentials()
     payload = build_passed_candidates_payload(candidates, _make_batch_probe_summary())
 
     assert payload["sensitive"] is True
+    assert payload["artifact_type"] == "passed_candidates"
     assert "must not be committed" in payload["description"]
     assert payload["passed_count"] == 1
     assert payload["retained_passed_count"] == 1
@@ -157,6 +161,10 @@ def test_write_probe_artifacts_writes_both_files_and_returns_counts(tmp_path) ->
     assert result["retained_passed_count"] == summary.retained_passed_count
     assert result["truncated"] == summary.truncated
     assert result["attempted_count"] == summary.attempted_count
+    summary_payload = json.loads((tmp_path / "artifacts" / "summary.json").read_text(encoding="utf-8"))
+    passed_payload = json.loads((tmp_path / "artifacts" / "passed.json").read_text(encoding="utf-8"))
+    assert summary_payload["source_candidates_hash"] is None
+    assert passed_payload["source_probe_summary_hash"]
 
 
 def test_write_passed_candidates_rejects_out_of_range_indices(tmp_path) -> None:

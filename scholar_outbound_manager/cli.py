@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import datetime
+from datetime import timezone
+import re
 import socket
 import sys
 from collections import Counter
@@ -72,6 +75,12 @@ from scholar_outbound_manager.sidecar_pool import validate_pool_sidecar
 from scholar_outbound_manager.sidecar_pool import write_pool_plan
 from scholar_outbound_manager.state.candidate_artifact import build_candidate_artifact
 from scholar_outbound_manager.state.candidate_artifact import write_candidate_artifact
+from scholar_outbound_manager.state.artifact_lineage import build_probe_explanation
+from scholar_outbound_manager.state.artifact_lineage import check_artifact_consistency
+from scholar_outbound_manager.state.artifact_lineage import compute_artifact_hash
+from scholar_outbound_manager.state.artifact_lineage import generate_run_id
+from scholar_outbound_manager.state.artifact_lineage import load_artifact_payload
+from scholar_outbound_manager.state.artifact_lineage import summarize_lineage_warning
 from scholar_outbound_manager.state.probe_state import write_probe_artifacts
 from scholar_outbound_manager.systemd_sidecar import SystemdSidecarOptions
 from scholar_outbound_manager.systemd_sidecar import build_systemd_sidecar_paths
@@ -180,6 +189,21 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.add_argument("--candidates", required=True)
     generate_parser.set_defaults(handler=_handle_generate)
 
+    artifact_parser = subparsers.add_parser("artifact")
+    artifact_subparsers = artifact_parser.add_subparsers(dest="artifact_command")
+
+    artifact_check_parser = artifact_subparsers.add_parser("check")
+    artifact_check_parser.add_argument("--candidates")
+    artifact_check_parser.add_argument("--probe-summary")
+    artifact_check_parser.add_argument("--passed-candidates")
+    artifact_check_parser.set_defaults(handler=_handle_artifact_check)
+
+    artifact_explain_probe_parser = artifact_subparsers.add_parser("explain-probe")
+    artifact_explain_probe_parser.add_argument("--probe-summary", required=True)
+    artifact_explain_probe_parser.add_argument("--label-regex")
+    artifact_explain_probe_parser.add_argument("--candidate-id")
+    artifact_explain_probe_parser.set_defaults(handler=_handle_artifact_explain_probe)
+
     select_parser = subparsers.add_parser("select")
     select_subparsers = select_parser.add_subparsers(dest="select_command")
 
@@ -193,9 +217,10 @@ def build_parser() -> argparse.ArgumentParser:
     select_choose_parser.add_argument("--candidates", required=True)
     select_choose_parser.add_argument("--candidate-id")
     select_choose_parser.add_argument("--candidate-index", type=int)
-    select_choose_parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "first"))
+    select_choose_parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "region_hint", "region-hint", "first"))
     select_choose_parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
     select_choose_parser.add_argument("--host-geo", default="state_data/geo/host_geo.json")
+    select_choose_parser.add_argument("--preferred-region-hint")
     select_choose_parser.add_argument("--prefer-geo", dest="prefer_geo", action="store_true", default=True)
     select_choose_parser.add_argument("--no-prefer-geo", dest="prefer_geo", action="store_false")
     select_choose_parser.add_argument("--output", default="state_data/selected_candidate.json")
@@ -205,9 +230,10 @@ def build_parser() -> argparse.ArgumentParser:
     select_explain_parser.add_argument("--candidates", required=True)
     select_explain_parser.add_argument("--candidate-id")
     select_explain_parser.add_argument("--candidate-index", type=int)
-    select_explain_parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "first"))
+    select_explain_parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "region_hint", "region-hint", "first"))
     select_explain_parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
     select_explain_parser.add_argument("--host-geo", default="state_data/geo/host_geo.json")
+    select_explain_parser.add_argument("--preferred-region-hint")
     select_explain_parser.add_argument("--prefer-geo", dest="prefer_geo", action="store_true", default=True)
     select_explain_parser.add_argument("--no-prefer-geo", dest="prefer_geo", action="store_false")
     select_explain_parser.set_defaults(handler=_handle_select_explain)
@@ -294,6 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
     sidecar_service_stage_parser.add_argument("--candidates")
     _add_candidate_selection_arguments(sidecar_service_stage_parser)
     sidecar_service_stage_parser.add_argument("--source-xray-binary")
+    sidecar_service_stage_parser.add_argument("--skip-xray-binary-copy", action="store_true")
     sidecar_service_stage_parser.set_defaults(handler=_handle_sidecar_service_stage)
 
     sidecar_service_install_parser = sidecar_subparsers.add_parser("service-install")
@@ -340,6 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
     sidecar_pool_stage_parser.add_argument("--candidates", required=True)
     sidecar_pool_stage_parser.add_argument("--plan", required=True)
     sidecar_pool_stage_parser.add_argument("--source-xray-binary")
+    sidecar_pool_stage_parser.add_argument("--skip-xray-binary-copy", action="store_true")
     sidecar_pool_stage_parser.add_argument("--allow-port-conflict", action="store_true")
     _add_sidecar_service_arguments(sidecar_pool_stage_parser)
     sidecar_pool_stage_parser.set_defaults(handler=_handle_sidecar_pool_stage)
@@ -358,9 +386,10 @@ def build_parser() -> argparse.ArgumentParser:
     tui_parser = subparsers.add_parser("tui")
     tui_parser.add_argument("--candidates", required=True)
     tui_parser.add_argument("--output", default="state_data/selected_candidate.json")
-    tui_parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "first"))
+    tui_parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "region_hint", "region-hint", "first"))
     tui_parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
     tui_parser.add_argument("--host-geo", default="state_data/geo/host_geo.json")
+    tui_parser.add_argument("--preferred-region-hint")
     tui_parser.add_argument("--prefer-geo", dest="prefer_geo", action="store_true", default=True)
     tui_parser.add_argument("--no-prefer-geo", dest="prefer_geo", action="store_false")
     tui_parser.set_defaults(handler=_handle_tui)
@@ -411,6 +440,16 @@ def _handle_fetch(args: argparse.Namespace) -> int:
         ]
         parsed_count = len(candidates)
         unsupported_count = sum(1 for candidate in candidates if not candidate.supported)
+        source_subscription_hash = compute_artifact_hash(
+            [
+                {
+                    "source_name": subscription.source_name,
+                    "content": subscription.content,
+                    "byte_count": subscription.byte_count,
+                }
+                for subscription in fetched
+            ]
+        )
         payload = build_candidate_artifact(
             candidates,
             source_count=fetch_summary.source_count,
@@ -421,6 +460,9 @@ def _handle_fetch(args: argparse.Namespace) -> int:
             parsed_count=parsed_count,
             unsupported_count=unsupported_count,
             fetch_errors=fetch_summary.error_records,
+            run_id=generate_run_id("fetch"),
+            created_at=_utc_now_iso8601(),
+            source_subscription_hash=source_subscription_hash,
         )
         write_candidate_artifact(args.output, payload)
     except (ConfigError, FileNotFoundError, ValueError, OSError) as exc:
@@ -480,6 +522,55 @@ def _handle_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_artifact_check(args: argparse.Namespace) -> int:
+    """Check lineage consistency across local artifacts."""
+    try:
+        report = check_artifact_consistency(
+            candidates_path=args.candidates,
+            probe_summary_path=args.probe_summary,
+            passed_candidates_path=args.passed_candidates,
+        )
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    for key in (
+        "candidates_present",
+        "probe_summary_present",
+        "passed_candidates_present",
+        "candidates_hash",
+        "probe_summary_source_candidates_match",
+        "passed_candidates_source_candidates_match",
+        "passed_candidates_source_probe_summary_match",
+        "overall_consistent",
+    ):
+        print(f"{key}: {_render_optional_report_value(report.get(key))}")
+    for warning in report.get("warnings", []):
+        print(f"warning: {warning}")
+    if report.get("overall_consistent") is False:
+        return 1
+    if report.get("overall_consistent") is None:
+        return 2
+    return 0
+
+
+def _handle_artifact_explain_probe(args: argparse.Namespace) -> int:
+    """Explain probe outcomes by redacted label or candidate ID."""
+    try:
+        payload = load_artifact_payload(args.probe_summary)
+        explanation = build_probe_explanation(
+            payload,
+            label_regex=args.label_regex,
+            candidate_id=args.candidate_id,
+        )
+    except (FileNotFoundError, ValueError, json.JSONDecodeError, re.error) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(explanation, indent=2, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 def _handle_select_list(args: argparse.Namespace) -> int:
     """Render one redacted candidate catalog from a local payload."""
     try:
@@ -489,6 +580,7 @@ def _handle_select_list(args: argparse.Namespace) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    _print_lineage_warning_for_payload(payload)
     if args.json:
         print(json.dumps(catalog_to_dicts(catalog), indent=2, ensure_ascii=False, sort_keys=True))
     else:
@@ -500,6 +592,7 @@ def _handle_select_choose(args: argparse.Namespace) -> int:
     """Choose one candidate and write a sensitive selected-candidate artifact."""
     try:
         payload = load_candidate_payload(args.candidates)
+        _print_lineage_warning_for_payload(payload)
         candidate, probe, decision = select_candidate_with_policy(
             payload,
             _build_selection_policy_options(args),
@@ -512,6 +605,17 @@ def _handle_select_choose(args: argparse.Namespace) -> int:
         artifact = build_selected_candidate_artifact(
             record,
             selection_method="candidate_id" if decision.method.startswith("manual:candidate_id") else "index",
+        )
+        artifact.update(
+            {
+                "artifact_type": "selected_candidate",
+                "run_id": generate_run_id("select"),
+                "created_at": _utc_now_iso8601(),
+                "source_passed_candidates_hash": compute_artifact_hash(payload),
+                "source_passed_candidates_run_id": payload.get("run_id"),
+                "source_candidates_hash": payload.get("source_candidates_hash"),
+                "source_probe_summary_hash": payload.get("source_probe_summary_hash"),
+            }
         )
         write_selected_candidate_artifact(args.output, artifact)
     except (FileNotFoundError, ValueError) as exc:
@@ -538,6 +642,7 @@ def _handle_select_explain(args: argparse.Namespace) -> int:
     """Explain the redacted selection policy decision."""
     try:
         payload = load_candidate_payload(args.candidates)
+        _print_lineage_warning_for_payload(payload)
         explanation = explain_selection_policy(payload, _build_selection_policy_options(args))
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -608,6 +713,7 @@ def _handle_probe(args: argparse.Namespace) -> int:
 
         config = load_config(args.config)
         _require_network_probe_opt_in(config.probe.allow_network_probe, args.allow_network_probe)
+        source_candidates_payload = load_candidate_payload(args.candidates)
         loaded_candidates = load_candidates(args.candidates)
         candidates, filtered_out_count = _filter_candidates_for_cli(loaded_candidates, config.filters)
         candidate_options = CandidateProbeOptions(
@@ -639,6 +745,7 @@ def _handle_probe(args: argparse.Namespace) -> int:
             passed_candidates_path=args.passed_candidates_output,
             candidates=candidates,
             summary=summary,
+            source_candidates_payload=source_candidates_payload,
         )
     except (ConfigError, FileNotFoundError, ValueError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -1048,6 +1155,7 @@ def _handle_sidecar_service_stage(args: argparse.Namespace) -> int:
                 "service-stage requires root for /opt, /etc, or /var targets; use root or custom paths."
             )
         config = load_config(args.config)
+        _print_lineage_warning_for_selected_candidate_or_candidates(args)
         record = _resolve_candidate_record_from_args(args)
         paths = stage_systemd_sidecar_files(
             candidate=record.candidate,
@@ -1055,6 +1163,7 @@ def _handle_sidecar_service_stage(args: argparse.Namespace) -> int:
             xray_config=config.xray,
             options=options,
             source_xray_binary_path=args.source_xray_binary,
+            skip_xray_binary_copy=args.skip_xray_binary_copy,
         )
     except (ConfigError, FileNotFoundError, PermissionError, ValueError, OSError, LookupError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -1222,17 +1331,15 @@ def _handle_sidecar_pool_stage(args: argparse.Namespace) -> int:
             )
         config = load_config(args.config)
         payload = load_candidate_payload(args.candidates)
+        _print_lineage_warning_for_payload(payload)
         plan = load_pool_plan(args.plan)
-        if not args.allow_port_conflict:
-            availability = check_pool_ports_available(plan)
-            if not all(availability.values()):
-                raise ValueError("one or more pool listen ports are already in use.")
         paths = stage_single_xray_pool_files(
             payload=payload,
             plan=plan,
             xray_config=config.xray,
             options=options,
             source_xray_binary_path=args.source_xray_binary,
+            skip_xray_binary_copy=args.skip_xray_binary_copy,
             allow_port_conflict=args.allow_port_conflict,
         )
     except (ConfigError, FileNotFoundError, PermissionError, ValueError, OSError, LookupError) as exc:
@@ -1299,23 +1406,22 @@ def _handle_tui(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    return int(
-        tui_main(
-            [
-                "--candidates",
-                args.candidates,
-                "--output",
-                args.output,
-                "--strategy",
-                args.strategy,
-                "--geo-cache",
-                args.geo_cache,
-                "--host-geo",
-                args.host_geo,
-                "--prefer-geo" if args.prefer_geo else "--no-prefer-geo",
-            ]
-        )
-    )
+    tui_argv = [
+        "--candidates",
+        args.candidates,
+        "--output",
+        args.output,
+        "--strategy",
+        args.strategy,
+        "--geo-cache",
+        args.geo_cache,
+        "--host-geo",
+        args.host_geo,
+        "--prefer-geo" if args.prefer_geo else "--no-prefer-geo",
+    ]
+    if args.preferred_region_hint:
+        tui_argv.extend(["--preferred-region-hint", args.preferred_region_hint])
+    return int(tui_main(tui_argv))
 
 
 def _check_tcp_connect(host: str, port: int, timeout_seconds: float) -> bool:
@@ -1325,6 +1431,35 @@ def _check_tcp_connect(host: str, port: int, timeout_seconds: float) -> bool:
             return True
     except OSError:
         return False
+
+
+def _print_lineage_warning_for_payload(payload: dict[str, object]) -> None:
+    """Print one generic lineage warning when the payload lacks chain metadata."""
+    warning = summarize_lineage_warning(payload)
+    if warning:
+        print(warning, file=sys.stderr)
+
+
+def _print_lineage_warning_for_selected_candidate_or_candidates(args: argparse.Namespace) -> None:
+    """Print lineage warnings for selected-candidate or candidates artifacts."""
+    selected_candidate_path = getattr(args, "selected_candidate", None)
+    if selected_candidate_path:
+        _print_lineage_warning_for_payload(load_artifact_payload(selected_candidate_path))
+        return
+    candidates_path = getattr(args, "candidates", None)
+    if candidates_path:
+        _print_lineage_warning_for_payload(load_candidate_payload(candidates_path))
+
+
+def _render_optional_report_value(value: object) -> str:
+    """Render one optional artifact-check value."""
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return "unknown"
+    return str(value)
 
 
 def _resolve_selection_record_for_artifact(
@@ -1415,11 +1550,13 @@ def _build_selection_policy_options(args: argparse.Namespace) -> SelectionPolicy
     return SelectionPolicyOptions(
         preferred_candidate_id=getattr(args, "candidate_id", None),
         preferred_candidate_index=getattr(args, "candidate_index", None),
+        preferred_region_hint=getattr(args, "preferred_region_hint", None),
         selected_candidate_path=getattr(args, "selected_candidate", None),
         strategy=getattr(args, "strategy", "auto"),
         geo_cache_path=getattr(args, "geo_cache", "state_data/geo/candidate_geo_cache.json"),
         host_geo_path=getattr(args, "host_geo", "state_data/geo/host_geo.json"),
         prefer_geo=getattr(args, "prefer_geo", True),
+        prefer_region_hint=bool(getattr(args, "preferred_region_hint", None)),
         fallback_to_first=True,
     )
 
@@ -1451,6 +1588,11 @@ def _build_sidecar_status_options(runtime_config_name: str) -> SidecarRuntimeOpt
     """Construct sidecar options for status/stop from the runtime config name."""
     _validate_runtime_config_name(runtime_config_name)
     return SidecarRuntimeOptions(runtime_config_name=runtime_config_name)
+
+
+def _utc_now_iso8601() -> str:
+    """Return one UTC timestamp with a Z suffix."""
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _build_systemd_sidecar_options(args: argparse.Namespace) -> SystemdSidecarOptions:

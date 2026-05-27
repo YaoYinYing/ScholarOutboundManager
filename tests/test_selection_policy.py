@@ -119,6 +119,57 @@ def test_geo_nearest_falls_back_to_first_when_cache_missing(tmp_path: Path) -> N
     assert decision.method == "fallback:first"
 
 
+def test_region_hint_selects_matching_passed_candidate() -> None:
+    """Choose the first passed candidate matching the requested region hint."""
+    candidate, _, decision = select_candidate_with_policy(
+        _payload(),
+        SelectionPolicyOptions(
+            strategy="region_hint",
+            preferred_region_hint="JP",
+            prefer_region_hint=True,
+        ),
+    )
+
+    assert candidate.protocol == "trojan"
+    assert decision.method == "region_hint"
+
+
+def test_auto_prefers_geo_before_region_hint_when_cache_exists(tmp_path: Path) -> None:
+    """Keep geo-nearest ahead of region_hint during auto selection."""
+    payload = _payload()
+    _write_geo_files(tmp_path)
+
+    candidate, _, decision = select_candidate_with_policy(
+        payload,
+        SelectionPolicyOptions(
+            strategy="auto",
+            preferred_region_hint="JP",
+            prefer_region_hint=True,
+            geo_cache_path=str(tmp_path / "candidate_geo_cache.json"),
+            host_geo_path=str(tmp_path / "host_geo.json"),
+        ),
+    )
+
+    assert candidate.protocol == "vless"
+    assert decision.method == "geo_nearest"
+
+
+def test_region_hint_falls_back_with_warning_when_missing() -> None:
+    """Fall back to first when the preferred region hint is absent."""
+    candidate, _, decision = select_candidate_with_policy(
+        _payload(),
+        SelectionPolicyOptions(
+            strategy="region_hint",
+            preferred_region_hint="SG",
+            prefer_region_hint=True,
+        ),
+    )
+
+    assert candidate.protocol == "vless"
+    assert decision.method == "fallback:first"
+    assert "preferred_region_hint_not_found" in decision.warnings
+
+
 def test_no_fallback_raises_clear_error(tmp_path: Path) -> None:
     """Raise when no selection path is available and fallback is disabled."""
     with pytest.raises(ValueError, match="requires host_geo and candidate_geo cache"):

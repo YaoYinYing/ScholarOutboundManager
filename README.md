@@ -525,6 +525,33 @@ index  candidate_id   protocol  label      region  passed  stage
 
 Use `--no-label` if you want the older compact table. `select explain` includes the same redacted label and region hint in its JSON catalog.
 
+## Artifact consistency
+
+`candidates.json`, `probe_summary.json`, and `passed_candidates.json` should come from the same fetch/probe run. `candidate_id` belongs to the artifact run that generated it, not necessarily the current `candidates.json` order. Candidate_id belongs to the artifact run, not the current file position.
+
+Use `artifact check` before manual selection when artifacts may be stale:
+
+```bash
+scholar-outbound-manager artifact check \
+  --candidates candidates.json \
+  --probe-summary state_data/probe_summary.json \
+  --passed-candidates state_data/passed_candidates.json
+```
+
+If lineage is missing or inconsistent, rerun `fetch` and `probe` before trusting a manual selection.
+
+## Region hint selection
+
+`region_hint` is based on redacted labels. It is not GeoIP, it only ranks passed candidates, and it should not replace Geo cache when coordinate-based selection is available.
+
+```bash
+scholar-outbound-manager select choose \
+  --candidates state_data/passed_candidates.json \
+  --strategy auto \
+  --preferred-region-hint US \
+  --output state_data/selected_candidate.json
+```
+
 ### Step 6: stage production sidecar files
 
 ```bash
@@ -532,7 +559,29 @@ scholar-outbound-manager sidecar service-stage \
   --config config.yaml \
   --selected-candidate state_data/selected_candidate.json \
   --listen-host 127.0.0.1 \
-  --listen-port 19080
+  --listen-port 19080 \
+  --skip-xray-binary-copy
+```
+
+## Switching selected sidecar candidate
+
+Use `select choose` to update `selected_candidate.json`, then restage only the runtime config and metadata, and finally restart the managed systemd unit:
+
+```bash
+scholar-outbound-manager select choose \
+  --candidates state_data/passed_candidates.json \
+  --candidate-id <id> \
+  --output state_data/selected_candidate.json
+
+scholar-outbound-manager sidecar service-stage \
+  --config config.yaml \
+  --selected-candidate state_data/selected_candidate.json \
+  --listen-host 127.0.0.1 \
+  --listen-port 19080 \
+  --skip-xray-binary-copy
+
+scholar-outbound-manager sidecar service-restart \
+  --unit-name scholar-outbound-sidecar.service
 ```
 
 ### Step 7: install and start the production sidecar unit

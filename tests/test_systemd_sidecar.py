@@ -121,6 +121,85 @@ def test_stage_systemd_sidecar_files_writes_runtime_config_and_metadata(tmp_path
     assert "vless://" not in metadata_text
 
 
+def test_stage_systemd_sidecar_skip_binary_copy_requires_existing_binary(tmp_path, monkeypatch) -> None:
+    """Reject skip-copy when the destination binary is absent."""
+    options = SystemdSidecarOptions(
+        install_root=str(tmp_path / "opt"),
+        config_dir=str(tmp_path / "etc"),
+        state_dir=str(tmp_path / "var"),
+        service_user="scholar-sidecar",
+        service_group="scholar-sidecar",
+    )
+    monkeypatch.setattr(shutil, "chown", lambda *args, **kwargs: None)
+
+    with pytest.raises(ValueError, match="does not exist"):
+        stage_systemd_sidecar_files(
+            candidate=_make_candidate(),
+            candidate_id="candidate-001",
+            xray_config=_make_xray_config(tmp_path),
+            options=options,
+            skip_xray_binary_copy=True,
+        )
+
+
+def test_stage_systemd_sidecar_same_hash_skips_copy(tmp_path, monkeypatch) -> None:
+    """Skip copying when source and destination binaries match."""
+    options = SystemdSidecarOptions(
+        install_root=str(tmp_path / "opt"),
+        config_dir=str(tmp_path / "etc"),
+        state_dir=str(tmp_path / "var"),
+        service_user="scholar-sidecar",
+        service_group="scholar-sidecar",
+    )
+    source_binary = tmp_path / "source-xray"
+    source_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    source_binary.chmod(0o755)
+    destination_binary = Path(options.install_root) / "xray" / "xray"
+    destination_binary.parent.mkdir(parents=True, exist_ok=True)
+    destination_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    destination_binary.chmod(0o755)
+    monkeypatch.setattr(shutil, "chown", lambda *args, **kwargs: None)
+
+    paths = stage_systemd_sidecar_files(
+        candidate=_make_candidate(),
+        candidate_id="candidate-001",
+        xray_config=_make_xray_config(tmp_path),
+        options=options,
+        source_xray_binary_path=source_binary,
+    )
+
+    metadata = json.loads(Path(paths.metadata_path).read_text(encoding="utf-8"))
+    assert metadata["xray_binary_copy_mode"] == "unchanged"
+
+
+def test_stage_systemd_sidecar_different_hash_returns_safe_error(tmp_path, monkeypatch) -> None:
+    """Do not overwrite a differing existing target binary."""
+    options = SystemdSidecarOptions(
+        install_root=str(tmp_path / "opt"),
+        config_dir=str(tmp_path / "etc"),
+        state_dir=str(tmp_path / "var"),
+        service_user="scholar-sidecar",
+        service_group="scholar-sidecar",
+    )
+    source_binary = tmp_path / "source-xray"
+    source_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    source_binary.chmod(0o755)
+    destination_binary = Path(options.install_root) / "xray" / "xray"
+    destination_binary.parent.mkdir(parents=True, exist_ok=True)
+    destination_binary.write_text("#!/bin/sh\necho different\n", encoding="utf-8")
+    destination_binary.chmod(0o755)
+    monkeypatch.setattr(shutil, "chown", lambda *args, **kwargs: None)
+
+    with pytest.raises(ValueError, match="explicit binary upgrade workflow"):
+        stage_systemd_sidecar_files(
+            candidate=_make_candidate(),
+            candidate_id="candidate-001",
+            xray_config=_make_xray_config(tmp_path),
+            options=options,
+            source_xray_binary_path=source_binary,
+        )
+
+
 def test_stage_single_xray_pool_files_checks_ports_before_writing(tmp_path, monkeypatch) -> None:
     """Reject occupied pool ports before writing the sensitive runtime config."""
     options = SystemdSidecarOptions(
@@ -140,7 +219,7 @@ def test_stage_single_xray_pool_files_checks_ports_before_writing(tmp_path, monk
     )
     plan = build_sidecar_pool_plan(_passed_candidates_payload(), max_count=1)
 
-    with pytest.raises(ValueError, match="not available"):
+    with pytest.raises(ValueError, match="already in use"):
         stage_single_xray_pool_files(
             payload=_passed_candidates_payload(),
             plan=plan,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from scholar_outbound_manager import __version__
 from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.models import ProbeResult
 from scholar_outbound_manager.probe.batch_probe import BatchProbeRecord
@@ -11,6 +12,10 @@ from scholar_outbound_manager.probe.batch_probe import BatchProbeSummary
 from scholar_outbound_manager.probe.batch_probe import select_passed_candidates
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeSummary
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
+from scholar_outbound_manager.state.artifact_lineage import ArtifactLineage
+from scholar_outbound_manager.state.artifact_lineage import artifact_lineage_to_dict
+from scholar_outbound_manager.state.artifact_lineage import compute_artifact_hash
+from scholar_outbound_manager.state.artifact_lineage import generate_run_id
 
 
 def serialize_probe_result(result: ProbeResult) -> dict[str, object]:
@@ -57,10 +62,23 @@ def serialize_batch_probe_record(record: BatchProbeRecord) -> dict[str, object]:
     }
 
 
-def serialize_batch_probe_summary(summary: BatchProbeSummary) -> dict[str, object]:
+def serialize_batch_probe_summary(
+    summary: BatchProbeSummary,
+    *,
+    run_id: str | None = None,
+    created_at: str | None = None,
+    source_candidates_hash: str | None = None,
+    source_candidates_run_id: str | None = None,
+) -> dict[str, object]:
     """Serialize one batch probe summary into a redacted review-safe payload."""
     return {
         "schema_version": 1,
+        "artifact_type": "probe_summary",
+        "run_id": run_id or generate_run_id("probe"),
+        "created_at": created_at or _utc_now_iso8601(),
+        "source_candidates_hash": source_candidates_hash,
+        "source_candidates_run_id": source_candidates_run_id,
+        "tool_version": __version__,
         "parallel_workers": summary.parallel_workers,
         "keep_all_passed": summary.keep_all_passed,
         "stop_after_max_passed": summary.stop_after_max_passed,
@@ -77,14 +95,38 @@ def serialize_batch_probe_summary(summary: BatchProbeSummary) -> dict[str, objec
     }
 
 
-def write_batch_probe_summary(path: str | Path, summary: BatchProbeSummary) -> None:
+def write_batch_probe_summary(
+    path: str | Path,
+    summary: BatchProbeSummary,
+    *,
+    run_id: str | None = None,
+    created_at: str | None = None,
+    source_candidates_hash: str | None = None,
+    source_candidates_run_id: str | None = None,
+) -> None:
     """Write a redacted batch probe summary artifact atomically."""
-    atomic_write_json(path, serialize_batch_probe_summary(summary))
+    atomic_write_json(
+        path,
+        serialize_batch_probe_summary(
+            summary,
+            run_id=run_id,
+            created_at=created_at,
+            source_candidates_hash=source_candidates_hash,
+            source_candidates_run_id=source_candidates_run_id,
+        ),
+    )
 
 
 def build_passed_candidates_payload(
     candidates: list[CandidateProxy],
     summary: BatchProbeSummary,
+    *,
+    run_id: str | None = None,
+    created_at: str | None = None,
+    source_candidates_hash: str | None = None,
+    source_candidates_run_id: str | None = None,
+    source_probe_summary_hash: str | None = None,
+    source_probe_summary_run_id: str | None = None,
 ) -> dict[str, object]:
     """Build a sensitive local payload containing only passed candidates."""
     passed_candidates = select_passed_candidates(candidates, summary)
@@ -104,6 +146,14 @@ def build_passed_candidates_payload(
         )
     return {
         "schema_version": 1,
+        "artifact_type": "passed_candidates",
+        "run_id": run_id or generate_run_id("probe"),
+        "created_at": created_at or _utc_now_iso8601(),
+        "source_candidates_hash": source_candidates_hash,
+        "source_candidates_run_id": source_candidates_run_id,
+        "source_probe_summary_hash": source_probe_summary_hash,
+        "source_probe_summary_run_id": source_probe_summary_run_id,
+        "tool_version": __version__,
         "sensitive": True,
         "description": "This file contains selected proxy credentials and must not be committed.",
         "passed_count": summary.passed_count,
@@ -118,9 +168,28 @@ def write_passed_candidates(
     path: str | Path,
     candidates: list[CandidateProxy],
     summary: BatchProbeSummary,
+    *,
+    run_id: str | None = None,
+    created_at: str | None = None,
+    source_candidates_hash: str | None = None,
+    source_candidates_run_id: str | None = None,
+    source_probe_summary_hash: str | None = None,
+    source_probe_summary_run_id: str | None = None,
 ) -> None:
     """Write the sensitive passed-candidate payload atomically."""
-    atomic_write_json(path, build_passed_candidates_payload(candidates, summary))
+    atomic_write_json(
+        path,
+        build_passed_candidates_payload(
+            candidates,
+            summary,
+            run_id=run_id,
+            created_at=created_at,
+            source_candidates_hash=source_candidates_hash,
+            source_candidates_run_id=source_candidates_run_id,
+            source_probe_summary_hash=source_probe_summary_hash,
+            source_probe_summary_run_id=source_probe_summary_run_id,
+        ),
+    )
 
 
 def write_probe_artifacts(
@@ -128,10 +197,42 @@ def write_probe_artifacts(
     passed_candidates_path: str | Path,
     candidates: list[CandidateProxy],
     summary: BatchProbeSummary,
+    *,
+    source_candidates_payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Write both the redacted summary and sensitive passed-candidate artifacts."""
-    write_batch_probe_summary(summary_path, summary)
-    write_passed_candidates(passed_candidates_path, candidates, summary)
+    run_id = generate_run_id("probe")
+    created_at = _utc_now_iso8601()
+    source_candidates_hash = None if source_candidates_payload is None else compute_artifact_hash(source_candidates_payload)
+    source_candidates_run_id = None
+    if isinstance(source_candidates_payload, dict):
+        source_candidates_run_id = _coerce_optional_str(source_candidates_payload.get("run_id"))
+    probe_summary_payload = serialize_batch_probe_summary(
+        summary,
+        run_id=run_id,
+        created_at=created_at,
+        source_candidates_hash=source_candidates_hash,
+        source_candidates_run_id=source_candidates_run_id,
+    )
+    write_batch_probe_summary(
+        summary_path,
+        summary,
+        run_id=run_id,
+        created_at=created_at,
+        source_candidates_hash=source_candidates_hash,
+        source_candidates_run_id=source_candidates_run_id,
+    )
+    write_passed_candidates(
+        passed_candidates_path,
+        candidates,
+        summary,
+        run_id=run_id,
+        created_at=created_at,
+        source_candidates_hash=source_candidates_hash,
+        source_candidates_run_id=source_candidates_run_id,
+        source_probe_summary_hash=compute_artifact_hash(probe_summary_payload),
+        source_probe_summary_run_id=run_id,
+    )
     return {
         "summary_path": str(Path(summary_path)),
         "passed_candidates_path": str(Path(passed_candidates_path)),
@@ -149,3 +250,18 @@ def _redact_free_text(value: str) -> str:
     if len(value) <= 8:
         return "<REDACTED>"
     return f"{value[:4]}<REDACTED>{value[-4:]}"
+
+
+def _utc_now_iso8601() -> str:
+    """Return one UTC timestamp with a Z suffix."""
+    from datetime import datetime
+    from datetime import timezone
+
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _coerce_optional_str(value: object) -> str | None:
+    """Coerce one optional string value."""
+    if isinstance(value, str) and value:
+        return value
+    return None
