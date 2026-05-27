@@ -42,6 +42,9 @@ from scholar_outbound_manager.probe.scholar_classifier import build_scholar_home
 from scholar_outbound_manager.probe.scholar_classifier import build_scholar_query_target
 from scholar_outbound_manager.probe.scholar_classifier import classify_scholar_access
 from scholar_outbound_manager.runtime import prepare_candidate_runtime
+from scholar_outbound_manager.selection_policy import explain_selection_policy
+from scholar_outbound_manager.selection_policy import SelectionPolicyOptions
+from scholar_outbound_manager.selection_policy import select_candidate_with_policy
 from scholar_outbound_manager.selection import build_candidate_catalog
 from scholar_outbound_manager.selection import build_selected_candidate_artifact
 from scholar_outbound_manager.selection import catalog_to_dicts
@@ -167,8 +170,24 @@ def build_parser() -> argparse.ArgumentParser:
     select_choose_parser.add_argument("--candidates", required=True)
     select_choose_parser.add_argument("--candidate-id")
     select_choose_parser.add_argument("--candidate-index", type=int)
+    select_choose_parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "first"))
+    select_choose_parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
+    select_choose_parser.add_argument("--host-geo", default="state_data/geo/host_geo.json")
+    select_choose_parser.add_argument("--prefer-geo", dest="prefer_geo", action="store_true", default=True)
+    select_choose_parser.add_argument("--no-prefer-geo", dest="prefer_geo", action="store_false")
     select_choose_parser.add_argument("--output", default="state_data/selected_candidate.json")
     select_choose_parser.set_defaults(handler=_handle_select_choose)
+
+    select_explain_parser = select_subparsers.add_parser("explain")
+    select_explain_parser.add_argument("--candidates", required=True)
+    select_explain_parser.add_argument("--candidate-id")
+    select_explain_parser.add_argument("--candidate-index", type=int)
+    select_explain_parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "first"))
+    select_explain_parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
+    select_explain_parser.add_argument("--host-geo", default="state_data/geo/host_geo.json")
+    select_explain_parser.add_argument("--prefer-geo", dest="prefer_geo", action="store_true", default=True)
+    select_explain_parser.add_argument("--no-prefer-geo", dest="prefer_geo", action="store_false")
+    select_explain_parser.set_defaults(handler=_handle_select_explain)
 
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--config", default="config.yaml")
@@ -313,6 +332,16 @@ def build_parser() -> argparse.ArgumentParser:
     sidecar_pool_snippets_parser.add_argument("--json", action="store_true")
     sidecar_pool_snippets_parser.set_defaults(handler=_handle_sidecar_pool_snippets)
 
+    tui_parser = subparsers.add_parser("tui")
+    tui_parser.add_argument("--candidates", required=True)
+    tui_parser.add_argument("--output", default="state_data/selected_candidate.json")
+    tui_parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "first"))
+    tui_parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
+    tui_parser.add_argument("--host-geo", default="state_data/geo/host_geo.json")
+    tui_parser.add_argument("--prefer-geo", dest="prefer_geo", action="store_true", default=True)
+    tui_parser.add_argument("--no-prefer-geo", dest="prefer_geo", action="store_false")
+    tui_parser.set_defaults(handler=_handle_tui)
+
     return parser
 
 
@@ -448,18 +477,18 @@ def _handle_select_choose(args: argparse.Namespace) -> int:
     """Choose one candidate and write a sensitive selected-candidate artifact."""
     try:
         payload = load_candidate_payload(args.candidates)
-        selection_method, selection_value = _resolve_candidate_selection_mode(
-            candidate_id=args.candidate_id,
-            candidate_index=args.candidate_index,
-            selected_candidate=None,
+        candidate, probe, decision = select_candidate_with_policy(
+            payload,
+            _build_selection_policy_options(args),
         )
-        if selection_method == "candidate_id":
-            record = select_candidate_by_id(payload, str(selection_value))
-        else:
-            record = select_candidate_by_index(payload, int(selection_value))
+        record = _resolve_selection_record_for_artifact(
+            payload,
+            decision.selected_candidate_id,
+            decision.selected_index,
+        )
         artifact = build_selected_candidate_artifact(
             record,
-            selection_method=selection_method,
+            selection_method="candidate_id" if decision.method.startswith("manual:candidate_id") else "index",
         )
         write_selected_candidate_artifact(args.output, artifact)
     except (FileNotFoundError, ValueError) as exc:
@@ -467,10 +496,27 @@ def _handle_select_choose(args: argparse.Namespace) -> int:
         return 1
 
     print("Selected Scholar candidate.")
-    print(f"selected_candidate_id: {record.candidate_id}")
-    print(f"selected_index: {record.index}")
+    print(f"selected_candidate_id: {decision.selected_candidate_id}")
+    print(f"selected_index: {decision.selected_index}")
+    print(f"selection_method: {decision.method}")
+    print(f"reason: {decision.reason}")
+    if decision.geo_distance_km is not None:
+        print(f"geo_distance_km: {decision.geo_distance_km:.2f}")
     print(f"output_path: {args.output}")
-    print(f"candidate_protocol: {record.candidate.protocol}")
+    print(f"candidate_protocol: {decision.candidate_protocol}")
+    return 0
+
+
+def _handle_select_explain(args: argparse.Namespace) -> int:
+    """Explain the redacted selection policy decision."""
+    try:
+        payload = load_candidate_payload(args.candidates)
+        explanation = explain_selection_policy(payload, _build_selection_policy_options(args))
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(explanation, indent=2, ensure_ascii=False, sort_keys=True))
     return 0
 
 
@@ -1158,6 +1204,37 @@ def _handle_sidecar_pool_snippets(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_tui(args: argparse.Namespace) -> int:
+    """Run the optional Textual TUI when installed."""
+    try:
+        from scholar_outbound_manager.tui.app import main as tui_main
+    except ModuleNotFoundError as exc:
+        if exc.name != "textual":
+            raise
+        print(
+            'Textual TUI is not installed. Install with:\npip install "ScholarOutboundManager[tui]"',
+            file=sys.stderr,
+        )
+        return 1
+    return int(
+        tui_main(
+            [
+                "--candidates",
+                args.candidates,
+                "--output",
+                args.output,
+                "--strategy",
+                args.strategy,
+                "--geo-cache",
+                args.geo_cache,
+                "--host-geo",
+                args.host_geo,
+                "--prefer-geo" if args.prefer_geo else "--no-prefer-geo",
+            ]
+        )
+    )
+
+
 def _check_tcp_connect(host: str, port: int, timeout_seconds: float) -> bool:
     """Return whether a TCP connection to the SOCKS endpoint succeeds."""
     try:
@@ -1165,6 +1242,18 @@ def _check_tcp_connect(host: str, port: int, timeout_seconds: float) -> bool:
             return True
     except OSError:
         return False
+
+
+def _resolve_selection_record_for_artifact(
+    payload: dict[str, object],
+    candidate_id: str,
+    candidate_index: int,
+):
+    """Resolve one record for artifact writing from the policy decision."""
+    try:
+        return select_candidate_by_id(payload, candidate_id)
+    except ValueError:
+        return select_candidate_by_index(payload, candidate_index)
 
 
 def _resolve_candidate_record_from_args(args: argparse.Namespace):
@@ -1236,6 +1325,20 @@ def _add_candidate_selection_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--candidate-id")
     parser.add_argument("--candidate-index", type=int)
     parser.add_argument("--selected-candidate")
+
+
+def _build_selection_policy_options(args: argparse.Namespace) -> SelectionPolicyOptions:
+    """Build selection policy options from CLI args."""
+    return SelectionPolicyOptions(
+        preferred_candidate_id=getattr(args, "candidate_id", None),
+        preferred_candidate_index=getattr(args, "candidate_index", None),
+        selected_candidate_path=getattr(args, "selected_candidate", None),
+        strategy=getattr(args, "strategy", "auto"),
+        geo_cache_path=getattr(args, "geo_cache", "state_data/geo/candidate_geo_cache.json"),
+        host_geo_path=getattr(args, "host_geo", "state_data/geo/host_geo.json"),
+        prefer_geo=getattr(args, "prefer_geo", True),
+        fallback_to_first=True,
+    )
 
 
 def _add_sidecar_service_arguments(parser: argparse.ArgumentParser) -> None:

@@ -18,6 +18,7 @@ ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager 
 - There is no retry or cache layer in the current CLI workflow.
 - Scholar probe pass/fail is two-stage: Scholar home and a reference query must both pass.
 - `select` builds a redacted candidate catalog and writes a sensitive selected-candidate artifact for stable manual choice.
+- `select` can apply a geo-aware ranking heuristic from local cache before falling back to the first available candidate.
 - `probe` and legacy `generate` apply configured candidate filters before probing or export.
 - Passed-candidates artifacts may preserve `ProbeResult` evidence for later manifest generation.
 - `generate` only writes offline JSON fragments and does not start Xray.
@@ -38,8 +39,10 @@ These artifacts are intended for review and should avoid raw proxy credentials.
 
 - `passed_candidates.json`
 - `candidates.json`
+- `selected_candidate.json`
 - `config.yaml`
 - Runtime configs under `.runtime/`
+- Geo cache files under `state_data/geo/`
 - Any file containing proxy URI, UUID, public key, token, or subscription material
 
 `passed_candidates.json` contains selected proxy credentials. It may also contain `ProbeResult` evidence used later by `generate`. It must not be committed.
@@ -49,6 +52,8 @@ These artifacts are intended for review and should avoid raw proxy credentials.
 `config.yaml` must not be committed.
 
 `state_data/` and `generated/` should remain local.
+
+Geo cache files under `state_data/geo/` are local operational data. They should remain ignored and should not be committed by default.
 
 `inspect` never prints selected proxy credentials from sensitive artifacts.
 
@@ -322,6 +327,44 @@ scholar-outbound-manager sidecar pool snippets \
 
 If the current single-node service already owns `127.0.0.1:19080`, stop it first or choose a different base port such as `19180`.
 
+## Geo-aware selection
+
+- Selection priority is:
+  1. user-specified candidate
+  2. geo-nearest candidate from local cache
+  3. first available fallback
+- Geo-aware ranking uses cached local data by default.
+- Candidate server address does not necessarily equal the true egress IP.
+- If a cache entry was derived only from server endpoint GeoIP, treat it as an endpoint geo heuristic.
+- More accurate egress geo requires the node to reach an IP echo service, which is a network action.
+- Networking-based egress IP lookup is a future or backup path and must remain explicit opt-in.
+- Phase 23A only implements cached geo ranking. It does not do live egress IP lookup.
+- Geo ranking is a sorting heuristic only. It does not determine Scholar availability.
+
+Example:
+
+```bash
+scholar-outbound-manager select choose \
+  --candidates state_data/passed_candidates.json \
+  --strategy auto \
+  --host-geo state_data/geo/host_geo.json \
+  --geo-cache state_data/geo/candidate_geo_cache.json \
+  --output state_data/selected_candidate.json
+```
+
+Use `select explain` when you want a redacted explanation of why one candidate was selected.
+
+## Optional TUI
+
+- Install with:
+  `pip install "ScholarOutboundManager[tui]"`
+- Run with:
+  `scholar-outbound-manager-tui --candidates state_data/passed_candidates.json`
+- The TUI uses the redacted candidate catalog and selection helpers.
+- The TUI does not display proxy secrets.
+- The TUI does not mutate production Xray, XrayR, or `x-ui`.
+- The first version is a selection and control surface, not daemon automation.
+
 ## Production operations
 
 Validate the deployed sidecar without printing runtime config content:
@@ -424,6 +467,11 @@ scholar-outbound-manager select choose \
   --candidate-index 0 \
   --output state_data/selected_candidate.json
 
+scholar-outbound-manager select explain \
+  --candidates state_data/passed_candidates.json \
+  --host-geo state_data/geo/host_geo.json \
+  --geo-cache state_data/geo/candidate_geo_cache.json
+
 scholar-outbound-manager sidecar start \
   --config config.yaml \
   --selected-candidate state_data/selected_candidate.json \
@@ -464,6 +512,15 @@ scholar-outbound-manager sidecar service-snippet \
 ```
 
 Production Xray or XrayR integration remains a manual downstream step that points to the localhost SOCKS sidecar. ScholarOutboundManager does not mutate production Xray, XrayR, or `x-ui` configuration.
+
+Optional terminal UI:
+
+```bash
+pip install "ScholarOutboundManager[tui]"
+scholar-outbound-manager-tui \
+  --candidates state_data/passed_candidates.json \
+  --output state_data/selected_candidate.json
+```
 
 ## Legacy Offline Fragment Export
 

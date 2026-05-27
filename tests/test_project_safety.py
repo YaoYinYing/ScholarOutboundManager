@@ -86,6 +86,7 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "sidecar service-snippet" in readme_text
     assert "select choose" in readme_text.lower()
     assert "select list" in readme_text.lower()
+    assert "select explain" in readme_text.lower()
     assert "single-xray multi-port sidecar pool" in readme_text.lower()
     assert "sidecar pool plan" in readme_text.lower()
     assert "sidecar pool check-ports" in readme_text.lower()
@@ -93,6 +94,15 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "sidecar pool validate" in readme_text.lower()
     assert "sidecar pool snippets" in readme_text.lower()
     assert "one xray process with multiple localhost socks ports" in readme_text.lower()
+    assert "geo-aware selection" in readme_text.lower()
+    assert "geo-nearest candidate from local cache" in readme_text.lower()
+    assert "candidate server address does not necessarily equal the true egress ip" in readme_text.lower()
+    assert "phase 23a only implements cached geo ranking" in readme_text.lower()
+    assert "optional tui" in readme_text.lower()
+    assert "scholar-outbound-manager-tui" in readme_text.lower()
+    assert 'pip install "scholaroutboundmanager[tui]"' in readme_text.lower()
+    assert "selected_candidate.json" in readme_text.lower()
+    assert "state_data/geo/" in readme_text.lower()
     assert "--parallel 4" in readme_text
     assert "--keep-all-passed" in readme_text
     assert "each worker starts its own managed xray runtime" in readme_text.lower()

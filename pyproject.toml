@@ -20,9 +20,13 @@ dependencies = [
 dev = [
   "pytest>=8.0,<9.0",
 ]
+tui = [
+  "textual>=0.80,<1.0",
+]
 
 [project.scripts]
 scholar-outbound-manager = "scholar_outbound_manager.cli:main"
+scholar-outbound-manager-tui = "scholar_outbound_manager.tui.app:main"
 
 [tool.setuptools]
 include-package-data = true
