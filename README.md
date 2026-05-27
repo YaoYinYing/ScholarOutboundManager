@@ -333,13 +333,26 @@ If the current single-node service already owns `127.0.0.1:19080`, stop it first
   1. user-specified candidate
   2. geo-nearest candidate from local cache
   3. first available fallback
+- Geo DB, host geo cache, and candidate geo cache are separate layers.
+- Geo DB is local reference data for future lookups. The current core does not parse it.
+- Host geo cache describes the VPS or host location, for example `state_data/geo/host_geo.json`.
+- Candidate geo cache stores `candidate_id` keyed cached geo metadata, for example `state_data/geo/candidate_geo_cache.json`.
 - Geo-aware ranking uses cached local data by default.
+- Select never performs network lookup.
+- Select never downloads a Geo DB.
 - Candidate server address does not necessarily equal the true egress IP.
 - If a cache entry was derived only from server endpoint GeoIP, treat it as an endpoint geo heuristic.
 - More accurate egress geo requires the node to reach an IP echo service, which is a network action.
+- Endpoint geo and egress geo are different:
+  - endpoint geo: candidate server endpoint heuristic
+  - egress geo: actual exit IP via node, which requires an explicit future network lookup
 - Networking-based egress IP lookup is a future or backup path and must remain explicit opt-in.
 - Phase 23A only implements cached geo ranking. It does not do live egress IP lookup.
+- Phase 23C adds `geo refresh-plan`, but it is dry-run only in this phase.
 - Geo ranking is a sorting heuristic only. It does not determine Scholar availability.
+- Raw egress IP values should not be stored by default. If stored metadata is needed, prefer a hash such as `sha256:...`.
+- `candidate_geo_cache.json` should remain local and should not be committed.
+- The core project does not currently depend on `maxminddb`. If MMDB lookup is added later, it should live behind a dedicated extra such as `geo`.
 
 Example:
 
@@ -353,6 +366,20 @@ scholar-outbound-manager select choose \
 ```
 
 Use `select explain` when you want a redacted explanation of why one candidate was selected.
+
+Local Geo inspection and dry-run planning:
+
+```bash
+scholar-outbound-manager geo db-info \
+  --geo-db state_data/geo/db/GeoLite2-City.mmdb
+
+scholar-outbound-manager geo cache-inspect \
+  --geo-cache state_data/geo/candidate_geo_cache.json
+
+scholar-outbound-manager geo refresh-plan \
+  --candidates state_data/passed_candidates.json \
+  --geo-cache state_data/geo/candidate_geo_cache.json
+```
 
 ## Optional TUI
 

@@ -22,6 +22,10 @@ from scholar_outbound_manager.fetcher import build_url_opener
 from scholar_outbound_manager.fetcher import fetch_enabled_subscriptions
 from scholar_outbound_manager.fetcher import FetchErrorRecord
 from scholar_outbound_manager.fetcher import FetchTransportOptions
+from scholar_outbound_manager.geo import build_geo_refresh_plan
+from scholar_outbound_manager.geo import inspect_geo_database
+from scholar_outbound_manager.geo import load_candidate_geo_cache
+from scholar_outbound_manager.geo import summarize_candidate_geo_cache
 from scholar_outbound_manager.generation import write_generation_outputs
 from scholar_outbound_manager.inspect import format_generated_manifest_inspection
 from scholar_outbound_manager.inspect import format_probe_summary_inspection
@@ -121,6 +125,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     environment_parser = subparsers.add_parser("environment")
     environment_parser.set_defaults(handler=_handle_environment)
+
+    geo_parser = subparsers.add_parser("geo")
+    geo_subparsers = geo_parser.add_subparsers(dest="geo_command")
+
+    geo_db_info_parser = geo_subparsers.add_parser("db-info")
+    geo_db_info_parser.add_argument("--geo-db", required=True)
+    geo_db_info_parser.set_defaults(handler=_handle_geo_db_info)
+
+    geo_cache_inspect_parser = geo_subparsers.add_parser("cache-inspect")
+    geo_cache_inspect_parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
+    geo_cache_inspect_parser.set_defaults(handler=_handle_geo_cache_inspect)
+
+    geo_refresh_plan_parser = geo_subparsers.add_parser("refresh-plan")
+    geo_refresh_plan_parser.add_argument("--candidates", required=True)
+    geo_refresh_plan_parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
+    geo_refresh_plan_parser.add_argument("--refresh-expired", dest="refresh_expired", action="store_true", default=True)
+    geo_refresh_plan_parser.add_argument("--no-refresh-expired", dest="refresh_expired", action="store_false")
+    geo_refresh_plan_parser.set_defaults(handler=_handle_geo_refresh_plan)
 
     probe_parser = subparsers.add_parser("probe")
     probe_parser.add_argument("--config", default="config.yaml")
@@ -644,6 +666,62 @@ def _handle_environment(args: argparse.Namespace) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     print(format_runtime_environment_inspection(inspection))
+    return 0
+
+
+def _handle_geo_db_info(args: argparse.Namespace) -> int:
+    """Inspect one local Geo database file without parsing it."""
+    info = inspect_geo_database(args.geo_db)
+    print("Geo database:")
+    print(f"path: {info.path}")
+    print(f"exists: {'true' if info.exists else 'false'}")
+    print(f"readable: {'true' if info.readable else 'false'}")
+    print(f"size_bytes: {'' if info.size_bytes is None else info.size_bytes}")
+    print(f"format_hint: {info.format_hint or ''}")
+    if info.error:
+        print(f"error: {info.error}")
+    return 0 if info.exists and info.readable else 1
+
+
+def _handle_geo_cache_inspect(args: argparse.Namespace) -> int:
+    """Inspect one local candidate Geo cache summary."""
+    try:
+        records = load_candidate_geo_cache(args.geo_cache)
+        summary = summarize_candidate_geo_cache(records)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print("Candidate Geo cache:")
+    print(f"schema_version: {summary.schema_version}")
+    print(f"record_count: {summary.record_count}")
+    print(f"endpoint_geo_count: {summary.endpoint_geo_count}")
+    print(f"egress_geo_count: {summary.egress_geo_count}")
+    print(f"manual_count: {summary.manual_count}")
+    print(f"expired_count: {summary.expired_count}")
+    print(f"missing_coordinates_count: {summary.missing_coordinates_count}")
+    return 0
+
+
+def _handle_geo_refresh_plan(args: argparse.Namespace) -> int:
+    """Build one dry-run Geo refresh plan without DB or network access."""
+    try:
+        payload = load_candidate_payload(args.candidates)
+        candidate_geo = load_candidate_geo_cache(args.geo_cache)
+        plan = build_geo_refresh_plan(
+            payload,
+            candidate_geo,
+            refresh_expired=args.refresh_expired,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print("Geo refresh plan:")
+    print(f"candidate_count: {plan.candidate_count}")
+    print(f"cached_count: {plan.cached_count}")
+    print(f"missing_count: {plan.missing_count}")
+    print(f"expired_count: {plan.expired_count}")
+    print(f"would_refresh_count: {plan.would_refresh_count}")
+    print(f"mode: {plan.mode}")
     return 0
 
 
