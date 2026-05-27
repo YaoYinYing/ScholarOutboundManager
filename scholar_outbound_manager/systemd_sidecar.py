@@ -14,6 +14,11 @@ from typing import Callable
 
 from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.models import XrayConfig
+from scholar_outbound_manager.selection import extract_candidate_selection_records
+from scholar_outbound_manager.sidecar_pool import build_multi_port_sidecar_runtime_config
+from scholar_outbound_manager.sidecar_pool import SidecarPoolPlan
+from scholar_outbound_manager.sidecar_pool import check_pool_ports_available
+from scholar_outbound_manager.sidecar_pool import pool_plan_to_dict
 from scholar_outbound_manager.sidecar import build_socks_outbound_snippet
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
 from scholar_outbound_manager.xray.outbound_builder import build_xray_outbound
@@ -258,6 +263,93 @@ def stage_systemd_sidecar_files(
             "runtime_config_path": paths.runtime_config_path,
             "metadata_path": paths.metadata_path,
             "state_dir": paths.state_dir,
+            "prepared_at": _utc_now_iso8601(),
+        },
+    )
+    _ops_chmod(file_ops, metadata_path, 0o640)
+    _ops_chown(file_ops, metadata_path, options.service_user, options.service_group)
+    _ops_chown(file_ops, state_dir, options.service_user, options.service_group)
+    _ops_chown(file_ops, runtime_config_path.parent, options.service_user, options.service_group)
+
+    return paths
+
+
+def stage_single_xray_pool_files(
+    *,
+    payload: dict[str, object],
+    plan: SidecarPoolPlan,
+    xray_config: XrayConfig,
+    options: SystemdSidecarOptions,
+    source_xray_binary_path: str | Path | None = None,
+    file_ops: object | None = None,
+    allow_port_conflict: bool = False,
+) -> SystemdSidecarPaths:
+    """Stage one single-Xray multi-port pool runtime without installing the unit."""
+    paths = build_systemd_sidecar_paths(options)
+    paths = SystemdSidecarPaths(
+        unit_path=paths.unit_path,
+        xray_binary_path=paths.xray_binary_path,
+        runtime_config_path=paths.runtime_config_path,
+        state_dir=paths.state_dir,
+        metadata_path=str(Path(paths.state_dir) / "scholar_sidecar_pool.metadata.json"),
+    )
+    source_binary_path = Path(
+        xray_config.binary_path if source_xray_binary_path is None else source_xray_binary_path
+    )
+    destination_binary_path = Path(paths.xray_binary_path)
+    runtime_config_path = Path(paths.runtime_config_path)
+    state_dir = Path(paths.state_dir)
+    metadata_path = Path(paths.metadata_path)
+
+    port_availability = check_pool_ports_available(plan)
+    unavailable_ports = [
+        entry.listen_port
+        for entry in plan.entries
+        if not port_availability.get(entry.pool_index, False)
+    ]
+    if unavailable_ports and not allow_port_conflict:
+        unavailable_text = ", ".join(str(port) for port in unavailable_ports)
+        raise ValueError(
+            "Pool listen ports are not available: "
+            f"{unavailable_text}. Stop the running sidecar service first or choose a different base port."
+        )
+
+    candidates_by_id = {
+        record.candidate_id: record.candidate
+        for record in extract_candidate_selection_records(payload)
+    }
+    runtime_config = build_multi_port_sidecar_runtime_config(
+        entries=plan.entries,
+        candidates_by_id=candidates_by_id,
+    )
+
+    _ops_mkdir(file_ops, destination_binary_path.parent, mode=0o755)
+    _ops_mkdir(file_ops, runtime_config_path.parent, mode=0o750)
+    _ops_mkdir(file_ops, state_dir, mode=0o750)
+
+    if source_binary_path.resolve() != destination_binary_path.resolve():
+        _ops_copy2(file_ops, source_binary_path, destination_binary_path)
+    _ops_chmod(file_ops, destination_binary_path, 0o755)
+    _ops_chown(file_ops, destination_binary_path, options.service_user, options.service_group)
+
+    write_runtime_config(runtime_config_path, runtime_config)
+    _ops_chmod(file_ops, runtime_config_path, 0o600)
+    _ops_chown(file_ops, runtime_config_path, options.service_user, options.service_group)
+
+    atomic_write_json(
+        metadata_path,
+        {
+            "schema_version": 1,
+            "mode": "single_xray_multi_port",
+            "entry_count": plan.count,
+            "listen_host": plan.listen_host,
+            "base_port": plan.base_port,
+            "ports_available": port_availability,
+            "xray_binary_path": paths.xray_binary_path,
+            "runtime_config_path": paths.runtime_config_path,
+            "metadata_path": paths.metadata_path,
+            "state_dir": paths.state_dir,
+            "plan": pool_plan_to_dict(plan),
             "prepared_at": _utc_now_iso8601(),
         },
     )

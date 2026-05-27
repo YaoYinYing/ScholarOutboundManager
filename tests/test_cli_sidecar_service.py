@@ -63,6 +63,45 @@ def test_sidecar_service_stage_with_tmp_paths_stages_files(tmp_path, capsys, mon
     _assert_no_secrets(captured.out + captured.err)
 
 
+def test_sidecar_service_stage_accepts_selected_candidate_artifact(tmp_path, capsys, monkeypatch) -> None:
+    """Allow service-stage to read one selected-candidate artifact."""
+    config_path = _write_config(tmp_path)
+    selected_candidate = _write_selected_candidate(tmp_path)
+    source_binary = tmp_path / "xray"
+    source_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    source_binary.chmod(0o755)
+
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(
+        "scholar_outbound_manager.systemd_sidecar.shutil.chown",
+        lambda *args, **kwargs: None,
+    )
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "service-stage",
+            "--config",
+            str(config_path),
+            "--selected-candidate",
+            str(selected_candidate),
+            "--install-root",
+            str(tmp_path / "opt"),
+            "--config-dir",
+            str(tmp_path / "etc"),
+            "--state-dir",
+            str(tmp_path / "var"),
+            "--source-xray-binary",
+            str(source_binary),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "candidate_id: candidate-001" in captured.out
+    _assert_no_secrets(captured.out + captured.err)
+
+
 def test_sidecar_service_install_uses_monkeypatched_installer_and_does_not_start_service(
     tmp_path,
     capsys,
@@ -505,6 +544,15 @@ def _write_candidates(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return candidates_path
+
+
+def _write_selected_candidate(tmp_path: Path) -> Path:
+    selected_path = tmp_path / "selected_candidate.json"
+    selected_path.write_text(
+        '{"schema_version":1,"sensitive":true,"description":"This file contains one selected proxy candidate and must not be committed.","selected_at":"2026-05-27T00:00:00Z","selection_method":"candidate_id","selected_candidate_id":"candidate-001","selected_index":0,"candidate":{"source_name":"fixture","raw_name":"node","protocol":"vless","address":"example.invalid","port":443,"user_id":"00000000-0000-0000-0000-000000000000","security":"reality","server_name":"www.cloudflare.com","public_key":"PUBLIC_KEY_PLACEHOLDER","supported":true,"raw_uri":"vless://00000000-0000-0000-0000-000000000000@example.invalid:443"},"probe":{"candidate_id":"candidate-001","home_status":200,"query_status":200,"blocked":false,"timeout":false,"error":null,"failure_markers":[],"latency_ms":10,"checked_at":"2026-05-27T00:00:00Z","passed":true}}',
+        encoding="utf-8",
+    )
+    return selected_path
 
 
 def _assert_no_secrets(rendered: str) -> None:

@@ -1,19 +1,96 @@
-"""Tests for candidate selection helpers."""
+"""Tests for candidate selection and redacted catalog helpers."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
 from scholar_outbound_manager.models import CandidateProxy
+from scholar_outbound_manager.selection import build_candidate_catalog
+from scholar_outbound_manager.selection import build_selected_candidate_artifact
+from scholar_outbound_manager.selection import catalog_to_dicts
+from scholar_outbound_manager.selection import format_candidate_catalog_table
+from scholar_outbound_manager.selection import load_selected_candidate_artifact
+from scholar_outbound_manager.selection import select_candidate_by_id
 from scholar_outbound_manager.selection import select_candidate_by_index
+from scholar_outbound_manager.selection import write_selected_candidate_artifact
 
 
-def test_select_candidate_by_index_returns_requested_candidate() -> None:
-    """Select one candidate by zero-based index."""
+def test_catalog_hides_sensitive_fields_and_keeps_redacted_fields() -> None:
+    """Build a redacted catalog entry without candidate secrets."""
+    catalog = build_candidate_catalog(_passed_candidates_payload())
+
+    rendered = str(catalog_to_dicts(catalog))
+    assert catalog[0].candidate_id == "candidate-001"
+    assert catalog[0].scholar_stage == "full_access"
+    assert catalog[0].passed is True
+    assert "raw_uri" not in rendered
+    assert "00000000-0000-0000-0000-000000000000" not in rendered
+    assert "PUBLIC_KEY_PLACEHOLDER" not in rendered
+    assert "PASSWORD_PLACEHOLDER" not in rendered
+
+
+def test_catalog_table_hides_secrets() -> None:
+    """Keep catalog table output free of sensitive fields."""
+    table = format_candidate_catalog_table(build_candidate_catalog(_passed_candidates_payload()))
+
+    assert "candidate-001" in table
+    assert "full_access" in table
+    assert "raw_uri" not in table
+    assert "PUBLIC_KEY_PLACEHOLDER" not in table
+    assert "PASSWORD_PLACEHOLDER" not in table
+    assert "00000000-0000-0000-0000-000000000000" not in table
+
+
+def test_select_candidate_by_id_returns_requested_record() -> None:
+    """Select one candidate record by candidate ID."""
+    selected = select_candidate_by_id(_passed_candidates_payload(), "candidate-001")
+
+    assert selected.index == 0
+    assert selected.candidate.protocol == "vless"
+
+
+def test_select_candidate_by_index_returns_requested_payload_record() -> None:
+    """Select one candidate record by payload index."""
+    selected = select_candidate_by_index(_passed_candidates_payload(), 0)
+
+    assert selected.candidate_id == "candidate-001"
+    assert selected.probe_payload is not None
+
+
+def test_selected_candidate_artifact_is_sensitive_and_preserves_candidate() -> None:
+    """Persist a sensitive selected-candidate artifact with the real candidate payload."""
+    record = select_candidate_by_id(_passed_candidates_payload(), "candidate-001")
+
+    artifact = build_selected_candidate_artifact(record, selection_method="candidate_id")
+
+    assert artifact["sensitive"] is True
+    assert artifact["selected_candidate_id"] == "candidate-001"
+    assert artifact["candidate"]["address"] == "example.invalid"
+    assert artifact["candidate"]["public_key"] == "PUBLIC_KEY_PLACEHOLDER"
+
+
+def test_write_and_load_selected_candidate_artifact_round_trips(tmp_path: Path) -> None:
+    """Load one selected-candidate artifact without losing candidate identity."""
+    record = select_candidate_by_id(_passed_candidates_payload(), "candidate-001")
+    artifact = build_selected_candidate_artifact(record, selection_method="candidate_id")
+    output_path = tmp_path / "selected_candidate.json"
+
+    write_selected_candidate_artifact(output_path, artifact)
+    loaded = load_selected_candidate_artifact(output_path)
+
+    assert loaded.candidate_id == "candidate-001"
+    assert loaded.candidate.address == "example.invalid"
+
+
+def test_select_candidate_by_index_preserves_legacy_list_behavior() -> None:
+    """Keep the original list-based selector behavior for older call sites."""
     candidates = [_make_candidate(raw_name="first"), _make_candidate(raw_name="second")]
 
     selected = select_candidate_by_index(candidates, 1)
 
+    assert isinstance(selected, CandidateProxy)
     assert selected.raw_name == "second"
 
 
@@ -51,7 +128,7 @@ def test_select_candidate_by_index_rejects_non_vless_candidate() -> None:
 
 
 def test_select_candidate_by_index_error_does_not_expose_raw_uri() -> None:
-    """Keep raw URI source material out of error messages."""
+    """Keep raw URI source material out of legacy selection errors."""
     with pytest.raises(ValueError) as exc_info:
         select_candidate_by_index(
             [_make_candidate(supported=False, unsupported_reason="Unsupported transport.")],
@@ -59,6 +136,31 @@ def test_select_candidate_by_index_error_does_not_expose_raw_uri() -> None:
         )
 
     assert "vless://" not in str(exc_info.value)
+
+
+def _passed_candidates_payload() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "sensitive": True,
+        "description": "This file contains selected proxy credentials and must not be committed.",
+        "candidates": [
+            {
+                "candidate": _make_candidate().to_dict(),
+                "probe": {
+                    "candidate_id": "candidate-001",
+                    "home_status": 200,
+                    "query_status": 200,
+                    "blocked": False,
+                    "timeout": False,
+                    "error": None,
+                    "failure_markers": [],
+                    "latency_ms": 18,
+                    "checked_at": "2026-05-27T00:00:00Z",
+                    "passed": True,
+                },
+            }
+        ],
+    }
 
 
 def _make_candidate(**overrides: object) -> CandidateProxy:
@@ -70,6 +172,7 @@ def _make_candidate(**overrides: object) -> CandidateProxy:
         "address": "example.invalid",
         "port": 443,
         "user_id": "00000000-0000-0000-0000-000000000000",
+        "password": "PASSWORD_PLACEHOLDER",
         "encryption": "none",
         "flow": "xtls-rprx-vision",
         "network": "tcp",
@@ -81,6 +184,7 @@ def _make_candidate(**overrides: object) -> CandidateProxy:
         "raw_uri": "vless://00000000-0000-0000-0000-000000000000@example.invalid:443",
         "supported": True,
         "unsupported_reason": None,
+        "extra": {"tags": ["scholar", "us"]},
     }
     candidate_data.update(overrides)
     return CandidateProxy(**candidate_data)

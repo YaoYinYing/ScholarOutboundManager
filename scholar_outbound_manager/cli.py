@@ -42,13 +42,27 @@ from scholar_outbound_manager.probe.scholar_classifier import build_scholar_home
 from scholar_outbound_manager.probe.scholar_classifier import build_scholar_query_target
 from scholar_outbound_manager.probe.scholar_classifier import classify_scholar_access
 from scholar_outbound_manager.runtime import prepare_candidate_runtime
+from scholar_outbound_manager.selection import build_candidate_catalog
+from scholar_outbound_manager.selection import build_selected_candidate_artifact
+from scholar_outbound_manager.selection import catalog_to_dicts
+from scholar_outbound_manager.selection import format_candidate_catalog_table
+from scholar_outbound_manager.selection import load_candidate_payload
+from scholar_outbound_manager.selection import load_selected_candidate_artifact
+from scholar_outbound_manager.selection import select_candidate_by_id
 from scholar_outbound_manager.selection import select_candidate_by_index
+from scholar_outbound_manager.selection import write_selected_candidate_artifact
 from scholar_outbound_manager.sidecar import SidecarRuntimeOptions
 from scholar_outbound_manager.sidecar import build_socks_outbound_snippet
 from scholar_outbound_manager.sidecar import inspect_sidecar_runtime
 from scholar_outbound_manager.sidecar import prepare_sidecar_runtime
 from scholar_outbound_manager.sidecar import start_sidecar_runtime
 from scholar_outbound_manager.sidecar import stop_sidecar_runtime
+from scholar_outbound_manager.sidecar_pool import build_pool_socks_outbound_snippets
+from scholar_outbound_manager.sidecar_pool import build_sidecar_pool_plan
+from scholar_outbound_manager.sidecar_pool import check_pool_ports_available
+from scholar_outbound_manager.sidecar_pool import load_pool_plan
+from scholar_outbound_manager.sidecar_pool import validate_pool_sidecar
+from scholar_outbound_manager.sidecar_pool import write_pool_plan
 from scholar_outbound_manager.state.candidate_artifact import build_candidate_artifact
 from scholar_outbound_manager.state.candidate_artifact import write_candidate_artifact
 from scholar_outbound_manager.state.probe_state import write_probe_artifacts
@@ -59,6 +73,7 @@ from scholar_outbound_manager.systemd_sidecar import install_systemd_unit
 from scholar_outbound_manager.systemd_sidecar import render_sidecar_systemd_unit
 from scholar_outbound_manager.systemd_sidecar import render_socks_outbound_snippet_for_sidecar
 from scholar_outbound_manager.systemd_sidecar import run_systemctl
+from scholar_outbound_manager.systemd_sidecar import stage_single_xray_pool_files
 from scholar_outbound_manager.systemd_sidecar import stage_systemd_sidecar_files
 from scholar_outbound_manager.systemd_sidecar import summarize_command_results
 from scholar_outbound_manager.systemd_sidecar import summarize_system_user_results
@@ -140,6 +155,21 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.add_argument("--candidates", required=True)
     generate_parser.set_defaults(handler=_handle_generate)
 
+    select_parser = subparsers.add_parser("select")
+    select_subparsers = select_parser.add_subparsers(dest="select_command")
+
+    select_list_parser = select_subparsers.add_parser("list")
+    select_list_parser.add_argument("--candidates", required=True)
+    select_list_parser.add_argument("--json", action="store_true")
+    select_list_parser.set_defaults(handler=_handle_select_list)
+
+    select_choose_parser = select_subparsers.add_parser("choose")
+    select_choose_parser.add_argument("--candidates", required=True)
+    select_choose_parser.add_argument("--candidate-id")
+    select_choose_parser.add_argument("--candidate-index", type=int)
+    select_choose_parser.add_argument("--output", default="state_data/selected_candidate.json")
+    select_choose_parser.set_defaults(handler=_handle_select_choose)
+
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--config", default="config.yaml")
     run_parser.add_argument("--candidates", required=True)
@@ -219,8 +249,8 @@ def build_parser() -> argparse.ArgumentParser:
     sidecar_service_stage_parser = sidecar_subparsers.add_parser("service-stage")
     _add_sidecar_service_arguments(sidecar_service_stage_parser)
     sidecar_service_stage_parser.add_argument("--config", default="config.yaml")
-    sidecar_service_stage_parser.add_argument("--candidates", required=True)
-    sidecar_service_stage_parser.add_argument("--candidate-index", type=int, default=0)
+    sidecar_service_stage_parser.add_argument("--candidates")
+    _add_candidate_selection_arguments(sidecar_service_stage_parser)
     sidecar_service_stage_parser.add_argument("--source-xray-binary")
     sidecar_service_stage_parser.set_defaults(handler=_handle_sidecar_service_stage)
 
@@ -246,6 +276,42 @@ def build_parser() -> argparse.ArgumentParser:
     sidecar_service_snippet_parser.add_argument("--listen-port", type=int, default=19080)
     sidecar_service_snippet_parser.add_argument("--tag", default="scholar-sidecar-socks-out")
     sidecar_service_snippet_parser.set_defaults(handler=_handle_sidecar_service_snippet)
+
+    sidecar_pool_parser = sidecar_subparsers.add_parser("pool")
+    sidecar_pool_subparsers = sidecar_pool_parser.add_subparsers(dest="sidecar_pool_command")
+
+    sidecar_pool_plan_parser = sidecar_pool_subparsers.add_parser("plan")
+    sidecar_pool_plan_parser.add_argument("--candidates", required=True)
+    sidecar_pool_plan_parser.add_argument("--output", default="state_data/sidecar_pool_plan.json")
+    sidecar_pool_plan_parser.add_argument("--max-count", type=int)
+    sidecar_pool_plan_parser.add_argument("--candidate-id", action="append", dest="candidate_ids")
+    sidecar_pool_plan_parser.add_argument("--listen-host", default="127.0.0.1")
+    sidecar_pool_plan_parser.add_argument("--base-port", type=int, default=19080)
+    sidecar_pool_plan_parser.set_defaults(handler=_handle_sidecar_pool_plan)
+
+    sidecar_pool_check_ports_parser = sidecar_pool_subparsers.add_parser("check-ports")
+    sidecar_pool_check_ports_parser.add_argument("--plan", required=True)
+    sidecar_pool_check_ports_parser.set_defaults(handler=_handle_sidecar_pool_check_ports)
+
+    sidecar_pool_stage_parser = sidecar_pool_subparsers.add_parser("stage")
+    sidecar_pool_stage_parser.add_argument("--config", required=True)
+    sidecar_pool_stage_parser.add_argument("--candidates", required=True)
+    sidecar_pool_stage_parser.add_argument("--plan", required=True)
+    sidecar_pool_stage_parser.add_argument("--source-xray-binary")
+    sidecar_pool_stage_parser.add_argument("--allow-port-conflict", action="store_true")
+    _add_sidecar_service_arguments(sidecar_pool_stage_parser)
+    sidecar_pool_stage_parser.set_defaults(handler=_handle_sidecar_pool_stage)
+
+    sidecar_pool_validate_parser = sidecar_pool_subparsers.add_parser("validate")
+    sidecar_pool_validate_parser.add_argument("--plan", required=True)
+    sidecar_pool_validate_parser.add_argument("--query", default="ppr")
+    sidecar_pool_validate_parser.add_argument("--request-timeout", type=float, default=15.0)
+    sidecar_pool_validate_parser.set_defaults(handler=_handle_sidecar_pool_validate)
+
+    sidecar_pool_snippets_parser = sidecar_pool_subparsers.add_parser("snippets")
+    sidecar_pool_snippets_parser.add_argument("--plan", required=True)
+    sidecar_pool_snippets_parser.add_argument("--json", action="store_true")
+    sidecar_pool_snippets_parser.set_defaults(handler=_handle_sidecar_pool_snippets)
 
     return parser
 
@@ -359,6 +425,52 @@ def _handle_generate(args: argparse.Namespace) -> int:
     print(f"outbounds_path: {summary['outbounds_path']}")
     print(f"routes_path: {summary['routes_path']}")
     print(f"manifest_path: {summary['manifest_path']}")
+    return 0
+
+
+def _handle_select_list(args: argparse.Namespace) -> int:
+    """Render one redacted candidate catalog from a local payload."""
+    try:
+        payload = load_candidate_payload(args.candidates)
+        catalog = build_candidate_catalog(payload)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(catalog_to_dicts(catalog), indent=2, ensure_ascii=False, sort_keys=True))
+    else:
+        print(format_candidate_catalog_table(catalog))
+    return 0
+
+
+def _handle_select_choose(args: argparse.Namespace) -> int:
+    """Choose one candidate and write a sensitive selected-candidate artifact."""
+    try:
+        payload = load_candidate_payload(args.candidates)
+        selection_method, selection_value = _resolve_candidate_selection_mode(
+            candidate_id=args.candidate_id,
+            candidate_index=args.candidate_index,
+            selected_candidate=None,
+        )
+        if selection_method == "candidate_id":
+            record = select_candidate_by_id(payload, str(selection_value))
+        else:
+            record = select_candidate_by_index(payload, int(selection_value))
+        artifact = build_selected_candidate_artifact(
+            record,
+            selection_method=selection_method,
+        )
+        write_selected_candidate_artifact(args.output, artifact)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("Selected Scholar candidate.")
+    print(f"selected_candidate_id: {record.candidate_id}")
+    print(f"selected_index: {record.index}")
+    print(f"output_path: {args.output}")
+    print(f"candidate_protocol: {record.candidate.protocol}")
     return 0
 
 
@@ -666,20 +778,20 @@ def _handle_sidecar_prepare(args: argparse.Namespace) -> int:
     """Prepare one isolated sidecar runtime config without starting Xray."""
     try:
         config = load_config(args.config)
-        candidates = load_candidates(args.candidates)
-        candidate = select_candidate_by_index(candidates, args.candidate_index)
+        record = _resolve_candidate_record_from_args(args)
         options = _build_sidecar_options(args)
         summary = prepare_sidecar_runtime(
-            candidate=candidate,
+            candidate=record.candidate,
             xray_config=config.xray,
             options=options,
-            candidate_id=f"candidate-{args.candidate_index:03d}",
+            candidate_id=record.candidate_id,
         )
     except (ConfigError, FileNotFoundError, ValueError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     print("Prepared Scholar sidecar runtime.")
+    print(f"candidate_id: {summary.candidate_id}")
     print(f"runtime_config_path: {summary.runtime_config_path}")
     print(f"listen_host: {summary.listen_host}")
     print(f"listen_port: {summary.listen_port}")
@@ -695,14 +807,13 @@ def _handle_sidecar_start(args: argparse.Namespace) -> int:
         if not args.no_test_config:
             _validate_positive_float(args.test_config_timeout, "test-config-timeout")
         config = load_config(args.config)
-        candidates = load_candidates(args.candidates)
-        candidate = select_candidate_by_index(candidates, args.candidate_index)
+        record = _resolve_candidate_record_from_args(args)
         options = _build_sidecar_options(args)
         prepared = prepare_sidecar_runtime(
-            candidate=candidate,
+            candidate=record.candidate,
             xray_config=config.xray,
             options=options,
-            candidate_id=f"candidate-{args.candidate_index:03d}",
+            candidate_id=record.candidate_id,
         )
         summary = start_sidecar_runtime(
             config.xray,
@@ -715,6 +826,7 @@ def _handle_sidecar_start(args: argparse.Namespace) -> int:
 
     print("Started Scholar sidecar runtime.")
     print(f"started: {'true' if summary.started else 'false'}")
+    print(f"candidate_id: {summary.candidate_id}")
     print(f"listen_host: {summary.listen_host}")
     print(f"listen_port: {summary.listen_port}")
     print(f"pid_file_path: {summary.pid_file_path}")
@@ -807,11 +919,10 @@ def _handle_sidecar_service_stage(args: argparse.Namespace) -> int:
                 "service-stage requires root for /opt, /etc, or /var targets; use root or custom paths."
             )
         config = load_config(args.config)
-        candidates = load_candidates(args.candidates)
-        candidate = select_candidate_by_index(candidates, args.candidate_index)
+        record = _resolve_candidate_record_from_args(args)
         paths = stage_systemd_sidecar_files(
-            candidate=candidate,
-            candidate_id=f"candidate-{args.candidate_index:03d}",
+            candidate=record.candidate,
+            candidate_id=record.candidate_id,
             xray_config=config.xray,
             options=options,
             source_xray_binary_path=args.source_xray_binary,
@@ -826,7 +937,8 @@ def _handle_sidecar_service_stage(args: argparse.Namespace) -> int:
     print(f"metadata_path: {paths.metadata_path}")
     print(f"listen_host: {options.listen_host}")
     print(f"listen_port: {options.listen_port}")
-    print(f"candidate_protocol: {candidate.protocol}")
+    print(f"candidate_id: {record.candidate_id}")
+    print(f"candidate_protocol: {record.candidate.protocol}")
     print("staged: true")
     return 0
 
@@ -931,6 +1043,121 @@ def _handle_sidecar_service_validate(args: argparse.Namespace) -> int:
     return 0 if service_active and service_enabled and socks_tcp_connect and decision.passed else 1
 
 
+def _handle_sidecar_pool_plan(args: argparse.Namespace) -> int:
+    """Build and write one redacted single-Xray sidecar pool plan."""
+    try:
+        payload = load_candidate_payload(args.candidates)
+        plan = build_sidecar_pool_plan(
+            payload,
+            candidate_ids=args.candidate_ids,
+            max_count=args.max_count,
+            listen_host=args.listen_host,
+            base_port=args.base_port,
+        )
+        write_pool_plan(args.output, plan)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("Planned Scholar sidecar pool.")
+    print(f"output_path: {args.output}")
+    print(f"entry_count: {plan.count}")
+    print(f"listen_host: {plan.listen_host}")
+    print(f"base_port: {plan.base_port}")
+    print(f"ports: {','.join(str(entry.listen_port) for entry in plan.entries)}")
+    return 0
+
+
+def _handle_sidecar_pool_check_ports(args: argparse.Namespace) -> int:
+    """Check local availability for every port in one pool plan."""
+    try:
+        plan = load_pool_plan(args.plan)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    availability = check_pool_ports_available(plan)
+    for entry in plan.entries:
+        available = availability.get(entry.pool_index, False)
+        print(f"pool_index: {entry.pool_index} listen_port: {entry.listen_port} available: {str(available).lower()}")
+    return 0 if all(availability.values()) else 1
+
+
+def _handle_sidecar_pool_stage(args: argparse.Namespace) -> int:
+    """Stage one sensitive single-Xray pool runtime without installing the unit."""
+    try:
+        options = _build_systemd_sidecar_options(args)
+        if _service_paths_require_root(options) and os.geteuid() != 0:
+            raise PermissionError(
+                "pool stage requires root for /opt, /etc, or /var targets; use root or custom paths."
+            )
+        config = load_config(args.config)
+        payload = load_candidate_payload(args.candidates)
+        plan = load_pool_plan(args.plan)
+        if not args.allow_port_conflict:
+            availability = check_pool_ports_available(plan)
+            if not all(availability.values()):
+                raise ValueError("one or more pool listen ports are already in use.")
+        paths = stage_single_xray_pool_files(
+            payload=payload,
+            plan=plan,
+            xray_config=config.xray,
+            options=options,
+            source_xray_binary_path=args.source_xray_binary,
+            allow_port_conflict=args.allow_port_conflict,
+        )
+    except (ConfigError, FileNotFoundError, PermissionError, ValueError, OSError, LookupError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print("Staged Scholar single-Xray sidecar pool.")
+    print(f"xray_binary_path: {paths.xray_binary_path}")
+    print(f"runtime_config_path: {paths.runtime_config_path}")
+    print(f"metadata_path: {paths.metadata_path}")
+    print(f"entry_count: {plan.count}")
+    print("staged: true")
+    return 0
+
+
+def _handle_sidecar_pool_validate(args: argparse.Namespace) -> int:
+    """Validate one running multi-port sidecar pool."""
+    try:
+        _validate_positive_float(args.request_timeout, "request-timeout")
+        plan = load_pool_plan(args.plan)
+        results = validate_pool_sidecar(
+            plan,
+            query=args.query,
+            request_timeout=args.request_timeout,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(results, indent=2, ensure_ascii=False, sort_keys=True))
+    return 0 if all(bool(result.get("passed")) for result in results) else 1
+
+
+def _handle_sidecar_pool_snippets(args: argparse.Namespace) -> int:
+    """Render downstream SOCKS snippets for a pool plan."""
+    try:
+        plan = load_pool_plan(args.plan)
+        snippets = build_pool_socks_outbound_snippets(plan)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(snippets, indent=2, ensure_ascii=False, sort_keys=True))
+    else:
+        for snippet in snippets:
+            server = snippet["settings"]["servers"][0]
+            print(
+                f"tag: {snippet['tag']} protocol: {snippet['protocol']} "
+                f"address: {server['address']} port: {server['port']}"
+            )
+    return 0
+
+
 def _check_tcp_connect(host: str, port: int, timeout_seconds: float) -> bool:
     """Return whether a TCP connection to the SOCKS endpoint succeeds."""
     try:
@@ -938,6 +1165,47 @@ def _check_tcp_connect(host: str, port: int, timeout_seconds: float) -> bool:
             return True
     except OSError:
         return False
+
+
+def _resolve_candidate_record_from_args(args: argparse.Namespace):
+    """Resolve one selected candidate record from mutually exclusive CLI args."""
+    selection_method, selection_value = _resolve_candidate_selection_mode(
+        candidate_id=getattr(args, "candidate_id", None),
+        candidate_index=getattr(args, "candidate_index", None),
+        selected_candidate=getattr(args, "selected_candidate", None),
+    )
+    if selection_method == "selected_candidate":
+        return load_selected_candidate_artifact(str(selection_value))
+
+    candidates_path = getattr(args, "candidates", None)
+    if not candidates_path:
+        raise ValueError("--candidates is required unless --selected-candidate is used.")
+    payload = load_candidate_payload(candidates_path)
+    if selection_method == "candidate_id":
+        return select_candidate_by_id(payload, str(selection_value))
+    return select_candidate_by_index(payload, int(selection_value))
+
+
+def _resolve_candidate_selection_mode(
+    *,
+    candidate_id: str | None,
+    candidate_index: int | None,
+    selected_candidate: str | None,
+) -> tuple[str, str | int]:
+    """Resolve one mutually exclusive candidate selection mode."""
+    provided = [
+        ("selected_candidate", selected_candidate),
+        ("candidate_id", candidate_id),
+        ("index", candidate_index),
+    ]
+    active = [(name, value) for name, value in provided if value is not None]
+    if len(active) > 1:
+        raise ValueError(
+            "--selected-candidate, --candidate-id, and --candidate-index are mutually exclusive."
+        )
+    if not active:
+        return "index", 0
+    return active[0]
 
 
 def _validate_runtime_config_name(config_name: str) -> None:
@@ -956,11 +1224,18 @@ def _validate_runtime_config_name(config_name: str) -> None:
 def _add_sidecar_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     """Add shared sidecar prepare/start arguments."""
     parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--candidates", required=True)
-    parser.add_argument("--candidate-index", type=int, default=0)
+    parser.add_argument("--candidates")
+    _add_candidate_selection_arguments(parser)
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--listen-port", type=int, default=19080)
     parser.add_argument("--runtime-config-name", default="scholar_sidecar_runtime.json")
+
+
+def _add_candidate_selection_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add mutually exclusive candidate selection arguments."""
+    parser.add_argument("--candidate-id")
+    parser.add_argument("--candidate-index", type=int)
+    parser.add_argument("--selected-candidate")
 
 
 def _add_sidecar_service_arguments(parser: argparse.ArgumentParser) -> None:

@@ -17,6 +17,7 @@ ScholarOutboundManager is a staged, fail-closed Google Scholar outbound manager 
 - There is no concurrency.
 - There is no retry or cache layer in the current CLI workflow.
 - Scholar probe pass/fail is two-stage: Scholar home and a reference query must both pass.
+- `select` builds a redacted candidate catalog and writes a sensitive selected-candidate artifact for stable manual choice.
 - `probe` and legacy `generate` apply configured candidate filters before probing or export.
 - Passed-candidates artifacts may preserve `ProbeResult` evidence for later manifest generation.
 - `generate` only writes offline JSON fragments and does not start Xray.
@@ -137,7 +138,8 @@ scholar-outbound-manager environment
 scholar-outbound-manager xray inspect --path .runtime/xray/xray
 scholar-outbound-manager probe --config config.yaml --candidates candidates.json --allow-network-probe
 scholar-outbound-manager inspect --probe-summary state_data/probe_summary.json
-scholar-outbound-manager sidecar service-stage --config config.yaml --candidates state_data/passed_candidates.json --candidate-index 0
+scholar-outbound-manager select choose --candidates state_data/passed_candidates.json --candidate-index 0 --output state_data/selected_candidate.json
+scholar-outbound-manager sidecar service-stage --config config.yaml --selected-candidate state_data/selected_candidate.json
 scholar-outbound-manager sidecar service-install --unit-name scholar-outbound-sidecar.service
 scholar-outbound-manager sidecar service-start --unit-name scholar-outbound-sidecar.service
 scholar-outbound-manager sidecar service-snippet --listen-host 127.0.0.1 --listen-port 19080 --tag scholar-sidecar-socks-out
@@ -170,8 +172,7 @@ Start a sidecar from a selected passed candidate:
 ```bash
 scholar-outbound-manager sidecar start \
   --config config.yaml \
-  --candidates state_data/passed_candidates.json \
-  --candidate-index 0 \
+  --selected-candidate state_data/selected_candidate.json \
   --listen-host 127.0.0.1 \
   --listen-port 19080
 ```
@@ -215,6 +216,7 @@ Example snippet:
 - It does not modify production Xray, XrayR, or `x-ui` configuration.
 - It does not kill external Xray processes.
 - It does not use Docker by default.
+- The default multi-node expansion direction is one Xray process with multiple localhost SOCKS ports, not one systemd instance per node.
 
 Example production flow:
 
@@ -238,8 +240,7 @@ Use a conservative worker count such as `2` to `4` first. Each worker starts its
 ```bash
 scholar-outbound-manager sidecar service-stage \
   --config config.yaml \
-  --candidates state_data/passed_candidates.json \
-  --candidate-index 0 \
+  --selected-candidate state_data/selected_candidate.json \
   --listen-host 127.0.0.1 \
   --listen-port 19080
 ```
@@ -276,6 +277,50 @@ scholar-outbound-manager sidecar service-snippet \
 - Production Xray or XrayR integration remains manual.
 - Docker is not the default lifecycle manager.
 - In production, the preferred sequence is: full probe, select a passed candidate, stage the sidecar, install the unit, start the unit, check service status, then manually point production Xray or XrayR at the localhost SOCKS sidecar.
+
+## Single-Xray multi-port sidecar pool
+
+- Multi-node expansion does not require multiple Xray processes by default.
+- One sidecar Xray can expose multiple localhost SOCKS ports.
+- Each port maps to one passed candidate outbound.
+- Port availability must be checked before staging.
+- This reduces process overhead compared with `systemd` instance-per-node.
+- Multi-instance mode is not the default.
+- Production Xray or XrayR integration remains manual.
+- The pool runtime config is sensitive and must not be pasted publicly.
+
+Example pool flow:
+
+```bash
+scholar-outbound-manager sidecar pool plan \
+  --candidates state_data/passed_candidates.json \
+  --max-count 4 \
+  --base-port 19080 \
+  --output state_data/sidecar_pool_plan.json
+
+scholar-outbound-manager sidecar pool check-ports \
+  --plan state_data/sidecar_pool_plan.json
+
+scholar-outbound-manager sidecar service-stop \
+  --unit-name scholar-outbound-sidecar.service
+
+scholar-outbound-manager sidecar pool stage \
+  --config config.yaml \
+  --candidates state_data/passed_candidates.json \
+  --plan state_data/sidecar_pool_plan.json \
+  --source-xray-binary .runtime/xray/xray
+
+scholar-outbound-manager sidecar service-start \
+  --unit-name scholar-outbound-sidecar.service
+
+scholar-outbound-manager sidecar pool validate \
+  --plan state_data/sidecar_pool_plan.json
+
+scholar-outbound-manager sidecar pool snippets \
+  --plan state_data/sidecar_pool_plan.json
+```
+
+If the current single-node service already owns `127.0.0.1:19080`, stop it first or choose a different base port such as `19180`.
 
 ## Production operations
 
@@ -371,10 +416,17 @@ scholar-outbound-manager inspect \
 ### Step 5: start an isolated sidecar manually for smoke or local validation
 
 ```bash
+scholar-outbound-manager select list \
+  --candidates state_data/passed_candidates.json
+
+scholar-outbound-manager select choose \
+  --candidates state_data/passed_candidates.json \
+  --candidate-index 0 \
+  --output state_data/selected_candidate.json
+
 scholar-outbound-manager sidecar start \
   --config config.yaml \
-  --candidates state_data/passed_candidates.json
-  --candidate-index 0 \
+  --selected-candidate state_data/selected_candidate.json \
   --listen-host 127.0.0.1 \
   --listen-port 19080
 ```
@@ -384,8 +436,7 @@ scholar-outbound-manager sidecar start \
 ```bash
 scholar-outbound-manager sidecar service-stage \
   --config config.yaml \
-  --candidates state_data/passed_candidates.json \
-  --candidate-index 0 \
+  --selected-candidate state_data/selected_candidate.json \
   --listen-host 127.0.0.1 \
   --listen-port 19080
 ```

@@ -32,6 +32,77 @@ def test_sidecar_prepare_outputs_non_secret_summary(tmp_path, capsys, monkeypatc
     _assert_no_secrets(captured.out + captured.err)
 
 
+def test_sidecar_prepare_accepts_selected_candidate_artifact(tmp_path, capsys) -> None:
+    """Allow sidecar prepare to read a selected-candidate artifact directly."""
+    config_path = _write_config(tmp_path)
+    selected_candidate_path = _write_selected_candidate(tmp_path)
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "prepare",
+            "--config",
+            str(config_path),
+            "--selected-candidate",
+            str(selected_candidate_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "candidate_id: candidate-001" in captured.out
+    _assert_no_secrets(captured.out + captured.err)
+
+
+def test_sidecar_prepare_accepts_candidate_id(tmp_path, capsys) -> None:
+    """Allow sidecar prepare to resolve one candidate by candidate ID."""
+    config_path = _write_config(tmp_path)
+    candidates_path = _write_passed_candidates(tmp_path)
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "prepare",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--candidate-id",
+            "candidate-001",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "candidate_id: candidate-001" in captured.out
+    _assert_no_secrets(captured.out + captured.err)
+
+
+def test_sidecar_prepare_rejects_conflicting_selection_args(tmp_path, capsys) -> None:
+    """Reject conflicting selection arguments for sidecar prepare."""
+    config_path = _write_config(tmp_path)
+    candidates_path = _write_passed_candidates(tmp_path)
+
+    exit_code = cli.main(
+        [
+            "sidecar",
+            "prepare",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--candidate-id",
+            "candidate-001",
+            "--candidate-index",
+            "0",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "mutually exclusive" in captured.err
+
+
 def test_sidecar_start_can_be_monkeypatched_to_success(tmp_path, capsys, monkeypatch) -> None:
     """Allow sidecar start through a fake sidecar starter."""
     config_path = _write_config(tmp_path)
@@ -204,6 +275,24 @@ def _write_candidates(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return candidates_path
+
+
+def _write_passed_candidates(tmp_path: Path) -> Path:
+    candidates_path = tmp_path / "passed_candidates.json"
+    candidates_path.write_text(
+        '{"candidates":[{"candidate":{"source_name":"fixture","raw_name":"node","protocol":"vless","address":"example.invalid","port":443,"user_id":"00000000-0000-0000-0000-000000000000","security":"reality","server_name":"www.cloudflare.com","public_key":"PUBLIC_KEY_PLACEHOLDER","supported":true,"raw_uri":"vless://00000000-0000-0000-0000-000000000000@example.invalid:443"},"probe":{"candidate_id":"candidate-001","home_status":200,"query_status":200,"blocked":false,"timeout":false,"error":null,"failure_markers":[],"latency_ms":10,"checked_at":"2026-05-27T00:00:00Z","passed":true}}]}',
+        encoding="utf-8",
+    )
+    return candidates_path
+
+
+def _write_selected_candidate(tmp_path: Path) -> Path:
+    selected_path = tmp_path / "selected_candidate.json"
+    selected_path.write_text(
+        '{"schema_version":1,"sensitive":true,"description":"This file contains one selected proxy candidate and must not be committed.","selected_at":"2026-05-27T00:00:00Z","selection_method":"candidate_id","selected_candidate_id":"candidate-001","selected_index":0,"candidate":{"source_name":"fixture","raw_name":"node","protocol":"vless","address":"example.invalid","port":443,"user_id":"00000000-0000-0000-0000-000000000000","security":"reality","server_name":"www.cloudflare.com","public_key":"PUBLIC_KEY_PLACEHOLDER","supported":true,"raw_uri":"vless://00000000-0000-0000-0000-000000000000@example.invalid:443"},"probe":{"candidate_id":"candidate-001","home_status":200,"query_status":200,"blocked":false,"timeout":false,"error":null,"failure_markers":[],"latency_ms":10,"checked_at":"2026-05-27T00:00:00Z","passed":true}}',
+        encoding="utf-8",
+    )
+    return selected_path
 
 
 def _assert_no_secrets(rendered: str) -> None:

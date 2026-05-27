@@ -11,6 +11,7 @@ import pytest
 
 from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.models import XrayConfig
+from scholar_outbound_manager.sidecar_pool import build_sidecar_pool_plan
 from scholar_outbound_manager.systemd_sidecar import SystemdCommandResult
 from scholar_outbound_manager.systemd_sidecar import SystemdSidecarOptions
 from scholar_outbound_manager.systemd_sidecar import all_command_results_ok
@@ -21,6 +22,7 @@ from scholar_outbound_manager.systemd_sidecar import install_systemd_unit
 from scholar_outbound_manager.systemd_sidecar import render_sidecar_systemd_unit
 from scholar_outbound_manager.systemd_sidecar import render_socks_outbound_snippet_for_sidecar
 from scholar_outbound_manager.systemd_sidecar import run_systemctl
+from scholar_outbound_manager.systemd_sidecar import stage_single_xray_pool_files
 from scholar_outbound_manager.systemd_sidecar import stage_systemd_sidecar_files
 from scholar_outbound_manager.systemd_sidecar import summarize_command_results
 from scholar_outbound_manager.systemd_sidecar import validate_system_user_name
@@ -117,6 +119,70 @@ def test_stage_systemd_sidecar_files_writes_runtime_config_and_metadata(tmp_path
     assert "00000000-0000-0000-0000-000000000000" not in metadata_text
     assert "PUBLIC_KEY_PLACEHOLDER" not in metadata_text
     assert "vless://" not in metadata_text
+
+
+def test_stage_single_xray_pool_files_checks_ports_before_writing(tmp_path, monkeypatch) -> None:
+    """Reject occupied pool ports before writing the sensitive runtime config."""
+    options = SystemdSidecarOptions(
+        install_root=str(tmp_path / "opt"),
+        config_dir=str(tmp_path / "etc"),
+        state_dir=str(tmp_path / "var"),
+        service_user="scholar-sidecar",
+        service_group="scholar-sidecar",
+    )
+    source_binary = tmp_path / "source-xray"
+    source_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    source_binary.chmod(0o755)
+    monkeypatch.setattr(shutil, "chown", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "scholar_outbound_manager.systemd_sidecar.check_pool_ports_available",
+        lambda plan: {0: False},
+    )
+    plan = build_sidecar_pool_plan(_passed_candidates_payload(), max_count=1)
+
+    with pytest.raises(ValueError, match="not available"):
+        stage_single_xray_pool_files(
+            payload=_passed_candidates_payload(),
+            plan=plan,
+            xray_config=_make_xray_config(tmp_path),
+            options=options,
+            source_xray_binary_path=source_binary,
+        )
+
+
+def test_stage_single_xray_pool_files_writes_redacted_metadata(tmp_path, monkeypatch) -> None:
+    """Stage one multi-port runtime and keep metadata free of candidate secrets."""
+    options = SystemdSidecarOptions(
+        install_root=str(tmp_path / "opt"),
+        config_dir=str(tmp_path / "etc"),
+        state_dir=str(tmp_path / "var"),
+        service_user="scholar-sidecar",
+        service_group="scholar-sidecar",
+    )
+    source_binary = tmp_path / "source-xray"
+    source_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    source_binary.chmod(0o755)
+    monkeypatch.setattr(shutil, "chown", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "scholar_outbound_manager.systemd_sidecar.check_pool_ports_available",
+        lambda plan: {entry.pool_index: True for entry in plan.entries},
+    )
+    plan = build_sidecar_pool_plan(_passed_candidates_payload(), max_count=1)
+
+    paths = stage_single_xray_pool_files(
+        payload=_passed_candidates_payload(),
+        plan=plan,
+        xray_config=_make_xray_config(tmp_path),
+        options=options,
+        source_xray_binary_path=source_binary,
+    )
+
+    metadata_text = Path(paths.metadata_path).read_text(encoding="utf-8")
+    runtime_config = json.loads(Path(paths.runtime_config_path).read_text(encoding="utf-8"))
+    assert runtime_config["inbounds"][0]["port"] == plan.entries[0].listen_port
+    assert "PUBLIC_KEY_PLACEHOLDER" not in metadata_text
+    assert "PASSWORD_PLACEHOLDER" not in metadata_text
+    assert "00000000-0000-0000-0000-000000000000" not in metadata_text
 
 
 def test_ensure_system_user_runs_expected_flow() -> None:
@@ -294,6 +360,30 @@ def _make_candidate(**overrides: object) -> CandidateProxy:
     }
     candidate_data.update(overrides)
     return CandidateProxy(**candidate_data)
+
+
+def _passed_candidates_payload() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "sensitive": True,
+        "candidates": [
+            {
+                "candidate": _make_candidate().to_dict(),
+                "probe": {
+                    "candidate_id": "candidate-001",
+                    "home_status": 200,
+                    "query_status": 200,
+                    "blocked": False,
+                    "timeout": False,
+                    "error": None,
+                    "failure_markers": [],
+                    "latency_ms": 10,
+                    "checked_at": "2026-05-27T00:00:00Z",
+                    "passed": True,
+                },
+            }
+        ],
+    }
 
 
 def _make_xray_config(tmp_path: Path) -> XrayConfig:
