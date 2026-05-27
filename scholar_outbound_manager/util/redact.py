@@ -11,7 +11,10 @@ SENSITIVE_FIELD_NAMES = {
     "url",
     "token",
     "secret",
+    "auth",
     "password",
+    "obfs-password",
+    "obfs_password",
     "user_id",
     "uuid",
     "id",
@@ -20,6 +23,8 @@ SENSITIVE_FIELD_NAMES = {
     "short_id",
     "raw_uri",
     "headers",
+    "server_name",
+    "sni",
 }
 
 
@@ -42,6 +47,12 @@ def redact_mapping(value: Mapping[str, object]) -> dict[str, object]:
             continue
         if isinstance(item, Mapping):
             redacted[key] = redact_mapping(item)
+            continue
+        if isinstance(item, list):
+            redacted[key] = [
+                redact_mapping(element) if isinstance(element, Mapping) else element
+                for element in item
+            ]
             continue
         redacted[key] = item
     return redacted

@@ -11,6 +11,7 @@ from scholar_outbound_manager.xray.outbound_builder import build_trojan_outbound
 from scholar_outbound_manager.xray.outbound_builder import build_vless_outbound
 from scholar_outbound_manager.xray.outbound_builder import build_vmess_outbound
 from scholar_outbound_manager.xray.outbound_builder import build_xray_outbound
+from scholar_outbound_manager.xray.outbound_builder import build_hysteria2_outbound
 from scholar_outbound_manager.xray.outbound_builder import build_shadowsocks_outbound
 
 
@@ -19,6 +20,48 @@ def test_build_xray_outbound_dispatches_vless() -> None:
     outbound = build_xray_outbound(_make_candidate(), "google-scholar-node-001")
 
     assert outbound["protocol"] == "vless"
+
+
+def test_build_xray_outbound_dispatches_hysteria2() -> None:
+    """Dispatch supported Hysteria2 candidates through the unified builder."""
+    outbound = build_xray_outbound(_make_hysteria2_candidate(), "google-scholar-node-001")
+
+    assert outbound["protocol"] == "hysteria"
+
+
+def test_build_hysteria2_outbound() -> None:
+    """Build a conservative Xray Hysteria outbound for Hysteria2."""
+    outbound = build_hysteria2_outbound(_make_hysteria2_candidate(), "google-scholar-node-001")
+
+    assert outbound["protocol"] == "hysteria"
+    assert outbound["settings"] == {
+        "version": 2,
+        "address": "hy2.example.invalid",
+        "port": 443,
+    }
+    assert outbound["streamSettings"]["network"] == "hysteria"
+    assert outbound["streamSettings"]["hysteriaSettings"] == {
+        "version": 2,
+        "auth": "HY2_PASSWORD_PLACEHOLDER",
+    }
+
+
+def test_build_hysteria2_outbound_rejects_missing_password() -> None:
+    """Reject Hysteria2 candidates without auth material."""
+    with pytest.raises(ValueError, match="authentication secret"):
+        build_hysteria2_outbound(
+            _make_hysteria2_candidate(password=None),
+            "google-scholar-node-001",
+        )
+
+
+def test_build_hysteria2_outbound_rejects_obfs() -> None:
+    """Fail closed when unmapped obfs fields are present."""
+    with pytest.raises(ValueError, match="obfs is not mapped to Xray yet"):
+        build_hysteria2_outbound(
+            _make_hysteria2_candidate(extra={"obfs": "salamander", "obfs-password": "OBFS_PASSWORD_PLACEHOLDER"}),
+            "google-scholar-node-001",
+        )
 
 
 def test_build_vless_reality_vision_outbound() -> None:
@@ -179,9 +222,9 @@ def test_build_vmess_ws_tls_outbound() -> None:
 
 def test_build_xray_outbound_rejects_unsupported_protocol() -> None:
     """Reject protocols outside the supported Xray set."""
-    candidate = _make_candidate(protocol="hysteria2", public_key=None, short_id=None, raw_uri=None)
+    candidate = _make_candidate(protocol="wireguard", public_key=None, short_id=None, raw_uri=None)
 
-    with pytest.raises(ValueError, match="protocol 'hysteria2'"):
+    with pytest.raises(ValueError, match="protocol 'wireguard'"):
         build_xray_outbound(candidate, "google-scholar-node-001")
 
 
@@ -262,6 +305,36 @@ def _make_candidate(**overrides: object) -> CandidateProxy:
         "host": "cdn.example.invalid",
         "extra": {},
         "raw_uri": "vless://00000000-0000-0000-0000-000000000000@example.invalid:443",
+        "supported": True,
+        "unsupported_reason": None,
+    }
+    candidate_data.update(overrides)
+    return CandidateProxy(**candidate_data)
+
+
+def _make_hysteria2_candidate(**overrides: object) -> CandidateProxy:
+    """Construct one baseline Hysteria2 candidate for outbound tests."""
+    candidate_data: dict[str, object] = {
+        "source_name": "unit-test",
+        "raw_name": "hy2-node",
+        "protocol": "hysteria2",
+        "address": "hy2.example.invalid",
+        "port": 443,
+        "user_id": None,
+        "password": "HY2_PASSWORD_PLACEHOLDER",
+        "encryption": None,
+        "flow": None,
+        "network": None,
+        "security": "hysteria",
+        "server_name": "hy2.example.invalid",
+        "fingerprint": None,
+        "public_key": None,
+        "short_id": None,
+        "alpn": "h3,h2",
+        "path": None,
+        "host": None,
+        "extra": {},
+        "raw_uri": None,
         "supported": True,
         "unsupported_reason": None,
     }

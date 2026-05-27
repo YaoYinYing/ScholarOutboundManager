@@ -21,6 +21,8 @@ def build_xray_outbound(candidate: CandidateProxy, tag: str) -> dict[str, object
         return build_shadowsocks_outbound(candidate, tag)
     if protocol == "vmess":
         return build_vmess_outbound(candidate, tag)
+    if protocol == "hysteria2":
+        return build_hysteria2_outbound(candidate, tag)
     raise ValueError(f"Xray outbound is not supported for protocol '{protocol}'.")
 
 
@@ -207,6 +209,33 @@ def build_vmess_outbound(candidate: CandidateProxy, tag: str) -> dict[str, objec
     return outbound
 
 
+def build_hysteria2_outbound(candidate: CandidateProxy, tag: str) -> dict[str, object]:
+    """Build one Xray Hysteria outbound fragment for a Hysteria2 candidate."""
+    _validate_candidate_and_tag(candidate, tag)
+    if candidate.protocol.lower() != "hysteria2":
+        raise ValueError(f"Xray outbound is not supported for protocol '{candidate.protocol}'.")
+    _require_base_endpoint(candidate, protocol_name="Hysteria2")
+    _require_non_empty(candidate.password, "Hysteria2 outbound requires a non-empty authentication secret.")
+    _require_hysteria2_supported_fields(candidate)
+
+    return {
+        "tag": tag,
+        "protocol": "hysteria",
+        "settings": {
+            "version": 2,
+            "address": candidate.address,
+            "port": candidate.port,
+        },
+        "streamSettings": {
+            "network": "hysteria",
+            "hysteriaSettings": {
+                "version": 2,
+                "auth": candidate.password,
+            },
+        },
+    }
+
+
 def _validate_candidate_and_tag(candidate: CandidateProxy, tag: str) -> None:
     """Validate shared preconditions for all outbound builders."""
     if not tag:
@@ -285,6 +314,14 @@ def _build_ws_settings(candidate: CandidateProxy) -> dict[str, object]:
         "path": candidate.path or "/",
         "headers": headers,
     }
+
+
+def _require_hysteria2_supported_fields(candidate: CandidateProxy) -> None:
+    """Reject Hysteria2 candidates with field combinations not mapped to Xray yet."""
+    obfs = candidate.extra.get("obfs")
+    obfs_password = candidate.extra.get("obfs-password")
+    if obfs or obfs_password:
+        raise ValueError("Hysteria2 obfs is not mapped to Xray yet.")
 
 
 def _normalize_alpn(value: str | None) -> list[str] | str | None:

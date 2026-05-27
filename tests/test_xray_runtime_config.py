@@ -124,6 +124,18 @@ def test_build_runtime_config_for_vmess_candidate() -> None:
     assert config["outbounds"][0]["protocol"] == "vmess"
 
 
+def test_build_runtime_config_for_hysteria2_candidate() -> None:
+    """Build a runtime config for supported Hysteria2 candidates."""
+    config, _ = build_runtime_config_for_candidate(
+        candidate=_make_hysteria2_candidate(),
+        xray_config=_make_xray_config(local_socks_port=1081),
+    )
+
+    assert config["outbounds"][0]["protocol"] == "hysteria"
+    assert config["outbounds"][0]["settings"]["version"] == 2
+    assert config["outbounds"][0]["streamSettings"]["network"] == "hysteria"
+
+
 def test_runtime_config_does_not_expose_raw_uri() -> None:
     """Keep raw URI source material out of runtime configs."""
     config, _ = build_runtime_config_for_candidate(
@@ -220,6 +232,27 @@ def _make_vmess_candidate(**overrides: object) -> CandidateProxy:
         short_id=None,
         raw_uri=None,
         extra={"alter_id": 8},
+        **overrides,
+    )
+
+
+def _make_hysteria2_candidate(**overrides: object) -> CandidateProxy:
+    return _make_candidate(
+        protocol="hysteria2",
+        user_id=None,
+        password="HY2_PASSWORD_PLACEHOLDER",
+        encryption=None,
+        flow=None,
+        network=None,
+        security="hysteria",
+        server_name="hy2.example.invalid",
+        fingerprint=None,
+        public_key=None,
+        short_id=None,
+        alpn="h3,h2",
+        raw_uri=None,
+        address="hy2.example.invalid",
+        extra={},
         **overrides,
     )
 

@@ -38,6 +38,54 @@ def test_catalog_hides_sensitive_fields_and_keeps_redacted_fields() -> None:
     assert "PASSWORD_PLACEHOLDER" not in rendered
 
 
+def test_catalog_hides_hysteria2_sensitive_fields_from_extra() -> None:
+    """Keep Hysteria2 auth and obfs secrets out of review-safe catalog output."""
+    catalog = build_candidate_catalog(
+        {
+            "schema_version": 1,
+            "sensitive": True,
+            "candidates": [
+                {
+                    "candidate": _make_candidate(
+                        protocol="hysteria2",
+                        raw_name="HK Hysteria2",
+                        password="HY2_PASSWORD_PLACEHOLDER",
+                        user_id=None,
+                        security="hysteria",
+                        server_name="hy2.example.invalid",
+                        public_key=None,
+                        short_id=None,
+                        raw_uri=None,
+                        address="hy2.example.invalid",
+                        extra={
+                            "auth": "HY2_PASSWORD_PLACEHOLDER",
+                            "obfs-password": "OBFS_PASSWORD_PLACEHOLDER",
+                            "sni": "hy2.example.invalid",
+                        },
+                    ).to_dict(),
+                    "probe": {
+                        "candidate_id": "candidate-001",
+                        "home_status": 200,
+                        "query_status": 200,
+                        "blocked": False,
+                        "timeout": False,
+                        "error": None,
+                        "failure_markers": [],
+                        "latency_ms": 18,
+                        "checked_at": "2026-05-27T00:00:00Z",
+                        "passed": True,
+                    },
+                }
+            ],
+        }
+    )
+
+    rendered = str(catalog_to_dicts(catalog))
+    assert "HY2_PASSWORD_PLACEHOLDER" not in rendered
+    assert "OBFS_PASSWORD_PLACEHOLDER" not in rendered
+    assert "hy2.example.invalid" not in rendered
+
+
 def test_catalog_table_hides_secrets() -> None:
     """Keep catalog table output free of sensitive fields."""
     table = format_candidate_catalog_table(build_candidate_catalog(_passed_candidates_payload()))

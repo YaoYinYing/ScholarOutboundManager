@@ -39,3 +39,26 @@ def test_redact_ipv6_url_preserves_brackets_and_port() -> None:
     value = "https://[::1]:8443/path?token=abc"
 
     assert redact_text(value) == "https://[::1]:8443/path<REDACTED_QUERY>"
+
+
+def test_redact_mapping_hides_hysteria2_secret_fields() -> None:
+    """Redact Hysteria2-related auth and obfs fields, including nested mappings."""
+    value = {
+        "extra": {
+            "auth": "HY2_PASSWORD_PLACEHOLDER",
+            "obfs-password": "OBFS_PASSWORD_PLACEHOLDER",
+            "sni": "hy2.example.invalid",
+        },
+        "items": [
+            {
+                "auth": "ANOTHER_SECRET",
+            }
+        ],
+    }
+
+    result = redact_mapping(value)
+
+    assert result["extra"]["auth"] == "HY2_<REDACTED>LDER"
+    assert result["extra"]["obfs-password"] == "OBFS<REDACTED>LDER"
+    assert result["extra"]["sni"] == "hy2.<REDACTED>alid"
+    assert result["items"][0]["auth"] == "ANOT<REDACTED>CRET"

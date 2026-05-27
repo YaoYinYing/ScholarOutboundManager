@@ -242,6 +242,46 @@ def test_probe_candidates_sequential_can_include_unsupported_candidates() -> Non
     assert summary.records[0].attempted is True
 
 
+def test_probe_candidates_sequential_skips_unsupported_hysteria2_but_attempts_supported_hysteria2() -> None:
+    """Skip fail-closed Hysteria2 candidates while probing supported ones."""
+    candidates = [
+        _make_candidate(protocol="hysteria2", supported=False, unsupported_reason="Hysteria2 obfs is not mapped to Xray yet."),
+        _make_candidate(
+            raw_name="hy2-supported",
+            protocol="hysteria2",
+            user_id=None,
+            password="HY2_PASSWORD_PLACEHOLDER",
+            encryption=None,
+            flow=None,
+            network=None,
+            security="hysteria",
+            server_name="hy2.example.invalid",
+            fingerprint=None,
+            public_key=None,
+            short_id=None,
+            raw_uri=None,
+            address="hy2.example.invalid",
+        ),
+    ]
+    observed_protocols: list[str] = []
+
+    def fake_probe(candidate, xray_config, candidate_id, candidate_options):
+        del xray_config, candidate_id, candidate_options
+        observed_protocols.append(candidate.protocol)
+        return _make_summary("candidate-002-hy2")
+
+    summary = probe_candidates_sequential(
+        candidates=candidates,
+        xray_config=_make_xray_config(),
+        probe_candidate_func=fake_probe,
+    )
+
+    assert summary.records[0].skipped is True
+    assert summary.records[0].skip_reason == "Hysteria2 obfs is not mapped to Xray yet."
+    assert summary.records[1].attempted is True
+    assert observed_protocols == ["hysteria2"]
+
+
 def test_probe_candidates_sequential_wraps_probe_exceptions() -> None:
     """Convert single-candidate probe exceptions into structured batch failures."""
     candidates = [_make_candidate()]

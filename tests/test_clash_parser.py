@@ -104,14 +104,56 @@ def test_parse_clash_yaml_subscription_marks_grpc_vmess_unsupported() -> None:
     assert "grpc" in (candidates[0].unsupported_reason or "")
 
 
-def test_parse_clash_yaml_subscription_preserves_unsupported_types() -> None:
-    """Keep unsupported Clash proxy types as unsupported candidates."""
-    candidates, summary = parse_clash_yaml_subscription(_unsupported_yaml(), "fixture-source")
+def test_parse_clash_yaml_subscription_parses_hysteria2_candidate() -> None:
+    """Parse a conservative Hysteria2 candidate for Xray-backed probing."""
+    candidates, summary = parse_clash_yaml_subscription(_hysteria2_yaml(), "fixture-source")
+
+    assert summary.unsupported_count == 0
+    assert candidates[0].protocol == "hysteria2"
+    assert candidates[0].supported is True
+    assert candidates[0].password == "HY2_PASSWORD_PLACEHOLDER"
+    assert candidates[0].server_name == "hy2.example.invalid"
+    assert candidates[0].alpn == "h3,h2"
+    assert candidates[0].security == "hysteria"
+    assert candidates[0].extra["runtime_supported_by"] == ["xray"]
+
+
+def test_parse_clash_yaml_subscription_marks_hysteria2_missing_password_unsupported() -> None:
+    """Reject Hysteria2 candidates without password or auth."""
+    candidates, summary = parse_clash_yaml_subscription(_hysteria2_missing_password_yaml(), "fixture-source")
 
     assert summary.unsupported_count == 1
     assert candidates[0].protocol == "hysteria2"
     assert candidates[0].supported is False
-    assert "not supported yet" in (candidates[0].unsupported_reason or "")
+    assert "password/auth" in (candidates[0].unsupported_reason or "")
+
+
+def test_parse_clash_yaml_subscription_marks_hysteria2_missing_server_unsupported() -> None:
+    """Reject Hysteria2 candidates without a server."""
+    candidates, summary = parse_clash_yaml_subscription(_hysteria2_missing_server_yaml(), "fixture-source")
+
+    assert summary.unsupported_count == 1
+    assert "server" in (candidates[0].unsupported_reason or "")
+
+
+def test_parse_clash_yaml_subscription_marks_hysteria2_missing_port_unsupported() -> None:
+    """Reject Hysteria2 candidates without a valid port."""
+    candidates, summary = parse_clash_yaml_subscription(_hysteria2_missing_port_yaml(), "fixture-source")
+
+    assert summary.unsupported_count == 1
+    assert "port" in (candidates[0].unsupported_reason or "")
+
+
+def test_parse_clash_yaml_subscription_marks_hysteria2_obfs_unsupported() -> None:
+    """Fail closed when Hysteria2 obfs fields are present but unmapped."""
+    candidates, summary = parse_clash_yaml_subscription(_hysteria2_obfs_yaml(), "fixture-source")
+
+    assert summary.unsupported_count == 1
+    assert candidates[0].protocol == "hysteria2"
+    assert candidates[0].supported is False
+    assert candidates[0].extra["obfs"] == "salamander"
+    assert candidates[0].extra["obfs-password"] == "OBFS_PASSWORD_PLACEHOLDER"
+    assert "obfs is not mapped to Xray yet" in (candidates[0].unsupported_reason or "")
 
 
 def test_parse_clash_yaml_subscription_marks_incomplete_vless_unsupported() -> None:
@@ -239,13 +281,64 @@ proxies:
 """.strip()
 
 
-def _unsupported_yaml() -> str:
+def _hysteria2_yaml() -> str:
     return """
 proxies:
   - name: "Hysteria Test"
     type: hysteria2
     server: hy2.example.invalid
     port: 443
+    password: HY2_PASSWORD_PLACEHOLDER
+    sni: hy2.example.invalid
+    skip-cert-verify: true
+    alpn:
+      - h3
+      - h2
+    up: "100 Mbps"
+    down: "100 Mbps"
+""".strip()
+
+
+def _hysteria2_missing_password_yaml() -> str:
+    return """
+proxies:
+  - name: "Hysteria Missing Password"
+    type: hysteria2
+    server: hy2.example.invalid
+    port: 443
+""".strip()
+
+
+def _hysteria2_missing_server_yaml() -> str:
+    return """
+proxies:
+  - name: "Hysteria Missing Server"
+    type: hysteria2
+    port: 443
+    password: HY2_PASSWORD_PLACEHOLDER
+""".strip()
+
+
+def _hysteria2_missing_port_yaml() -> str:
+    return """
+proxies:
+  - name: "Hysteria Missing Port"
+    type: hysteria2
+    server: hy2.example.invalid
+    password: HY2_PASSWORD_PLACEHOLDER
+""".strip()
+
+
+def _hysteria2_obfs_yaml() -> str:
+    return """
+proxies:
+  - name: "Hysteria With Obfs"
+    type: hysteria2
+    server: hy2.example.invalid
+    port: 443
+    password: HY2_PASSWORD_PLACEHOLDER
+    obfs: salamander
+    obfs-password: OBFS_PASSWORD_PLACEHOLDER
 """.strip()
 
 

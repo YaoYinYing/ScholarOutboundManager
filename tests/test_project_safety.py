@@ -66,8 +66,8 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "runtime backend direction" in readme_text.lower()
     assert "top-level `proxies` list" in readme_text
     assert "checksum-aware" in readme_text.lower()
-    assert "vless, trojan, shadowsocks, and vmess" in readme_text.lower()
-    assert "hysteria2, tuic, and wireguard" in readme_text.lower()
+    assert "vless, trojan, shadowsocks, vmess, and conservative hysteria2" in readme_text.lower()
+    assert "unsupported protocols such as tuic and wireguard" in readme_text.lower()
     assert "xray binary preparation" in readme_text.lower()
     assert "xray inspect --path" in readme_text.lower()
     assert "xray install" in readme_text.lower()
@@ -126,6 +126,9 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "--parallel 4" in readme_text
     assert "--keep-all-passed" in readme_text
     assert "each worker starts its own managed xray runtime" in readme_text.lower()
+    assert "hysteria2 support through xray" in readme_text.lower()
+    assert "xray names the outbound protocol `hysteria`" in readme_text.lower()
+    assert "obfs and obfs-password are preserved for review but remain fail-closed" in readme_text.lower()
     assert "legacy offline fragment export" in readme_text.lower()
     assert "not the recommended production workflow" in readme_text.lower()
     assert "does not mutate production xray" in readme_text.lower() or "does not modify production xray" in readme_text.lower()

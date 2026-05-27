@@ -109,6 +109,37 @@ def test_build_multi_port_sidecar_runtime_config_creates_matching_sections() -> 
     assert "raw_uri" not in json.dumps(runtime_config)
 
 
+def test_build_multi_port_sidecar_runtime_config_supports_hysteria2_and_vless() -> None:
+    """Allow Hysteria2 and VLESS candidates to coexist in one pool config."""
+    plan = build_sidecar_pool_plan(_passed_candidates_payload_hysteria2(), base_port=19080)
+    candidates_by_id = {
+        "candidate-001": _make_candidate(),
+        "candidate-002": _make_candidate(
+            protocol="hysteria2",
+            user_id=None,
+            password="HY2_PASSWORD_PLACEHOLDER",
+            encryption=None,
+            flow=None,
+            network=None,
+            security="hysteria",
+            server_name="hy2.example.invalid",
+            fingerprint=None,
+            public_key=None,
+            short_id=None,
+            alpn="h3,h2",
+            raw_uri=None,
+            address="hy2.example.invalid",
+        ),
+    }
+
+    runtime_config = build_multi_port_sidecar_runtime_config(
+        entries=plan.entries,
+        candidates_by_id=candidates_by_id,
+    )
+
+    assert [outbound["protocol"] for outbound in runtime_config["outbounds"]] == ["vless", "hysteria"]
+
+
 def test_write_and_load_pool_plan_round_trip(tmp_path: Path) -> None:
     """Persist and reload a redacted pool plan artifact."""
     plan = build_sidecar_pool_plan(_passed_candidates_payload(), base_port=19080)
@@ -185,6 +216,60 @@ def _passed_candidates_payload() -> dict[str, object]:
             },
             {
                 "candidate": _make_candidate(protocol="trojan", user_id=None, password="PASSWORD_PLACEHOLDER").to_dict(),
+                "probe": {
+                    "candidate_id": "candidate-002",
+                    "home_status": 200,
+                    "query_status": 200,
+                    "blocked": False,
+                    "timeout": False,
+                    "error": None,
+                    "failure_markers": [],
+                    "latency_ms": 12,
+                    "checked_at": "2026-05-27T00:00:00Z",
+                    "passed": True,
+                },
+            },
+        ],
+    }
+
+
+def _passed_candidates_payload_hysteria2() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "sensitive": True,
+        "candidates": [
+            {
+                "candidate": _make_candidate().to_dict(),
+                "probe": {
+                    "candidate_id": "candidate-001",
+                    "home_status": 200,
+                    "query_status": 200,
+                    "blocked": False,
+                    "timeout": False,
+                    "error": None,
+                    "failure_markers": [],
+                    "latency_ms": 10,
+                    "checked_at": "2026-05-27T00:00:00Z",
+                    "passed": True,
+                },
+            },
+            {
+                "candidate": _make_candidate(
+                    protocol="hysteria2",
+                    user_id=None,
+                    password="HY2_PASSWORD_PLACEHOLDER",
+                    encryption=None,
+                    flow=None,
+                    network=None,
+                    security="hysteria",
+                    server_name="hy2.example.invalid",
+                    fingerprint=None,
+                    public_key=None,
+                    short_id=None,
+                    alpn="h3,h2",
+                    raw_uri=None,
+                    address="hy2.example.invalid",
+                ).to_dict(),
                 "probe": {
                     "candidate_id": "candidate-002",
                     "home_status": 200,

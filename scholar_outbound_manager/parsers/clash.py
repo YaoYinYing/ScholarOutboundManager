@@ -88,6 +88,8 @@ def _parse_proxy_item(item: Any, index: int, source_name: str) -> CandidateProxy
         return _parse_shadowsocks_proxy(item, source_name, raw_name)
     if proxy_type == "vmess":
         return _parse_vmess_proxy(item, source_name, raw_name)
+    if proxy_type == "hysteria2":
+        return _parse_hysteria2_proxy(item, source_name, raw_name)
     return CandidateProxy(
         source_name=source_name,
         raw_name=raw_name,
@@ -256,6 +258,61 @@ def _parse_vmess_proxy(item: dict[str, Any], source_name: str, raw_name: str) ->
     )
 
 
+def _parse_hysteria2_proxy(item: dict[str, Any], source_name: str, raw_name: str) -> CandidateProxy:
+    """Parse one Clash Hysteria2 node conservatively for Xray-backed probing."""
+    unsupported_reasons: list[str] = []
+    if missing_fields := _missing_required_fields(item, ("server", "port")):
+        unsupported_reasons.append(f"Missing required Hysteria2 fields: {', '.join(missing_fields)}.")
+
+    password = _first_non_empty(item.get("password"), item.get("auth"))
+    if not password:
+        unsupported_reasons.append("Missing required Hysteria2 fields: password/auth.")
+
+    obfs = _string(item.get("obfs")) or None
+    obfs_password = _string(item.get("obfs-password")) or None
+    if obfs or obfs_password:
+        unsupported_reasons.append("Hysteria2 obfs is not mapped to Xray yet.")
+
+    runtime_warnings: list[str] = []
+    if _first_non_empty(item.get("sni"), item.get("servername")):
+        runtime_warnings.append("Hysteria2 sni/servername is preserved but not mapped to Xray runtime config yet.")
+    if item.get("skip-cert-verify") is not None:
+        runtime_warnings.append("Hysteria2 skip-cert-verify is preserved but not mapped to Xray runtime config yet.")
+    if item.get("alpn") is not None:
+        runtime_warnings.append("Hysteria2 alpn is preserved but not mapped to Xray runtime config yet.")
+    if item.get("up") is not None or item.get("down") is not None:
+        runtime_warnings.append("Hysteria2 up/down is preserved for review but not mapped to Xray runtime config.")
+
+    extra = {
+        "clash_type": "hysteria2",
+        "auth": password,
+        "obfs": obfs,
+        "obfs-password": obfs_password,
+        "skip_cert_verify": _bool_or_none(item.get("skip-cert-verify")),
+        "up": _string(item.get("up")) or None,
+        "down": _string(item.get("down")) or None,
+        "ports": _string(item.get("ports")) or None,
+        "runtime_supported_by": ["xray"] if not unsupported_reasons else [],
+        "runtime_warnings": runtime_warnings or None,
+    }
+    return CandidateProxy(
+        source_name=source_name,
+        raw_name=raw_name,
+        protocol="hysteria2",
+        address=_string(item.get("server")),
+        port=_int(item.get("port")),
+        password=password,
+        security="hysteria",
+        server_name=_first_non_empty(item.get("sni"), item.get("servername")),
+        fingerprint=_string(item.get("fingerprint")) or _string(item.get("client-fingerprint")) or None,
+        alpn=_csv_or_none(item.get("alpn")),
+        raw_uri=None,
+        supported=not unsupported_reasons,
+        unsupported_reason=" ".join(unsupported_reasons) or None,
+        extra={key: value for key, value in extra.items() if value is not None},
+    )
+
+
 def _missing_required_fields(item: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
     """Collect missing required fields from a Clash proxy item."""
     missing: list[str] = []
@@ -321,3 +378,13 @@ def _first_non_empty(*values: Any) -> str | None:
         if normalized:
             return normalized
     return None
+
+
+def _csv_or_none(value: Any) -> str | None:
+    """Normalize a scalar or list of scalars into a comma-separated string."""
+    if isinstance(value, list):
+        values = [_string(item) for item in value]
+        normalized = ",".join(item for item in values if item)
+        return normalized or None
+    normalized = _string(value)
+    return normalized or None

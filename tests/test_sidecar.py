@@ -58,6 +58,18 @@ def test_prepare_sidecar_runtime_uses_candidate_outbound_protocol(tmp_path) -> N
     assert runtime_config["outbounds"][0]["protocol"] == "trojan"
 
 
+def test_prepare_sidecar_runtime_supports_hysteria2_candidate(tmp_path) -> None:
+    """Write a Hysteria2-backed outbound into the sidecar runtime config."""
+    summary = prepare_sidecar_runtime(
+        candidate=_make_hysteria2_candidate(),
+        xray_config=_make_xray_config(tmp_path),
+        options=SidecarRuntimeOptions(),
+    )
+
+    runtime_config = json.loads(Path(summary.runtime_config_path).read_text(encoding="utf-8"))
+    assert runtime_config["outbounds"][0]["protocol"] == "hysteria"
+
+
 def test_prepare_sidecar_metadata_excludes_sensitive_fields(tmp_path) -> None:
     """Keep sidecar metadata free of candidate secrets."""
     summary = prepare_sidecar_runtime(
@@ -311,6 +323,26 @@ def _make_trojan_candidate(**overrides: object) -> CandidateProxy:
         public_key=None,
         short_id=None,
         raw_uri=None,
+        **overrides,
+    )
+
+
+def _make_hysteria2_candidate(**overrides: object) -> CandidateProxy:
+    return _make_vless_candidate(
+        protocol="hysteria2",
+        user_id=None,
+        password="HY2_PASSWORD_PLACEHOLDER",
+        encryption=None,
+        flow=None,
+        network=None,
+        security="hysteria",
+        server_name="hy2.example.invalid",
+        fingerprint=None,
+        public_key=None,
+        short_id=None,
+        alpn="h3,h2",
+        raw_uri=None,
+        address="hy2.example.invalid",
         **overrides,
     )
 

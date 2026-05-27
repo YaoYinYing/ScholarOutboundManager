@@ -85,8 +85,8 @@ Subscription fetching is also explicit opt-in at the CLI layer.
 - Subscription parsing may accept Clash YAML because subconverter can emit Clash-compatible YAML payloads.
 - Only the top-level `proxies` list is parsed from Clash YAML subscriptions.
 - Health-check URLs, provider URLs, and other non-proxy `url:` fields are ignored during parsing.
-- Xray-compatible Clash YAML protocols now include VLESS, Trojan, Shadowsocks, and VMess when required fields are present.
-- Unsupported protocols such as hysteria2, tuic, and wireguard still require a future `mihomo` probe backend.
+- Xray-compatible Clash YAML protocols now include VLESS, Trojan, Shadowsocks, VMess, and conservative Hysteria2 when required fields are present.
+- Unsupported protocols such as tuic and wireguard still require a future `mihomo` probe backend.
 - `mihomo` is a useful future probe backend for broader protocol coverage.
 - Localhost SOCKS sidecar integration is the preferred production path.
 - The project should not reimplement proxy protocol data planes directly.
@@ -644,9 +644,18 @@ scholar-outbound-manager inspect \
 scholar-outbound-manager run \
   --config config.yaml \
   --candidates state_data/passed_candidates.json \
-  --candidate-index 0 \
+  --candidate-id <id> \
   --test-config
 ```
+
+## Hysteria2 support through Xray
+
+- Xray names the outbound protocol `hysteria`, even when the source candidate protocol is Clash `hysteria2`.
+- This project maps supported Hysteria2 candidates to Xray with `settings.version = 2`, `streamSettings.network = "hysteria"`, and `hysteriaSettings.version = 2`.
+- Initial support is conservative and intended for the existing sidecar-first workflow only.
+- obfs and obfs-password are preserved for review but remain fail-closed until the Xray mapping is validated.
+- `sni`, `alpn`, `skip-cert-verify`, `up`, and `down` may be preserved from Clash input without being written into the runtime config yet.
+- Production Xray, XrayR, and `x-ui` configuration remain unchanged.
 
 ## CLI Reference
 
