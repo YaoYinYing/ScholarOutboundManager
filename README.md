@@ -392,16 +392,25 @@ scholar-outbound-manager geo refresh-plan \
   --geo-cache state_data/geo/candidate_geo_cache.json
 ```
 
-## Optional TUI
+## Optional workflow TUI
 
 - Install with:
   `pip install "ScholarOutboundManager[tui]"`
 - Run with:
-  `scholar-outbound-manager-tui --candidates state_data/passed_candidates.json`
-- The TUI uses the redacted candidate catalog and selection helpers.
-- The TUI does not display proxy secrets.
-- The TUI does not mutate production Xray, XrayR, or `x-ui`.
-- The first version is a selection and control surface, not daemon automation.
+  `scholar-outbound-manager tui`
+  or
+  `scholar-outbound-manager-tui`
+- The TUI follows the documented workflow.
+- Tabs are for operations.
+- Wizard is for first deployment or full refresh.
+- The TUI only displays redacted data.
+- The TUI does not automatically modify production Xray/XrayR.
+- Mutating actions require confirmation.
+- CLI remains the source of truth.
+
+Layout:
+
+`Dashboard | Preflight | Fetch & Probe | Artifacts | Selection | Sidecar | Pool | Troubleshooting | Snippets`
 
 ## Production operations
 

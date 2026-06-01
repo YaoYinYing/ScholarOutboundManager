@@ -121,6 +121,12 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "optional tui" in readme_text.lower()
     assert "scholar-outbound-manager-tui" in readme_text.lower()
     assert 'pip install "scholaroutboundmanager[tui]"' in readme_text.lower()
+    assert "scholar-outbound-manager tui" in readme_text.lower()
+    assert "tabs are for operations" in readme_text.lower()
+    assert "wizard is for first deployment or full refresh" in readme_text.lower()
+    assert "mutating actions require confirmation" in readme_text.lower()
+    assert "cli remains the source of truth" in readme_text.lower()
+    assert "dashboard | preflight | fetch & probe | artifacts | selection | sidecar | pool | troubleshooting | snippets" in readme_text.lower()
     assert "selected_candidate.json" in readme_text.lower()
     assert "state_data/geo/" in readme_text.lower()
     assert "--parallel 4" in readme_text

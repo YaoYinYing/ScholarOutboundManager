@@ -60,6 +60,50 @@ def test_tui_dashboard_state_is_redacted(tmp_path: Path) -> None:
     assert "PUBLIC_KEY_PLACEHOLDER" not in rendered
 
 
+def test_tui_load_workflow_state_contains_tabs_and_wizard(tmp_path: Path) -> None:
+    """Build the workflow-oriented state model without Textual."""
+    candidates_path = _write_passed_candidates(tmp_path)
+
+    state = tui_app.load_workflow_state(
+        candidates_path=str(candidates_path),
+        passed_candidates_path=str(candidates_path),
+        probe_summary_path=str(tmp_path / "probe_summary.json"),
+        selected_candidate_path=str(tmp_path / "selected_candidate.json"),
+        session_path=str(tmp_path / "tui_session.json"),
+    )
+
+    assert state["tabs"][0] == "Dashboard"
+    assert state["wizard_steps"][0]["key"] == "preflight"
+    assert state["selection"]["sensitive_notice"].startswith("selected_candidate.json is sensitive")
+
+
+def test_tui_session_state_does_not_store_sensitive_fields(tmp_path: Path) -> None:
+    """Persist only non-sensitive TUI session state."""
+    from scholar_outbound_manager.tui.state import build_session_state
+    from scholar_outbound_manager.tui.state import write_session_state
+
+    session_path = tmp_path / "tui_session.json"
+    state = build_session_state(
+        updated_at="2026-06-01T00:00:00Z",
+        workspace="/tmp/workspace",
+        last_step="probe",
+        paths={"config": "config.yaml"},
+        last_results={
+            "probe": {
+                "ok": True,
+                "candidate_count": 3,
+                "raw_uri": "vless://secret@example.invalid",
+                "password": "PASSWORD_PLACEHOLDER",
+            }
+        },
+    )
+
+    write_session_state(session_path, state)
+    rendered = session_path.read_text(encoding="utf-8")
+    assert "vless://" not in rendered
+    assert "PASSWORD_PLACEHOLDER" not in rendered
+
+
 def _write_passed_candidates(tmp_path: Path) -> Path:
     path = tmp_path / "passed_candidates.json"
     path.write_text(
