@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -37,6 +38,10 @@ class CandidateProbeOptions:
     xray_test_timeout_seconds: float | None = None
     runtime_config_name: str = "candidate_probe_runtime.json"
     probe_query: bool = True
+    transport_retry_count: int = 0
+    transport_retry_backoff_seconds: float = 1.0
+    hysteria2_warmup_attempts: int = 0
+    warmup_url: str = "https://www.gstatic.com/generate_204"
 
 
 @dataclass(slots=True)
@@ -51,12 +56,17 @@ class CandidateProbeSummary:
     xray_test_passed: bool | None
     startup_ready: bool
     result: ProbeResult
+    attempt_count: int = 1
+    transport_retry_count_used: int = 0
+    warmup_attempt_count: int = 0
+    final_attempt_index: int = 0
 
 
 HttpProbeCallable = Callable[[HttpProbeTarget, SocksEndpoint, float], HttpProbeResponse]
 StartXrayCallable = Callable[[str, str | Path, str | Path | None], ManagedXrayProcess]
 TestXrayConfigCallable = Callable[[str, str | Path, float], XrayCommandResult]
 WaitForTcpEndpointCallable = Callable[[str, int, float], bool]
+SleepCallable = Callable[[float], None]
 
 
 def probe_candidate(
@@ -69,6 +79,7 @@ def probe_candidate(
     start_xray_func: StartXrayCallable = start_xray,
     test_xray_config_func: TestXrayConfigCallable = test_xray_config,
     wait_for_tcp_endpoint_func: WaitForTcpEndpointCallable = wait_for_tcp_endpoint,
+    sleep_func: SleepCallable = time.sleep,
 ) -> CandidateProbeSummary:
     """Probe one candidate through runtime preparation, Xray startup, and Scholar requests."""
     probe_options = options or CandidateProbeOptions()
@@ -155,19 +166,20 @@ def probe_candidate(
             )
 
         socks_endpoint = SocksEndpoint(local_socks_host, local_socks_port)
-        home_response = http_probe(
-            build_scholar_home_target(),
-            socks_endpoint,
-            probe_options.request_timeout_seconds,
+        warmup_attempt_count = _run_optional_warmup(
+            candidate=candidate,
+            socks_endpoint=socks_endpoint,
+            options=probe_options,
+            http_probe=http_probe,
         )
-        query_response = None
-        if probe_options.probe_query:
-            query_response = http_probe(
-                build_scholar_query_target(probe_options.query),
-                socks_endpoint,
-                probe_options.request_timeout_seconds,
-            )
-        result = build_scholar_probe_result(candidate_id, home_response, query_response)
+        result, attempt_count, retries_used, final_attempt_index = _probe_with_transport_retries(
+            candidate=candidate,
+            candidate_id=candidate_id,
+            socks_endpoint=socks_endpoint,
+            options=probe_options,
+            http_probe=http_probe,
+            sleep_func=sleep_func,
+        )
         return CandidateProbeSummary(
             candidate_id=candidate_id,
             runtime_config_path=runtime_config_path,
@@ -177,6 +189,10 @@ def probe_candidate(
             xray_test_passed=xray_test_passed,
             startup_ready=True,
             result=result,
+            attempt_count=attempt_count,
+            transport_retry_count_used=retries_used,
+            warmup_attempt_count=warmup_attempt_count,
+            final_attempt_index=final_attempt_index,
         )
     except Exception as exc:  # noqa: BLE001
         return _summary_from_failure(
@@ -202,7 +218,46 @@ def _validate_probe_options(options: CandidateProbeOptions) -> None:
         raise ValueError("request_timeout_seconds must be greater than 0.")
     if options.xray_test_timeout_seconds is not None and options.xray_test_timeout_seconds <= 0:
         raise ValueError("xray_test_timeout_seconds must be greater than 0.")
+    if options.transport_retry_count < 0:
+        raise ValueError("transport_retry_count must be greater than or equal to 0.")
+    if options.transport_retry_backoff_seconds < 0:
+        raise ValueError("transport_retry_backoff_seconds must be greater than or equal to 0.")
+    if options.hysteria2_warmup_attempts < 0:
+        raise ValueError("hysteria2_warmup_attempts must be greater than or equal to 0.")
+    if not options.warmup_url:
+        raise ValueError("warmup_url must not be empty.")
     _validate_runtime_config_name(options.runtime_config_name)
+
+
+def is_transport_retryable_probe_result(result: ProbeResult) -> bool:
+    """Return whether one probe result is safe to retry inside the same process."""
+    non_retryable_markers = {
+        "stage_query_blocked",
+        "stage_home_blocked",
+        "google_sorry",
+        "automated_queries",
+        "http_403",
+        "http_429",
+    }
+    if any(marker in non_retryable_markers for marker in result.failure_markers):
+        return False
+    if "stage_transport_failed" in result.failure_markers:
+        return True
+    if "transport_error" in result.failure_markers:
+        return True
+    if result.timeout:
+        return True
+    error_text = (result.error or "").lower()
+    return any(
+        needle in error_text
+        for needle in (
+            "tls/ssl connection has been closed",
+            "eof",
+            "connection reset",
+            "timed out",
+            "timeout",
+        )
+    )
 
 
 def _validate_runtime_config_name(config_name: str) -> None:
@@ -224,6 +279,133 @@ def _build_managed_xray_pid_file_path(runtime_dir: str | Path, candidate_id: str
     if not safe_candidate_id:
         safe_candidate_id = "candidate"
     return Path(runtime_dir) / f"managed_xray_{safe_candidate_id}.pid.json"
+
+
+def _run_optional_warmup(
+    *,
+    candidate: CandidateProxy,
+    socks_endpoint: SocksEndpoint,
+    options: CandidateProbeOptions,
+    http_probe: HttpProbeCallable,
+) -> int:
+    """Run optional warm-up requests through the active SOCKS tunnel."""
+    if candidate.protocol.lower() != "hysteria2":
+        return 0
+    if options.hysteria2_warmup_attempts <= 0:
+        return 0
+
+    warmup_target = HttpProbeTarget(url=options.warmup_url, max_body_bytes=0)
+    warmup_attempt_count = 0
+    for _ in range(options.hysteria2_warmup_attempts):
+        http_probe(warmup_target, socks_endpoint, options.request_timeout_seconds)
+        warmup_attempt_count += 1
+    return warmup_attempt_count
+
+
+def _probe_with_transport_retries(
+    *,
+    candidate: CandidateProxy,
+    candidate_id: str,
+    socks_endpoint: SocksEndpoint,
+    options: CandidateProbeOptions,
+    http_probe: HttpProbeCallable,
+    sleep_func: SleepCallable,
+) -> tuple[ProbeResult, int, int, int]:
+    """Run the Scholar probe and retry only transport failures in-process."""
+    passed_result: ProbeResult | None = None
+    last_result: ProbeResult | None = None
+    attempt_count = 0
+    retries_used = 0
+    final_attempt_index = 0
+
+    for attempt_index in range(options.transport_retry_count + 1):
+        attempt_count += 1
+        current_result = _run_scholar_attempt(
+            candidate_id=candidate_id,
+            socks_endpoint=socks_endpoint,
+            options=options,
+            http_probe=http_probe,
+        )
+        last_result = current_result
+        final_attempt_index = attempt_index
+
+        if _probe_result_passed(current_result):
+            passed_result = current_result
+            break
+
+        if attempt_index >= options.transport_retry_count:
+            break
+        if not is_transport_retryable_probe_result(current_result):
+            break
+
+        retries_used += 1
+        if options.transport_retry_backoff_seconds > 0:
+            sleep_func(options.transport_retry_backoff_seconds)
+
+    return passed_result or last_result or _unexpected_empty_attempt_result(candidate_id), attempt_count, retries_used, final_attempt_index
+
+
+def _run_scholar_attempt(
+    *,
+    candidate_id: str,
+    socks_endpoint: SocksEndpoint,
+    options: CandidateProbeOptions,
+    http_probe: HttpProbeCallable,
+) -> ProbeResult:
+    """Run one home/query Scholar attempt through the active SOCKS tunnel."""
+    home_response = http_probe(
+        build_scholar_home_target(),
+        socks_endpoint,
+        options.request_timeout_seconds,
+    )
+    query_response = None
+    if options.probe_query:
+        query_response = http_probe(
+            build_scholar_query_target(options.query),
+            socks_endpoint,
+            options.request_timeout_seconds,
+        )
+    return build_scholar_probe_result(candidate_id, home_response, query_response)
+
+
+def _probe_result_passed(result: ProbeResult) -> bool:
+    """Return whether one result satisfies the conservative passed predicate."""
+    allowed_statuses = {200, 301, 302, 303, 307, 308}
+    failing_stage_markers = {
+        "stage_home_blocked",
+        "stage_query_blocked",
+        "stage_transport_failed",
+        "stage_timeout",
+        "stage_server_error",
+    }
+    if result.blocked or result.timeout or result.error is not None:
+        return False
+    if result.home_status not in allowed_statuses:
+        return False
+    if result.query_status is None:
+        return False
+    if result.query_status not in allowed_statuses:
+        return False
+    if any(marker in failing_stage_markers for marker in result.failure_markers):
+        return False
+    if result.failure_markers:
+        return False
+    return True
+
+
+def _unexpected_empty_attempt_result(candidate_id: str) -> ProbeResult:
+    """Build one defensive result when no attempt result was produced."""
+    return ProbeResult(
+        candidate_id=candidate_id,
+        home_status=None,
+        query_status=None,
+        blocked=False,
+        timeout=False,
+        error="probe exception: no attempt result was produced",
+        failure_markers=["probe_exception"],
+        latency_ms=None,
+        checked_at=_utc_now_iso8601(),
+    )
 
 
 def _summary_from_failure(

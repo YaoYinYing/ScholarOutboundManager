@@ -13,6 +13,7 @@ from scholar_outbound_manager.probe.batch_probe import probe_candidates_sequenti
 from scholar_outbound_manager.probe.batch_probe import select_passed_candidates
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeOptions
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeSummary
+from scholar_outbound_manager.probe.candidate_probe import is_transport_retryable_probe_result
 from scholar_outbound_manager.probe.candidate_probe import probe_candidate
 from scholar_outbound_manager.probe.scholar_classifier import ScholarClassification
 from scholar_outbound_manager.probe.scholar_classifier import ScholarAccessDecision
@@ -41,6 +42,7 @@ __all__ = [
     "build_candidate_id",
     "classify_scholar_access",
     "classify_scholar_response",
+    "is_transport_retryable_probe_result",
     "is_probe_passed",
     "probe_candidate",
     "probe_candidates_sequential",

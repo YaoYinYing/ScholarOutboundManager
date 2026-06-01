@@ -141,6 +141,13 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "do not silently ignore unmapped protocol fields" in readme_text.lower()
     assert "hysteria2 support follows xray's hysteria outbound plus hysteria transport structure" in readme_text.lower()
     assert "ssl eof during live probe usually indicates transport-layer handshake failure" in readme_text.lower()
+    assert "hysteria2 cold-start transport retries" in readme_text.lower()
+    assert "local socks readiness does not imply outbound hysteria2 readiness" in readme_text.lower()
+    assert "transport retries run inside the same managed xray process" in readme_text.lower()
+    assert "scholar blocks such as google_sorry, http 403, http 429, home-blocked, and query-blocked are not retried" in readme_text.lower()
+    assert "--transport-retry-count 2" in readme_text
+    assert "--transport-retry-backoff 1.5" in readme_text
+    assert "--hysteria2-warmup-attempts 1" in readme_text
     assert "legacy offline fragment export" in readme_text.lower()
     assert "not the recommended production workflow" in readme_text.lower()
     assert "does not mutate production xray" in readme_text.lower() or "does not modify production xray" in readme_text.lower()

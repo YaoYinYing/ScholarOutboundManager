@@ -169,6 +169,9 @@ def build_parser() -> argparse.ArgumentParser:
     probe_parser.add_argument("--startup-timeout", type=float, default=5.0)
     probe_parser.add_argument("--request-timeout", type=float)
     probe_parser.add_argument("--xray-test-timeout", type=float)
+    probe_parser.add_argument("--transport-retry-count", type=int, default=0)
+    probe_parser.add_argument("--transport-retry-backoff", type=float, default=1.0)
+    probe_parser.add_argument("--hysteria2-warmup-attempts", type=int, default=0)
     probe_parser.add_argument("--runtime-config-name", default="candidate_probe_runtime.json")
     probe_parser.add_argument("--allow-network-probe", action="store_true")
     probe_parser.set_defaults(handler=_handle_probe)
@@ -714,6 +717,9 @@ def _handle_probe(args: argparse.Namespace) -> int:
             _validate_positive_float(args.request_timeout, "request-timeout")
         if args.xray_test_timeout is not None:
             _validate_positive_float(args.xray_test_timeout, "xray-test-timeout")
+        _validate_non_negative_int(args.transport_retry_count, "transport-retry-count")
+        _validate_non_negative_float(args.transport_retry_backoff, "transport-retry-backoff")
+        _validate_non_negative_int(args.hysteria2_warmup_attempts, "hysteria2-warmup-attempts")
         _validate_runtime_config_name(args.runtime_config_name)
         _validate_distinct_output_paths(args.summary_output, args.passed_candidates_output)
 
@@ -729,6 +735,9 @@ def _handle_probe(args: argparse.Namespace) -> int:
                 config.probe.timeout_seconds if args.request_timeout is None else args.request_timeout
             ),
             xray_test_timeout_seconds=args.xray_test_timeout,
+            transport_retry_count=args.transport_retry_count,
+            transport_retry_backoff_seconds=args.transport_retry_backoff,
+            hysteria2_warmup_attempts=args.hysteria2_warmup_attempts,
             runtime_config_name=args.runtime_config_name,
             probe_query=not args.skip_query,
         )
@@ -1640,6 +1649,18 @@ def _validate_positive_float(value: float, name: str) -> None:
     """Validate that a float argument is positive."""
     if value <= 0:
         raise ValueError(f"{name} must be greater than 0.")
+
+
+def _validate_non_negative_int(value: int, name: str) -> None:
+    """Validate that an integer argument is non-negative."""
+    if value < 0:
+        raise ValueError(f"{name} must be greater than or equal to 0.")
+
+
+def _validate_non_negative_float(value: float, name: str) -> None:
+    """Validate that a float argument is non-negative."""
+    if value < 0:
+        raise ValueError(f"{name} must be greater than or equal to 0.")
 
 
 def _validate_distinct_output_paths(summary_output: str, passed_candidates_output: str) -> None:

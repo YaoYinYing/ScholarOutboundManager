@@ -44,6 +44,10 @@ def serialize_candidate_probe_summary(summary: CandidateProbeSummary) -> dict[st
         "xray_started": summary.xray_started,
         "xray_test_passed": summary.xray_test_passed,
         "startup_ready": summary.startup_ready,
+        "attempt_count": summary.attempt_count,
+        "transport_retry_count_used": summary.transport_retry_count_used,
+        "warmup_attempt_count": summary.warmup_attempt_count,
+        "final_attempt_index": summary.final_attempt_index,
         "result": serialize_probe_result(summary.result),
     }
 

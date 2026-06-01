@@ -10,6 +10,7 @@ import pytest
 from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.models import XrayConfig
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeOptions
+from scholar_outbound_manager.probe.candidate_probe import is_transport_retryable_probe_result
 from scholar_outbound_manager.probe.candidate_probe import probe_candidate
 from scholar_outbound_manager.probe.http_probe import HttpProbeResponse
 from scholar_outbound_manager.probe.http_probe import SocksEndpoint
@@ -368,6 +369,199 @@ def test_probe_candidate_checked_at_uses_utc_z_suffix(tmp_path) -> None:
     assert summary.result.checked_at.endswith("Z")
 
 
+def test_is_transport_retryable_probe_result_accepts_ssl_eof() -> None:
+    """Treat SSL EOF transport failures as retryable."""
+    assert is_transport_retryable_probe_result(
+        _make_probe_result(
+            error="home: SSL error: TLS/SSL connection has been closed (EOF)",
+            failure_markers=["transport_error", "stage_transport_failed"],
+        )
+    ) is True
+
+
+def test_is_transport_retryable_probe_result_accepts_stage_transport_failed() -> None:
+    """Treat stage transport failures as retryable."""
+    assert is_transport_retryable_probe_result(_make_probe_result(failure_markers=["stage_transport_failed"])) is True
+
+
+def test_is_transport_retryable_probe_result_rejects_google_sorry() -> None:
+    """Do not retry semantic Scholar blocks."""
+    assert is_transport_retryable_probe_result(
+        _make_probe_result(
+            home_status=403,
+            query_status=403,
+            blocked=True,
+            failure_markers=["google_sorry", "stage_home_blocked"],
+        )
+    ) is False
+
+
+def test_is_transport_retryable_probe_result_rejects_http_403_query_blocked() -> None:
+    """Do not retry 403 query-blocked results."""
+    assert is_transport_retryable_probe_result(
+        _make_probe_result(
+            home_status=200,
+            query_status=403,
+            blocked=True,
+            failure_markers=["http_403", "stage_query_blocked"],
+        )
+    ) is False
+
+
+def test_probe_candidate_retries_transport_failure_within_same_process(tmp_path) -> None:
+    """Retry retryable transport failures without restarting Xray."""
+    fake_process = _FakeManagedProcess()
+    probe_calls: list[str] = []
+    sleep_calls: list[float] = []
+    start_calls: list[tuple[str, str, str | None]] = []
+
+    def fake_http_probe(target, socks, timeout_seconds):
+        del socks, timeout_seconds
+        probe_calls.append(target.url)
+        if len(probe_calls) <= 2:
+            return _make_response(
+                url=target.url,
+                status_code=None,
+                error="TLS/SSL connection has been closed (EOF)",
+                timed_out=False,
+                elapsed_ms=None,
+            )
+        return _make_response(url=target.url, status_code=200, body_prefix="ok", elapsed_ms=10)
+
+    def fake_start(binary_path, config_path, pid_file_path=None):
+        start_calls.append((binary_path, str(config_path), None if pid_file_path is None else str(pid_file_path)))
+        return fake_process
+
+    summary = probe_candidate(
+        candidate=_make_hysteria2_candidate(),
+        xray_config=_make_xray_config(tmp_path),
+        candidate_id="candidate-1",
+        options=CandidateProbeOptions(transport_retry_count=2, transport_retry_backoff_seconds=1.5),
+        http_probe=fake_http_probe,
+        start_xray_func=fake_start,
+        wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
+        sleep_func=lambda seconds: sleep_calls.append(seconds),
+    )
+
+    assert summary.result.blocked is False
+    assert summary.result.error is None
+    assert summary.result.home_status == 200
+    assert summary.result.query_status == 200
+    assert summary.attempt_count == 2
+    assert summary.transport_retry_count_used == 1
+    assert summary.final_attempt_index == 1
+    assert fake_process.terminate_called is True
+    assert len(start_calls) == 1
+    assert sleep_calls == [1.5]
+    assert len(probe_calls) == 4
+
+
+def test_probe_candidate_stops_retrying_after_semantic_block(tmp_path) -> None:
+    """Do not retry Scholar semantic blocks."""
+    fake_process = _FakeManagedProcess()
+    probe_calls: list[str] = []
+    sleep_calls: list[float] = []
+
+    def fake_http_probe(target, socks, timeout_seconds):
+        del socks, timeout_seconds
+        probe_calls.append(target.url)
+        if "/scholar?" in target.url:
+            return _make_response(url=target.url, status_code=403, body_prefix="captcha", elapsed_ms=10)
+        return _make_response(url=target.url, status_code=200, body_prefix="ok", elapsed_ms=10)
+
+    summary = probe_candidate(
+        candidate=_make_candidate(),
+        xray_config=_make_xray_config(tmp_path),
+        candidate_id="candidate-1",
+        options=CandidateProbeOptions(transport_retry_count=2, transport_retry_backoff_seconds=1.5),
+        http_probe=fake_http_probe,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
+        wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
+        sleep_func=lambda seconds: sleep_calls.append(seconds),
+    )
+
+    assert summary.result.blocked is True
+    assert summary.attempt_count == 1
+    assert summary.transport_retry_count_used == 0
+    assert summary.final_attempt_index == 0
+    assert sleep_calls == []
+    assert len(probe_calls) == 2
+
+
+def test_probe_candidate_runs_hysteria2_warmup_before_scholar_probe(tmp_path) -> None:
+    """Warm up Hysteria2 before the Scholar home/query requests."""
+    fake_process = _FakeManagedProcess()
+    call_urls: list[str] = []
+
+    def fake_http_probe(target, socks, timeout_seconds):
+        del socks, timeout_seconds
+        call_urls.append(target.url)
+        return _make_response(url=target.url, status_code=204 if "generate_204" in target.url else 200, body_prefix="", elapsed_ms=5)
+
+    summary = probe_candidate(
+        candidate=_make_hysteria2_candidate(),
+        xray_config=_make_xray_config(tmp_path),
+        candidate_id="candidate-1",
+        options=CandidateProbeOptions(hysteria2_warmup_attempts=1),
+        http_probe=fake_http_probe,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
+        wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
+    )
+
+    assert summary.warmup_attempt_count == 1
+    assert call_urls[0] == "https://www.gstatic.com/generate_204"
+    assert "scholar.google.com" in call_urls[1]
+
+
+def test_probe_candidate_does_not_warmup_vless_by_default(tmp_path) -> None:
+    """Do not warm up non-Hysteria2 protocols."""
+    fake_process = _FakeManagedProcess()
+    call_urls: list[str] = []
+
+    def fake_http_probe(target, socks, timeout_seconds):
+        del socks, timeout_seconds
+        call_urls.append(target.url)
+        return _make_response(url=target.url, status_code=200, body_prefix="ok", elapsed_ms=10)
+
+    summary = probe_candidate(
+        candidate=_make_candidate(),
+        xray_config=_make_xray_config(tmp_path),
+        candidate_id="candidate-1",
+        options=CandidateProbeOptions(hysteria2_warmup_attempts=1),
+        http_probe=fake_http_probe,
+        start_xray_func=lambda binary_path, config_path, pid_file_path=None: fake_process,
+        wait_for_tcp_endpoint_func=lambda host, port, timeout_seconds: True,
+    )
+
+    assert summary.warmup_attempt_count == 0
+    assert all("generate_204" not in url for url in call_urls)
+
+
+def test_probe_candidate_rejects_negative_retry_values(tmp_path) -> None:
+    """Reject negative retry and warm-up values."""
+    with pytest.raises(ValueError, match="transport_retry_count"):
+        probe_candidate(
+            candidate=_make_candidate(),
+            xray_config=_make_xray_config(tmp_path),
+            candidate_id="candidate-1",
+            options=CandidateProbeOptions(transport_retry_count=-1),
+        )
+    with pytest.raises(ValueError, match="transport_retry_backoff_seconds"):
+        probe_candidate(
+            candidate=_make_candidate(),
+            xray_config=_make_xray_config(tmp_path),
+            candidate_id="candidate-1",
+            options=CandidateProbeOptions(transport_retry_backoff_seconds=-1.0),
+        )
+    with pytest.raises(ValueError, match="hysteria2_warmup_attempts"):
+        probe_candidate(
+            candidate=_make_candidate(),
+            xray_config=_make_xray_config(tmp_path),
+            candidate_id="candidate-1",
+            options=CandidateProbeOptions(hysteria2_warmup_attempts=-1),
+        )
+
+
 def _make_candidate(**overrides: object) -> CandidateProxy:
     """Construct one placeholder candidate for candidate probe tests."""
     candidate_data: dict[str, object] = {
@@ -391,6 +585,28 @@ def _make_candidate(**overrides: object) -> CandidateProxy:
     }
     candidate_data.update(overrides)
     return CandidateProxy(**candidate_data)
+
+
+def _make_hysteria2_candidate(**overrides: object) -> CandidateProxy:
+    candidate_data: dict[str, object] = {
+        "protocol": "hysteria2",
+        "user_id": None,
+        "password": "HY2_PASSWORD_PLACEHOLDER",
+        "encryption": None,
+        "flow": None,
+        "network": None,
+        "security": "hysteria",
+        "server_name": "hy2.example.invalid",
+        "fingerprint": None,
+        "public_key": None,
+        "short_id": None,
+        "alpn": None,
+        "raw_uri": None,
+        "address": "hy2.example.invalid",
+        "extra": {"skip_cert_verify": True},
+    }
+    candidate_data.update(overrides)
+    return _make_candidate(**candidate_data)
 
 
 def _make_xray_config(tmp_path: Path) -> XrayConfig:
@@ -423,6 +639,30 @@ def _make_response(
         elapsed_ms=elapsed_ms,
         timed_out=timed_out,
         error=error,
+    )
+
+
+def _make_probe_result(
+    *,
+    home_status: int | None = 200,
+    query_status: int | None = 200,
+    blocked: bool = False,
+    timeout: bool = False,
+    error: str | None = None,
+    failure_markers: list[str] | None = None,
+):
+    from scholar_outbound_manager.models import ProbeResult
+
+    return ProbeResult(
+        candidate_id="candidate-1",
+        home_status=home_status,
+        query_status=query_status,
+        blocked=blocked,
+        timeout=timeout,
+        error=error,
+        failure_markers=[] if failure_markers is None else failure_markers,
+        latency_ms=10,
+        checked_at="2026-05-25T00:00:00Z",
     )
 
 

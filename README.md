@@ -671,6 +671,31 @@ scholar-outbound-manager run \
 - SSL EOF during live probe usually indicates transport-layer handshake failure, not Scholar 403 classification.
 - Production Xray, XrayR, and `x-ui` configuration remain unchanged.
 
+## Hysteria2 cold-start transport retries
+
+- Local SOCKS readiness does not imply outbound Hysteria2 readiness.
+- Hysteria2 or QUIC cold start may fail the first request with timeout or SSL EOF.
+- Transport retries run inside the same managed Xray process.
+- Scholar blocks such as google_sorry, HTTP 403, HTTP 429, home-blocked, and query-blocked are not retried.
+- Optional warm-up can send a lightweight request through the same SOCKS tunnel before Scholar classification.
+- Recommended initial validation is lower parallelism plus a longer request timeout:
+
+```bash
+scholar-outbound-manager probe \
+  --config config.yaml \
+  --candidates candidates.json \
+  --summary-output state_data/probe_summary.json \
+  --passed-candidates-output state_data/passed_candidates.json \
+  --parallel 2 \
+  --keep-all-passed \
+  --query ppr \
+  --request-timeout 20 \
+  --transport-retry-count 2 \
+  --transport-retry-backoff 1.5 \
+  --hysteria2-warmup-attempts 1 \
+  --allow-network-probe
+```
+
 ## CLI Reference
 
 ### `generate`

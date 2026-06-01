@@ -86,6 +86,10 @@ def test_artifact_explain_probe_filters_by_candidate_id(tmp_path: Path, capsys) 
                         "skipped": False,
                         "skip_reason": None,
                         "summary": {
+                            "attempt_count": 2,
+                            "transport_retry_count_used": 1,
+                            "warmup_attempt_count": 1,
+                            "final_attempt_index": 1,
                             "result": {
                                 "home_status": None,
                                 "query_status": None,
@@ -112,6 +116,10 @@ def test_artifact_explain_probe_filters_by_candidate_id(tmp_path: Path, capsys) 
     assert payload["records"][0]["protocol"] == "hysteria2"
     assert payload["records"][0]["region_hint"] == "US-LA"
     assert payload["records"][0]["error_category"] == "ssl_eof"
+    assert payload["records"][0]["attempt_count"] == 2
+    assert payload["records"][0]["retries_used"] == 1
+    assert payload["records"][0]["warmup_attempts"] == 1
+    assert payload["records"][0]["final_attempt_index"] == 1
     _assert_no_secrets(captured.out + captured.err)
 
 
@@ -135,6 +143,10 @@ def test_artifact_explain_probe_filters_by_protocol_error_category_and_marker(tm
                         "skipped": False,
                         "skip_reason": None,
                         "summary": {
+                            "attempt_count": 2,
+                            "transport_retry_count_used": 1,
+                            "warmup_attempt_count": 1,
+                            "final_attempt_index": 1,
                             "result": {
                                 "home_status": None,
                                 "query_status": None,
@@ -153,6 +165,10 @@ def test_artifact_explain_probe_filters_by_protocol_error_category_and_marker(tm
                         "skipped": False,
                         "skip_reason": None,
                         "summary": {
+                            "attempt_count": 1,
+                            "transport_retry_count_used": 0,
+                            "warmup_attempt_count": 0,
+                            "final_attempt_index": 0,
                             "result": {
                                 "home_status": 403,
                                 "query_status": 403,

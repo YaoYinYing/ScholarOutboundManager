@@ -37,6 +37,10 @@ def test_serialize_candidate_probe_summary_includes_result() -> None:
     serialized = serialize_candidate_probe_summary(_make_candidate_probe_summary())
 
     assert serialized["result"]["candidate_id"] == "candidate-001"
+    assert serialized["attempt_count"] == 2
+    assert serialized["transport_retry_count_used"] == 1
+    assert serialized["warmup_attempt_count"] == 1
+    assert serialized["final_attempt_index"] == 1
 
 
 def test_serialize_batch_probe_record_supports_missing_summary() -> None:
@@ -300,6 +304,10 @@ def _make_candidate_probe_summary() -> CandidateProbeSummary:
         xray_started=True,
         xray_test_passed=True,
         startup_ready=True,
+        attempt_count=2,
+        transport_retry_count_used=1,
+        warmup_attempt_count=1,
+        final_attempt_index=1,
         result=_make_probe_result(),
     )
 

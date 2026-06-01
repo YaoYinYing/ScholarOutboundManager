@@ -229,6 +229,65 @@ def test_probe_passes_max_candidates(tmp_path, monkeypatch) -> None:
     assert observed["options"].max_candidates == 2
 
 
+def test_probe_passes_transport_retry_and_warmup_options(tmp_path, monkeypatch) -> None:
+    """Pass transport retry and warm-up CLI flags into candidate probe options."""
+    config_path = _write_config(tmp_path, allow_network_probe=True)
+    candidates_path = _write_candidates(tmp_path)
+    observed = {}
+
+    def fake_probe(candidates, xray_config, options):
+        del candidates, xray_config
+        observed["options"] = options
+        return _make_batch_summary()
+
+    monkeypatch.setattr(cli, "probe_candidates_sequential", fake_probe)
+    monkeypatch.setattr(cli, "write_probe_artifacts", lambda **kwargs: _artifact_result(tmp_path))
+
+    assert cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--transport-retry-count",
+            "2",
+            "--transport-retry-backoff",
+            "1.5",
+            "--hysteria2-warmup-attempts",
+            "1",
+            "--allow-network-probe",
+        ]
+    ) == 0
+
+    assert observed["options"].candidate_options.transport_retry_count == 2
+    assert observed["options"].candidate_options.transport_retry_backoff_seconds == 1.5
+    assert observed["options"].candidate_options.hysteria2_warmup_attempts == 1
+
+
+def test_probe_rejects_negative_transport_retry_count(tmp_path, capsys) -> None:
+    """Reject negative transport retry counts."""
+    config_path = _write_config(tmp_path, allow_network_probe=True)
+    candidates_path = _write_candidates(tmp_path)
+
+    exit_code = cli.main(
+        [
+            "probe",
+            "--config",
+            str(config_path),
+            "--candidates",
+            str(candidates_path),
+            "--transport-retry-count",
+            "-1",
+            "--allow-network-probe",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "transport-retry-count must be greater than or equal to 0" in captured.err
+
+
 def test_probe_passes_include_unsupported(tmp_path, monkeypatch) -> None:
     """Pass include-unsupported through to BatchProbeOptions."""
     config_path = _write_config(tmp_path, allow_network_probe=True)
