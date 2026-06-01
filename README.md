@@ -638,6 +638,47 @@ scholar-outbound-manager-tui \
 
 The optional TUI shows the same redacted label and heuristic region columns without exposing proxy credentials.
 
+## Web panel security model
+
+The web panel is optional and is a secure operations console for ScholarOutboundManager. It is not a proxy airport backend, not an XrayR manager, not a remote shell, and not a production Xray/XrayR/`x-ui` editor.
+
+Install the optional dependencies with:
+
+```bash
+pip install "ScholarOutboundManager[web]"
+```
+
+Initialize one web-panel user with a password from stdin:
+
+```bash
+scholar-outbound-manager web user-init --username admin --password-stdin
+```
+
+Start the web panel on the default local bind:
+
+```bash
+scholar-outbound-manager web serve --host 127.0.0.1 --port 8790
+```
+
+Default listen is `127.0.0.1` only. Public bind is refused unless explicitly allowed with `--allow-public-bind`. Running the web panel as root is refused by default, and the root web user is forbidden even if `--allow-root-process` is used for controlled testing.
+
+Authentication uses password + TOTP. Session cookies use `HttpOnly`, `SameSite=Strict`, and `Secure` when HTTPS is in use. HTTP is allowed only for localhost, intended for SSH forwarding, and non-localhost access must use HTTPS directly or through an explicitly trusted proxy path.
+
+For remote access, prefer SSH tunnel or Tailscale/reverse proxy with HTTPS:
+
+```bash
+ssh -L 8790:127.0.0.1:8790 oreoz
+```
+
+The web panel never displays raw sensitive artifacts such as subscription URLs, proxy raw URIs, UUIDs, public keys, passwords, auth tokens, `candidates.json`, `passed_candidates.json`, or runtime Xray configs. API responses are redacted and authenticated; Web-0 does not expose fetch/probe buttons, sidecar restart actions, systemd execution, or production mutation.
+
+Auth logs are fail2ban-friendly and omit passwords, TOTP codes, session identifiers, and proxy secrets. Example `fail2ban` filter:
+
+```ini
+[Definition]
+failregex = ^.*SOMWEB_AUTH event=(login_failed|totp_failed|csrf_failed|api_unauthorized).*src=<HOST>.*$
+```
+
 ## Legacy Offline Fragment Export
 
 `generate` is retained for legacy offline export, debugging, and advanced tooling. It does not modify production configuration and is not the recommended production workflow.

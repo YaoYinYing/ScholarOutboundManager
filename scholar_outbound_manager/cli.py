@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import os
 from datetime import datetime
@@ -405,6 +406,26 @@ def build_parser() -> argparse.ArgumentParser:
     tui_parser.add_argument("--prefer-geo", dest="prefer_geo", action="store_true", default=True)
     tui_parser.add_argument("--no-prefer-geo", dest="prefer_geo", action="store_false")
     tui_parser.set_defaults(handler=_handle_tui)
+
+    web_parser = subparsers.add_parser("web")
+    web_subparsers = web_parser.add_subparsers(dest="web_command")
+
+    web_serve_parser = web_subparsers.add_parser("serve")
+    web_serve_parser.add_argument("--host", default="127.0.0.1")
+    web_serve_parser.add_argument("--port", type=int, default=8790)
+    web_serve_parser.add_argument("--config", default="web_panel_config.json")
+    web_serve_parser.add_argument("--allow-public-bind", action="store_true")
+    web_serve_parser.add_argument("--trusted-proxy", action="store_true")
+    web_serve_parser.add_argument("--dev-insecure-http", action="store_true")
+    web_serve_parser.add_argument("--allow-root-process", action="store_true")
+    web_serve_parser.set_defaults(handler=_handle_web_serve)
+
+    web_user_init_parser = web_subparsers.add_parser("user-init")
+    web_user_init_parser.add_argument("--username", required=True)
+    web_user_init_parser.add_argument("--password-stdin", action="store_true")
+    web_user_init_parser.add_argument("--totp-secret-output")
+    web_user_init_parser.add_argument("--auth-db", default="state_data/web/users.json")
+    web_user_init_parser.set_defaults(handler=_handle_web_user_init)
 
     return parser
 
@@ -1455,6 +1476,82 @@ def _handle_tui(args: argparse.Namespace) -> int:
     if args.preferred_region_hint:
         tui_argv.extend(["--preferred-region-hint", args.preferred_region_hint])
     return int(tui_main(tui_argv))
+
+
+def _handle_web_serve(args: argparse.Namespace) -> int:
+    """Run the optional web-panel server when installed."""
+    try:
+        from scholar_outbound_manager.web.app import serve_web_panel
+        from scholar_outbound_manager.web.config import WebPanelConfig
+        from scholar_outbound_manager.web.config import load_web_panel_config
+    except ModuleNotFoundError as exc:
+        if exc.name != "uvicorn":
+            raise
+        print(
+            'Web panel dependencies are not installed. Install with:\npip install "ScholarOutboundManager[web]"',
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        loaded = load_web_panel_config(args.config)
+        config = WebPanelConfig(
+            **{
+                **asdict(loaded),
+                "bind_host": args.host,
+                "bind_port": args.port,
+                "trusted_proxy_headers": args.trusted_proxy or loaded.trusted_proxy_headers,
+                "allow_insecure_localhost_http": loaded.allow_insecure_localhost_http or args.dev_insecure_http,
+            }
+        )
+        return int(
+            serve_web_panel(
+                config=config,
+                allow_public_bind=args.allow_public_bind,
+                allow_root_process=args.allow_root_process,
+            )
+        )
+    except (ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _handle_web_user_init(args: argparse.Namespace) -> int:
+    """Initialize one web-panel user from stdin password input."""
+    try:
+        from scholar_outbound_manager.web.app import init_user_from_stdin
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"passlib", "pyotp"}:
+            raise
+        print(
+            'Web panel dependencies are not installed. Install with:\npip install "ScholarOutboundManager[web]"',
+            file=sys.stderr,
+        )
+        return 1
+
+    if not args.password_stdin:
+        print("Error: --password-stdin is required.", file=sys.stderr)
+        return 1
+
+    password = sys.stdin.read().rstrip("\n")
+    try:
+        result = init_user_from_stdin(
+            username=args.username,
+            password=password,
+            auth_db_path=args.auth_db,
+            totp_secret_output_path=args.totp_secret_output,
+        )
+    except (ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Initialized web user: {result['username']}")
+    print("Password was read from stdin and was not stored in plaintext.")
+    if args.totp_secret_output:
+        print(f"TOTP provisioning data written to: {args.totp_secret_output}")
+    else:
+        print("TOTP secret generated. Store it now; it will not be printed again.")
+    return 0
 
 
 def _check_tcp_connect(host: str, port: int, timeout_seconds: float) -> bool:

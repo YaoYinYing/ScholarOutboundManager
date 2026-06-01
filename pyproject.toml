@@ -23,6 +23,15 @@ dev = [
 tui = [
   "textual>=0.80,<1.0",
 ]
+web = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.9",
+  "itsdangerous>=2.2",
+  "passlib[argon2]>=1.7",
+  "pyotp>=2.9",
+]
 
 [project.scripts]
 scholar-outbound-manager = "scholar_outbound_manager.cli:main"
