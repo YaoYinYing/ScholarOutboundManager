@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -34,6 +35,45 @@ from scholar_outbound_manager.tui.view_model import build_dashboard_model
 from scholar_outbound_manager.tui.view_model import build_snippet_view
 from scholar_outbound_manager.tui.workflow import MAIN_TABS
 from scholar_outbound_manager.tui.workflow import build_workflow_steps
+
+
+def _textual_safe_id(value: str) -> str:
+    """Return one Textual-compatible widget id."""
+    lowered = value.strip().lower()
+    safe = re.sub(r"[^a-z0-9_-]+", "-", lowered).strip("-")
+    if not safe:
+        safe = "tab"
+    if safe[0].isdigit():
+        safe = f"tab-{safe}"
+    return safe
+
+
+def _build_tab_id_map(tabs: list[str]) -> dict[str, str]:
+    """Build one stable, unique Textual-safe id map for workflow tabs."""
+    mapping: dict[str, str] = {}
+    for tab in tabs:
+        mapping[tab] = _textual_safe_id(tab)
+    return mapping
+
+
+def _build_tab_specs(tabs: list[str]) -> tuple[list[dict[str, str]], str]:
+    """Return workflow tab titles plus safe ids and one initial safe id."""
+    if not tabs:
+        return [], "tab"
+    counts: dict[str, int] = {}
+    specs: list[dict[str, str]] = []
+    initial_id = "tab"
+    for index, tab in enumerate(tabs):
+        base = _textual_safe_id(tab)
+        count = counts.get(base, 0) + 1
+        counts[base] = count
+        safe_id = base if count == 1 else f"{base}-{count}"
+        specs.append({"title": tab, "id": safe_id})
+        if (tab == "Dashboard" and initial_id == "tab") or index == 0:
+            initial_id = safe_id if tab == "Dashboard" else initial_id
+    if initial_id == "tab":
+        initial_id = specs[0]["id"]
+    return specs, initial_id
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -315,10 +355,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         """Minimal tabbed workflow-oriented TUI."""
 
         def compose(self) -> ComposeResult:
+            tab_specs, initial_tab_id = _build_tab_specs(list(workflow_state["tabs"]))
             yield Header()
-            with TabbedContent(initial="Dashboard"):
-                for tab in workflow_state["tabs"]:
-                    with TabPane(tab, id=tab):
+            with TabbedContent(initial=initial_tab_id):
+                for tab_spec in tab_specs:
+                    tab = tab_spec["title"]
+                    with TabPane(tab, id=tab_spec["id"]):
                         with Vertical():
                             yield Static(self._tab_text(tab))
             yield Footer()

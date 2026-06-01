@@ -645,7 +645,7 @@ scholar-outbound-manager-tui \
   --output state_data/selected_candidate.json
 ```
 
-The optional TUI shows the same redacted label and heuristic region columns without exposing proxy credentials.
+The optional TUI shows the same redacted label and heuristic region columns without exposing proxy credentials. Tab titles remain human-readable while internal Textual widget ids are sanitized.
 
 ## Web panel security model
 
