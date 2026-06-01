@@ -124,6 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_parser.add_argument("--max-bytes", type=int, default=1_048_576)
     fetch_parser.add_argument("--proxy-url")
     fetch_parser.add_argument("--user-agent")
+    fetch_parser.add_argument("--enable-experimental-hysteria2", action="store_true")
     fetch_parser.set_defaults(handler=_handle_fetch)
 
     doctor_parser = subparsers.add_parser("doctor")
@@ -464,6 +465,7 @@ def _handle_fetch(args: argparse.Namespace) -> int:
         parsed_subscriptions = parse_fetched_subscriptions(
             fetched,
             format_by_source={source.name: source.format for source in config.subscriptions},
+            enable_experimental_hysteria2=args.enable_experimental_hysteria2,
         )
 
         candidates = [
@@ -473,6 +475,19 @@ def _handle_fetch(args: argparse.Namespace) -> int:
         ]
         parsed_count = len(candidates)
         unsupported_count = sum(1 for candidate in candidates if not candidate.supported)
+        experimental_candidates = [
+            candidate
+            for candidate in candidates
+            if isinstance(candidate.extra, dict) and bool(candidate.extra.get("experimental"))
+        ]
+        experimental_count = len(experimental_candidates)
+        experimental_supported_count = sum(1 for candidate in experimental_candidates if candidate.supported)
+        experimental_disabled_count = sum(
+            1
+            for candidate in experimental_candidates
+            if not candidate.supported
+            and "experimental and disabled by default" in ((candidate.unsupported_reason or "").lower())
+        )
         source_subscription_hash = compute_artifact_hash(
             [
                 {
@@ -513,6 +528,16 @@ def _handle_fetch(args: argparse.Namespace) -> int:
     print(f"parsed_count: {parsed_count}")
     print(f"supported_count: {supported_count}")
     print(f"unsupported_count: {unsupported_count}")
+    print(f"experimental_count: {experimental_count}")
+    print(f"experimental_supported_count: {experimental_supported_count}")
+    print(f"experimental_disabled_count: {experimental_disabled_count}")
+    if experimental_disabled_count > 0:
+        print(
+            "note: Hysteria2 via Xray is experimental and disabled by default. "
+            "Re-run fetch with --enable-experimental-hysteria2 for controlled experiments."
+        )
+    if args.enable_experimental_hysteria2:
+        print("warning: Hysteria2 via Xray is experimental and may still fail with transport-layer SSL EOF.")
     for category, count in _summarize_fetch_error_categories(fetch_summary.error_records).items():
         print(f"fetch_error_{category}_count: {count}")
     for status_code, count in _summarize_fetch_http_statuses(fetch_summary.error_records).items():

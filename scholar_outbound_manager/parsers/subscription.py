@@ -62,11 +62,17 @@ def parse_subscription_content(
     content: str,
     source_name: str,
     fmt: str = "auto",
+    *,
+    enable_experimental_hysteria2: bool = False,
 ) -> ParsedSubscription:
     """Decode and parse one subscription body into candidate models."""
     decoded_text = decode_subscription_text(content, fmt=fmt)
     if looks_like_clash_yaml(decoded_text):
-        candidates, summary = parse_clash_yaml_subscription(decoded_text, source_name)
+        candidates, summary = parse_clash_yaml_subscription(
+            decoded_text,
+            source_name,
+            enable_experimental_hysteria2=enable_experimental_hysteria2,
+        )
         return ParsedSubscription(
             source_name=source_name,
             candidates=candidates,
@@ -97,6 +103,8 @@ def parse_subscription_content(
 def parse_fetched_subscriptions(
     fetched: list[FetchedSubscription],
     format_by_source: dict[str, str],
+    *,
+    enable_experimental_hysteria2: bool = False,
 ) -> list[ParsedSubscription]:
     """Parse all fetched subscriptions using the configured per-source format."""
     parsed_subscriptions: list[ParsedSubscription] = []
@@ -107,6 +115,7 @@ def parse_fetched_subscriptions(
                 content=item.content,
                 source_name=item.source_name,
                 fmt=fmt,
+                enable_experimental_hysteria2=enable_experimental_hysteria2,
             )
         )
     return parsed_subscriptions

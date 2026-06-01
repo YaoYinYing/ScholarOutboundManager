@@ -104,23 +104,43 @@ def test_parse_clash_yaml_subscription_marks_grpc_vmess_unsupported() -> None:
     assert "grpc" in (candidates[0].unsupported_reason or "")
 
 
-def test_parse_clash_yaml_subscription_parses_hysteria2_candidate() -> None:
-    """Parse a conservative Hysteria2 candidate for Xray-backed probing."""
+def test_parse_clash_yaml_subscription_parses_hysteria2_candidate_but_disables_it_by_default() -> None:
+    """Parse Hysteria2 metadata but keep it out of the default supported pool."""
     candidates, summary = parse_clash_yaml_subscription(_hysteria2_yaml(), "fixture-source")
 
-    assert summary.unsupported_count == 0
+    assert summary.unsupported_count == 1
     assert candidates[0].protocol == "hysteria2"
-    assert candidates[0].supported is True
+    assert candidates[0].supported is False
     assert candidates[0].password == "HY2_PASSWORD_PLACEHOLDER"
     assert candidates[0].server_name == "hy2.example.invalid"
     assert candidates[0].security == "hysteria"
-    assert candidates[0].extra["runtime_supported_by"] == ["xray"]
+    assert candidates[0].extra["experimental"] is True
+    assert candidates[0].extra["runtime_supported_by"] == ["xray-experimental"]
     assert candidates[0].extra["skip_cert_verify"] is True
+    assert "experimental and disabled by default" in (candidates[0].unsupported_reason or "").lower()
+
+
+def test_parse_clash_yaml_subscription_enables_experimental_hysteria2_when_requested() -> None:
+    """Allow minimal Hysteria2 nodes only behind explicit opt-in."""
+    candidates, summary = parse_clash_yaml_subscription(
+        _hysteria2_yaml(),
+        "fixture-source",
+        enable_experimental_hysteria2=True,
+    )
+
+    assert summary.unsupported_count == 0
+    assert candidates[0].supported is True
+    assert candidates[0].extra["experimental"] is True
+    assert candidates[0].extra["runtime_supported_by"] == ["xray-experimental"]
 
 
 def test_parse_clash_yaml_subscription_maps_hysteria2_servername_to_server_name() -> None:
     """Accept either Clash sni or servername for Hysteria2 TLS naming."""
-    candidates, summary = parse_clash_yaml_subscription(_hysteria2_servername_yaml(), "fixture-source")
+    candidates, summary = parse_clash_yaml_subscription(
+        _hysteria2_servername_yaml(),
+        "fixture-source",
+        enable_experimental_hysteria2=True,
+    )
 
     assert summary.unsupported_count == 0
     assert candidates[0].server_name == "hy2-servername.example.invalid"
@@ -128,7 +148,11 @@ def test_parse_clash_yaml_subscription_maps_hysteria2_servername_to_server_name(
 
 def test_parse_clash_yaml_subscription_preserves_hysteria2_skip_cert_verify_false() -> None:
     """Keep explicit false values instead of dropping them."""
-    candidates, summary = parse_clash_yaml_subscription(_hysteria2_skip_verify_false_yaml(), "fixture-source")
+    candidates, summary = parse_clash_yaml_subscription(
+        _hysteria2_skip_verify_false_yaml(),
+        "fixture-source",
+        enable_experimental_hysteria2=True,
+    )
 
     assert summary.unsupported_count == 0
     assert candidates[0].supported is True
@@ -164,7 +188,11 @@ def test_parse_clash_yaml_subscription_marks_hysteria2_missing_port_unsupported(
 
 def test_parse_clash_yaml_subscription_marks_hysteria2_obfs_unsupported() -> None:
     """Fail closed when Hysteria2 obfs fields are present but unmapped."""
-    candidates, summary = parse_clash_yaml_subscription(_hysteria2_obfs_yaml(), "fixture-source")
+    candidates, summary = parse_clash_yaml_subscription(
+        _hysteria2_obfs_yaml(),
+        "fixture-source",
+        enable_experimental_hysteria2=True,
+    )
 
     assert summary.unsupported_count == 1
     assert candidates[0].protocol == "hysteria2"
@@ -176,7 +204,11 @@ def test_parse_clash_yaml_subscription_marks_hysteria2_obfs_unsupported() -> Non
 
 def test_parse_clash_yaml_subscription_marks_hysteria2_alpn_unsupported() -> None:
     """Fail closed when Hysteria2 ALPN is present but not mapped."""
-    candidates, summary = parse_clash_yaml_subscription(_hysteria2_alpn_yaml(), "fixture-source")
+    candidates, summary = parse_clash_yaml_subscription(
+        _hysteria2_alpn_yaml(),
+        "fixture-source",
+        enable_experimental_hysteria2=True,
+    )
 
     assert summary.unsupported_count == 1
     assert candidates[0].protocol == "hysteria2"

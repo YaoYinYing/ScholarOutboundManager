@@ -66,7 +66,8 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "runtime backend direction" in readme_text.lower()
     assert "top-level `proxies` list" in readme_text
     assert "checksum-aware" in readme_text.lower()
-    assert "vless, trojan, shadowsocks, vmess, and conservative hysteria2" in readme_text.lower()
+    assert "vless, trojan, shadowsocks, and vmess by default" in readme_text.lower()
+    assert "hysteria2 through the xray backend is experimental and disabled by default" in readme_text.lower()
     assert "unsupported protocols such as tuic and wireguard" in readme_text.lower()
     assert "xray binary preparation" in readme_text.lower()
     assert "xray inspect --path" in readme_text.lower()
@@ -154,6 +155,9 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "--keep-all-passed" in readme_text
     assert "each worker starts its own managed xray runtime" in readme_text.lower()
     assert "hysteria2 support through xray" in readme_text.lower()
+    assert "hysteria2 through xray is experimental" in readme_text.lower()
+    assert "hysteria2 is disabled by default for production safety" in readme_text.lower()
+    assert "--enable-experimental-hysteria2" in readme_text
     assert "xray names the outbound protocol `hysteria`" in readme_text.lower()
     assert "hysteria2 auth is written to `streamsettings.hysteriasettings.auth`" in readme_text.lower()
     assert "clash `sni` and `servername` are mapped to `streamsettings.tlssettings.servername`" in readme_text.lower()
@@ -167,11 +171,15 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "do not patch xray json directly in parser code" in readme_text.lower()
     assert "do not silently ignore unmapped protocol fields" in readme_text.lower()
     assert "hysteria2 support follows xray's hysteria outbound plus hysteria transport structure" in readme_text.lower()
-    assert "ssl eof during live probe usually indicates transport-layer handshake failure" in readme_text.lower()
+    assert "persistent ssl eof in live vps probe means transport-layer failure, not scholar blocking" in readme_text.lower()
     assert "hysteria2 cold-start transport retries" in readme_text.lower()
     assert "local socks readiness does not imply outbound hysteria2 readiness" in readme_text.lower()
     assert "transport retries run inside the same managed xray process" in readme_text.lower()
     assert "scholar blocks such as google_sorry, http 403, http 429, home-blocked, and query-blocked are not retried" in readme_text.lower()
+    assert "artifact explain-probe" in readme_text.lower()
+    assert "--protocol hysteria2" in readme_text.lower()
+    assert "--error-category ssl_eof" in readme_text.lower()
+    assert "experimental hysteria2 diagnosis" in readme_text.lower()
     assert "--transport-retry-count 2" in readme_text
     assert "--transport-retry-backoff 1.5" in readme_text
     assert "--hysteria2-warmup-attempts 1" in readme_text

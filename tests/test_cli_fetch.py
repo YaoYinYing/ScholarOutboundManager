@@ -87,6 +87,71 @@ def test_fetch_prints_expected_counts(tmp_path, capsys, monkeypatch) -> None:
     assert "parsed_count: 2" in captured.out
     assert "supported_count: 1" in captured.out
     assert "unsupported_count: 1" in captured.out
+    assert "experimental_count: 0" in captured.out
+    assert "experimental_supported_count: 0" in captured.out
+    assert "experimental_disabled_count: 0" in captured.out
+
+
+def test_fetch_prints_hysteria2_experimental_counts(tmp_path, capsys, monkeypatch) -> None:
+    """Report experimental Hysteria2 counts without printing secrets."""
+    config_path = _write_config(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "fetch_enabled_subscriptions",
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
+            [_fetched_hysteria2_subscription()],
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
+        ),
+    )
+
+    exit_code = cli.main(
+        ["fetch", "--config", str(config_path), "--allow-network-fetch", "--output", str(tmp_path / "candidates.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "experimental_count: 1" in captured.out
+    assert "experimental_supported_count: 0" in captured.out
+    assert "experimental_disabled_count: 1" in captured.out
+    assert "hysteria2 via xray is experimental and disabled by default" in captured.out.lower()
+    rendered = captured.out + captured.err
+    assert "HY2_PASSWORD_PLACEHOLDER" not in rendered
+    assert "hy2.example.invalid" not in rendered
+    assert "raw_uri" not in rendered
+
+
+def test_fetch_enable_experimental_hysteria2_admits_supported_candidate(tmp_path, capsys, monkeypatch) -> None:
+    """Allow experimental Hysteria2 only through the explicit fetch opt-in."""
+    config_path = _write_config(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "fetch_enabled_subscriptions",
+        lambda sources, timeout_seconds, max_bytes, transport_options=None: (
+            [_fetched_hysteria2_subscription()],
+            _summary(source_count=1, fetched_count=1, disabled_count=0, failed_count=0, total_bytes=120),
+        ),
+    )
+
+    exit_code = cli.main(
+        [
+            "fetch",
+            "--config",
+            str(config_path),
+            "--allow-network-fetch",
+            "--enable-experimental-hysteria2",
+            "--output",
+            str(tmp_path / "candidates.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+    payload = json.loads((tmp_path / "candidates.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert "experimental_count: 1" in captured.out
+    assert "experimental_supported_count: 1" in captured.out
+    assert "experimental_disabled_count: 0" in captured.out
+    assert "experimental and may still fail with transport-layer ssl eof" in captured.out.lower()
+    assert payload["candidates"][0]["supported"] is True
 
 
 def test_fetch_output_does_not_include_subscription_url(tmp_path, capsys, monkeypatch) -> None:
@@ -763,6 +828,21 @@ def _fetched_subscription() -> FetchedSubscription:
 def _unsupported_fetched_subscription() -> FetchedSubscription:
     """Build one unsupported fetched subscription payload."""
     content = "vmess://example.invalid:443#Unsupported"
+    return FetchedSubscription(source_name="fixture-source", content=content, byte_count=len(content))
+
+
+def _fetched_hysteria2_subscription() -> FetchedSubscription:
+    """Build one fetched Clash Hysteria2 payload."""
+    content = """
+proxies:
+  - name: "US HY2"
+    type: hysteria2
+    server: hy2.example.invalid
+    port: 443
+    password: HY2_PASSWORD_PLACEHOLDER
+    sni: hy2.example.invalid
+    skip-cert-verify: true
+""".strip()
     return FetchedSubscription(source_name="fixture-source", content=content, byte_count=len(content))
 
 

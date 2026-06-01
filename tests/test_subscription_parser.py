@@ -111,6 +111,32 @@ def test_parse_fetched_subscriptions_uses_format_map() -> None:
     assert parsed[0].candidates[0].supported is True
 
 
+def test_parse_subscription_content_keeps_hysteria2_unsupported_by_default() -> None:
+    """Default parsing should not admit experimental Hysteria2 into the supported pool."""
+    parsed = parse_subscription_content(_clash_hysteria2_yaml(), source_name="fixture-source")
+
+    assert parsed.parser_kind == "clash_yaml"
+    assert parsed.parsed_count == 1
+    assert parsed.unsupported_count == 1
+    assert parsed.candidates[0].protocol == "hysteria2"
+    assert parsed.candidates[0].supported is False
+
+
+def test_parse_fetched_subscriptions_can_enable_experimental_hysteria2() -> None:
+    """Fetch parsing should support an explicit experimental opt-in."""
+    fetched = [FetchedSubscription(source_name="fixture-source", content=_clash_hysteria2_yaml(), byte_count=64)]
+
+    parsed = parse_fetched_subscriptions(
+        fetched,
+        {"fixture-source": "auto"},
+        enable_experimental_hysteria2=True,
+    )
+
+    assert len(parsed) == 1
+    assert parsed[0].unsupported_count == 0
+    assert parsed[0].candidates[0].supported is True
+
+
 def test_parse_subscription_content_uses_clash_parser_for_clash_yaml() -> None:
     """Detect Clash YAML and parse only the top-level proxies list."""
     parsed = parse_subscription_content(_clash_yaml_with_health_check(), source_name="fixture-source")
@@ -182,4 +208,17 @@ proxy-groups:
       - Test VLESS Reality
     url: http://www.gstatic.com/generate_204
     interval: 300
+""".strip()
+
+
+def _clash_hysteria2_yaml() -> str:
+    return """
+proxies:
+  - name: US HY2
+    type: hysteria2
+    server: hy2.example.invalid
+    port: 443
+    password: HY2_PASSWORD_PLACEHOLDER
+    sni: hy2.example.invalid
+    skip-cert-verify: true
 """.strip()

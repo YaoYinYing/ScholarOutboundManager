@@ -51,6 +51,16 @@ def test_build_hysteria2_outbound() -> None:
     }
 
 
+def test_build_hysteria2_outbound_keeps_experimental_candidate_path_available() -> None:
+    """Keep the Xray builder available for explicitly enabled experimental candidates."""
+    outbound = build_hysteria2_outbound(
+        _make_hysteria2_candidate(extra={"experimental": True, "runtime_supported_by": ["xray-experimental"]}),
+        "google-scholar-node-001",
+    )
+
+    assert outbound["protocol"] == "hysteria"
+
+
 def test_build_hysteria2_outbound_rejects_missing_password() -> None:
     """Reject Hysteria2 candidates without auth material."""
     with pytest.raises(ValueError, match="authentication secret"):

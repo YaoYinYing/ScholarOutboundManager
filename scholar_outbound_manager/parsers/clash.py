@@ -32,6 +32,8 @@ def looks_like_clash_yaml(content: str) -> bool:
 def parse_clash_yaml_subscription(
     content: str,
     source_name: str,
+    *,
+    enable_experimental_hysteria2: bool = False,
 ) -> tuple[list[CandidateProxy], ClashParseSummary]:
     """Parse the top-level Clash proxies list into candidate models."""
     loaded = yaml.safe_load(content)
@@ -43,7 +45,15 @@ def parse_clash_yaml_subscription(
         raise ValueError("Clash YAML subscription must contain a top-level proxies list.")
 
     ignored_url_field_count = _count_url_fields_outside_proxies(loaded)
-    candidates = [_parse_proxy_item(item, index, source_name) for index, item in enumerate(proxies)]
+    candidates = [
+        _parse_proxy_item(
+            item,
+            index,
+            source_name,
+            enable_experimental_hysteria2=enable_experimental_hysteria2,
+        )
+        for index, item in enumerate(proxies)
+    ]
     unsupported_count = sum(1 for candidate in candidates if not candidate.supported)
     summary = ClashParseSummary(
         proxy_count=len(proxies),
@@ -73,7 +83,13 @@ def _count_url_fields(value: Any) -> int:
     return 0
 
 
-def _parse_proxy_item(item: Any, index: int, source_name: str) -> CandidateProxy:
+def _parse_proxy_item(
+    item: Any,
+    index: int,
+    source_name: str,
+    *,
+    enable_experimental_hysteria2: bool = False,
+) -> CandidateProxy:
     """Parse one Clash proxy entry into a candidate model."""
     if not isinstance(item, dict):
         raise ValueError(f"Clash proxy entry at index {index} must be a mapping.")
@@ -89,7 +105,12 @@ def _parse_proxy_item(item: Any, index: int, source_name: str) -> CandidateProxy
     if proxy_type == "vmess":
         return _parse_vmess_proxy(item, source_name, raw_name)
     if proxy_type == "hysteria2":
-        return _parse_hysteria2_proxy(item, source_name, raw_name)
+        return _parse_hysteria2_proxy(
+            item,
+            source_name,
+            raw_name,
+            enable_experimental_hysteria2=enable_experimental_hysteria2,
+        )
     return CandidateProxy(
         source_name=source_name,
         raw_name=raw_name,
@@ -258,7 +279,13 @@ def _parse_vmess_proxy(item: dict[str, Any], source_name: str, raw_name: str) ->
     )
 
 
-def _parse_hysteria2_proxy(item: dict[str, Any], source_name: str, raw_name: str) -> CandidateProxy:
+def _parse_hysteria2_proxy(
+    item: dict[str, Any],
+    source_name: str,
+    raw_name: str,
+    *,
+    enable_experimental_hysteria2: bool = False,
+) -> CandidateProxy:
     """Parse one Clash Hysteria2 node conservatively for Xray-backed probing."""
     unsupported_reasons: list[str] = []
     if missing_fields := _missing_required_fields(item, ("server", "port")):
@@ -277,6 +304,12 @@ def _parse_hysteria2_proxy(item: dict[str, Any], source_name: str, raw_name: str
     if alpn:
         unsupported_reasons.append("Hysteria2 alpn is not mapped to Xray yet.")
 
+    field_validation_supported = not unsupported_reasons
+    if not unsupported_reasons and not enable_experimental_hysteria2:
+        unsupported_reasons.append(
+            "Hysteria2 via Xray is experimental and disabled by default after transport EOF failures."
+        )
+
     runtime_warnings: list[str] = []
     if item.get("up") is not None or item.get("down") is not None:
         runtime_warnings.append("Hysteria2 up/down is preserved for review but not mapped to Xray runtime config.")
@@ -290,7 +323,8 @@ def _parse_hysteria2_proxy(item: dict[str, Any], source_name: str, raw_name: str
         "up": _string(item.get("up")) or None,
         "down": _string(item.get("down")) or None,
         "ports": _string(item.get("ports")) or None,
-        "runtime_supported_by": ["xray"] if not unsupported_reasons else [],
+        "experimental": True,
+        "runtime_supported_by": ["xray-experimental"] if field_validation_supported else [],
         "runtime_warnings": runtime_warnings or None,
     }
     return CandidateProxy(

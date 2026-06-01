@@ -85,7 +85,8 @@ Subscription fetching is also explicit opt-in at the CLI layer.
 - Subscription parsing may accept Clash YAML because subconverter can emit Clash-compatible YAML payloads.
 - Only the top-level `proxies` list is parsed from Clash YAML subscriptions.
 - Health-check URLs, provider URLs, and other non-proxy `url:` fields are ignored during parsing.
-- Xray-compatible Clash YAML protocols now include VLESS, Trojan, Shadowsocks, VMess, and conservative Hysteria2 when required fields are present.
+- Xray-compatible Clash YAML protocols now include VLESS, Trojan, Shadowsocks, and VMess by default.
+- Hysteria2 through the Xray backend is experimental and disabled by default for production safety after persistent transport-layer SSL EOF failures in live VPS probes.
 - Unsupported protocols such as tuic and wireguard still require a future `mihomo` probe backend.
 - `mihomo` is a useful future probe backend for broader protocol coverage.
 - Localhost SOCKS sidecar integration is the preferred production path.
@@ -723,11 +724,24 @@ scholar-outbound-manager run \
 - Hysteria2 auth is written to `streamSettings.hysteriaSettings.auth`.
 - Clash `sni` and `servername` are mapped to `streamSettings.tlsSettings.serverName`.
 - Clash `skip-cert-verify` is mapped to `streamSettings.tlsSettings.allowInsecure`.
-- Initial support is conservative and intended for the existing sidecar-first workflow only.
+- Hysteria2 through Xray is experimental.
+- Hysteria2 is disabled by default for production safety.
+- Default fetch/parse keeps Hysteria2 candidates out of the supported pool unless `--enable-experimental-hysteria2` is passed during `fetch`.
 - obfs and obfs-password are preserved for review but remain fail-closed until the Xray mapping is validated.
 - `up` and `down` may be preserved from Clash input without being written into the runtime config.
-- SSL EOF during live probe usually indicates transport-layer handshake failure, not Scholar 403 classification.
+- Persistent SSL EOF in live VPS probe means transport-layer failure, not Scholar blocking.
 - Production Xray, XrayR, and `x-ui` configuration remain unchanged.
+
+To experiment with Hysteria2, enable it during fetch, rerun fetch, then probe the new `candidates.json` artifact:
+
+```bash
+scholar-outbound-manager fetch \
+  --config config.yaml \
+  --output candidates.json \
+  --allow-network-fetch \
+  --user-agent "Clash.Meta" \
+  --enable-experimental-hysteria2
+```
 
 ## Hysteria2 cold-start transport retries
 
@@ -736,6 +750,7 @@ scholar-outbound-manager run \
 - Transport retries run inside the same managed Xray process.
 - Scholar blocks such as google_sorry, HTTP 403, HTTP 429, home-blocked, and query-blocked are not retried.
 - Optional warm-up can send a lightweight request through the same SOCKS tunnel before Scholar classification.
+- `artifact explain-probe --protocol hysteria2 --error-category ssl_eof` is intended for experimental Hysteria2 diagnosis.
 - Recommended initial validation is lower parallelism plus a longer request timeout:
 
 ```bash
@@ -752,6 +767,13 @@ scholar-outbound-manager probe \
   --transport-retry-backoff 1.5 \
   --hysteria2-warmup-attempts 1 \
   --allow-network-probe
+```
+
+```bash
+scholar-outbound-manager artifact explain-probe \
+  --probe-summary state_data/probe_summary.json \
+  --protocol hysteria2 \
+  --error-category ssl_eof
 ```
 
 ## CLI Reference
