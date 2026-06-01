@@ -19,7 +19,7 @@ from scholar_outbound_manager.probe.scholar_classifier import classify_scholar_a
 from scholar_outbound_manager.selection import CandidateSelectionRecord
 from scholar_outbound_manager.selection import extract_candidate_selection_records
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
-from scholar_outbound_manager.xray.outbound_builder import build_xray_outbound
+from scholar_outbound_manager.xray.outbound import build_xray_outbound
 from scholar_outbound_manager.xray.runtime_config import build_local_socks_inbound
 
 

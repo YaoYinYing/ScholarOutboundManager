@@ -22,7 +22,7 @@ from scholar_outbound_manager.sidecar_pool import check_pool_ports_available
 from scholar_outbound_manager.sidecar_pool import pool_plan_to_dict
 from scholar_outbound_manager.sidecar import build_socks_outbound_snippet
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
-from scholar_outbound_manager.xray.outbound_builder import build_xray_outbound
+from scholar_outbound_manager.xray.outbound import build_xray_outbound
 from scholar_outbound_manager.xray.runtime_config import build_runtime_config_from_outbound
 from scholar_outbound_manager.xray.runtime_config import write_runtime_config
 

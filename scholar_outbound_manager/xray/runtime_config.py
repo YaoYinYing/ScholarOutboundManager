@@ -8,7 +8,7 @@ from pathlib import Path
 from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.models import XrayConfig
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
-from scholar_outbound_manager.xray.outbound_builder import build_xray_outbound
+from scholar_outbound_manager.xray.outbound import build_xray_outbound
 
 
 def build_local_socks_inbound(

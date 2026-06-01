@@ -11,7 +11,7 @@ from scholar_outbound_manager.models import CandidateProxy
 from scholar_outbound_manager.models import XrayConfig
 from scholar_outbound_manager.net import wait_for_tcp_endpoint
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
-from scholar_outbound_manager.xray.outbound_builder import build_xray_outbound
+from scholar_outbound_manager.xray.outbound import build_xray_outbound
 from scholar_outbound_manager.xray.process import is_managed_xray_process_alive
 from scholar_outbound_manager.xray.process import start_xray
 from scholar_outbound_manager.xray.process import terminate_managed_xray_from_pid_file

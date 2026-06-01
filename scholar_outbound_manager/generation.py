@@ -13,7 +13,7 @@ from scholar_outbound_manager.models import RoutingConfig
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
 from scholar_outbound_manager.state.manifest import build_manifest
 from scholar_outbound_manager.state.manifest import write_manifest
-from scholar_outbound_manager.xray.outbound_builder import build_xray_outbound
+from scholar_outbound_manager.xray.outbound import build_xray_outbound
 from scholar_outbound_manager.xray.route_builder import build_dedicated_inbound_routes
 
 

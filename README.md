@@ -94,6 +94,16 @@ Subscription fetching is also explicit opt-in at the CLI layer.
 - Future work may add explicit Xray binary acquisition or update support, but it must stay opt-in and checksum-aware.
 - Fetch and parse workflows do not require Xray or `mihomo`.
 
+## Xray Outbound Architecture
+
+- Subscription adapters normalize external formats into internal `CandidateProxy` records.
+- Xray outbound specs model protocol, transport, TLS, Reality, and Hysteria as structured intermediate data.
+- The Xray renderer emits official Xray JSON from that normalized spec layer.
+- New protocol support should add a spec builder and renderer tests.
+- Do not patch Xray JSON directly in parser code.
+- Do not silently ignore unmapped protocol fields.
+- Hysteria2 support follows Xray's hysteria outbound plus hysteria transport structure.
+
 ## Xray Binary Preparation
 
 - `probe` and `run` require an Xray-compatible binary path in local config.
