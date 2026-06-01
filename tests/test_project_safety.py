@@ -92,7 +92,9 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "use `candidate_id` for stable selection" in readme_text.lower()
     assert "artifact consistency" in readme_text.lower()
     assert "artifact check" in readme_text.lower()
+    assert "artifact explain-probe" in readme_text.lower()
     assert "candidate_id belongs to the artifact run" in readme_text.lower()
+    assert "redacted but human-readable candidate labels first" in readme_text.lower()
     assert "switching selected sidecar candidate" in readme_text.lower()
     assert "--skip-xray-binary-copy" in readme_text
     assert "service-restart" in readme_text.lower()

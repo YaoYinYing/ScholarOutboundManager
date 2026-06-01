@@ -13,6 +13,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
+from scholar_outbound_manager.selection import infer_region_hint
+
 
 @dataclass(slots=True)
 class ArtifactLineage:
@@ -179,10 +181,11 @@ def build_probe_explanation(
             continue
         record_candidate_id = _coerce_optional_str(raw_record.get("candidate_id")) or ""
         record_name = _coerce_optional_str(raw_record.get("candidate_name")) or ""
+        record_label = _coerce_optional_str(raw_record.get("candidate_label")) or record_name
         record_protocol = _coerce_optional_str(raw_record.get("candidate_protocol"))
         if candidate_id and record_candidate_id != candidate_id:
             continue
-        if pattern and not pattern.search(record_name):
+        if pattern and not (pattern.search(record_label) or pattern.search(record_name)):
             continue
         summary = raw_record.get("summary")
         result = summary.get("result") if isinstance(summary, dict) else None
@@ -199,8 +202,8 @@ def build_probe_explanation(
                 "index": _coerce_optional_int(raw_record.get("index")),
                 "candidate_id": record_candidate_id,
                 "protocol": record_protocol,
-                "label": record_name or None,
-                "region_hint": _infer_region_hint(record_name),
+                "label": record_label or None,
+                "region_hint": _coerce_optional_str(raw_record.get("region_hint")) or infer_region_hint(record_label),
                 "attempted": bool(raw_record.get("attempted")),
                 "skipped": bool(raw_record.get("skipped")),
                 "passed": bool(raw_record.get("passed")),
@@ -298,28 +301,6 @@ def _probe_error_category(result: object, failure_markers: list[str]) -> str | N
         return "timeout"
     if "transport_error" in failure_markers or "stage_transport_failed" in failure_markers:
         return "transport_error"
-    return None
-
-
-def _infer_region_hint(label: str | None) -> str | None:
-    """Infer one coarse region hint from a redacted label."""
-    if not label:
-        return None
-    upper_label = label.upper()
-    if "LOS ANGELES" in upper_label or re.search(r"\bLA\b", upper_label):
-        return "US-LA"
-    if any(token in label for token in ("United States", "美国")) or re.search(r"\bUSA?\b", upper_label):
-        return "US"
-    if any(token in label for token in ("Japan", "Tokyo", "日本", "东京")) or re.search(r"\bJP\b", upper_label):
-        return "JP"
-    if any(token in label for token in ("Taiwan", "台湾")) or re.search(r"\bTW\b", upper_label):
-        return "TW"
-    if any(token in label for token in ("Hong Kong", "香港")) or re.search(r"\bHK\b", upper_label):
-        return "HK"
-    if any(token in label for token in ("Singapore", "新加坡")) or re.search(r"\bSG\b", upper_label):
-        return "SG"
-    if any(token in label for token in ("Korea", "韩国", "首尔")) or re.search(r"\bKR\b", upper_label):
-        return "KR"
     return None
 
 

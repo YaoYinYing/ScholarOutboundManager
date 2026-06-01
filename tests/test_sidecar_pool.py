@@ -45,6 +45,23 @@ def test_build_sidecar_pool_plan_filters_by_candidate_id() -> None:
     assert plan.entries[0].candidate_id == "candidate-002"
 
 
+def test_build_sidecar_pool_plan_uses_shared_pass_inference_for_historical_payload() -> None:
+    """Honor infer_probe_passed() when older probe payloads omit the explicit flag."""
+    payload = _passed_candidates_payload()
+    first_probe = payload["candidates"][0]["probe"]
+    second_probe = payload["candidates"][1]["probe"]
+    assert isinstance(first_probe, dict)
+    assert isinstance(second_probe, dict)
+    first_probe.pop("passed", None)
+    second_probe["failure_markers"] = ["stage_transport_failed"]
+    second_probe.pop("passed", None)
+
+    plan = build_sidecar_pool_plan(payload, base_port=19080)
+
+    assert plan.count == 1
+    assert plan.entries[0].candidate_id == "candidate-001"
+
+
 def test_build_sidecar_pool_plan_rejects_missing_candidate_id() -> None:
     """Reject unknown pool candidate IDs."""
     with pytest.raises(ValueError, match="was not found"):

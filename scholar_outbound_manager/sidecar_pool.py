@@ -18,6 +18,7 @@ from scholar_outbound_manager.probe.scholar_classifier import build_scholar_quer
 from scholar_outbound_manager.probe.scholar_classifier import classify_scholar_access
 from scholar_outbound_manager.selection import CandidateSelectionRecord
 from scholar_outbound_manager.selection import extract_candidate_selection_records
+from scholar_outbound_manager.selection import infer_probe_passed
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
 from scholar_outbound_manager.xray.outbound import build_xray_outbound
 from scholar_outbound_manager.xray.runtime_config import build_local_socks_inbound
@@ -288,17 +289,7 @@ def _select_records_for_pool(
 
 def _record_is_passed(record: CandidateSelectionRecord) -> bool:
     """Return whether the record qualifies as passed for pool selection."""
-    if record.probe_payload is None:
-        return False
-    allowed_statuses = {200, 301, 302, 303, 307, 308}
-    passed = record.probe_payload.get("passed")
-    if isinstance(passed, bool):
-        return passed and not record.probe_payload.get("failure_markers")
-    home_status = record.probe_payload.get("home_status")
-    query_status = record.probe_payload.get("query_status")
-    if record.probe_payload.get("failure_markers"):
-        return False
-    return home_status in allowed_statuses and query_status in allowed_statuses
+    return infer_probe_passed(record.probe_payload)
 
 
 def _check_tcp_connect(host: str, port: int, timeout_seconds: float) -> bool:

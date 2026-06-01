@@ -19,6 +19,8 @@ from scholar_outbound_manager.models import XrayConfig
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeOptions
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeSummary
 from scholar_outbound_manager.probe.candidate_probe import probe_candidate
+from scholar_outbound_manager.selection import build_candidate_display_label
+from scholar_outbound_manager.selection import infer_region_hint
 
 
 @dataclass(slots=True)
@@ -47,6 +49,8 @@ class BatchProbeRecord:
     skip_reason: str | None
     summary: CandidateProbeSummary | None
     candidate_protocol: str | None = None
+    candidate_label: str | None = None
+    region_hint: str | None = None
 
 
 @dataclass(slots=True)
@@ -203,6 +207,8 @@ def _probe_candidates_sequential(
 
         candidate_id = build_candidate_id(candidate, index)
         candidate_name = candidate.raw_name or f"candidate-{index + 1:03d}"
+        candidate_label = build_candidate_display_label(candidate.to_dict())
+        region_hint = infer_region_hint(candidate_label)
 
         if not candidate.supported and not options.include_unsupported:
             records.append(
@@ -216,6 +222,8 @@ def _probe_candidates_sequential(
                     skip_reason=candidate.unsupported_reason or "Candidate is marked unsupported.",
                     summary=None,
                     candidate_protocol=candidate.protocol,
+                    candidate_label=candidate_label,
+                    region_hint=region_hint,
                 )
             )
             continue
@@ -244,6 +252,8 @@ def _probe_candidates_sequential(
                 skip_reason=None,
                 summary=summary,
                 candidate_protocol=candidate.protocol,
+                candidate_label=candidate_label,
+                region_hint=region_hint,
             )
         )
 
@@ -264,12 +274,14 @@ def _probe_candidates_parallel(
 ) -> BatchProbeSummary:
     """Probe candidates concurrently while keeping record order stable."""
     ordered_records: list[BatchProbeRecord] = []
-    futures: dict[concurrent.futures.Future[CandidateProbeSummary], tuple[int, CandidateProxy, str, str]] = {}
+    futures: dict[concurrent.futures.Future[CandidateProbeSummary], tuple[int, CandidateProxy, str, str, str, str | None]] = {}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=options.max_workers) as executor:
         for index, candidate in _iter_candidate_scope(candidates, options.max_candidates):
             candidate_id = build_candidate_id(candidate, index)
             candidate_name = candidate.raw_name or f"candidate-{index + 1:03d}"
+            candidate_label = build_candidate_display_label(candidate.to_dict())
+            region_hint = infer_region_hint(candidate_label)
             if not candidate.supported and not options.include_unsupported:
                 ordered_records.append(
                     BatchProbeRecord(
@@ -282,6 +294,8 @@ def _probe_candidates_parallel(
                         skip_reason=candidate.unsupported_reason or "Candidate is marked unsupported.",
                         summary=None,
                         candidate_protocol=candidate.protocol,
+                        candidate_label=candidate_label,
+                        region_hint=region_hint,
                     )
                 )
                 continue
@@ -295,11 +309,11 @@ def _probe_candidates_parallel(
                 options.candidate_options,
                 probe_candidate_func,
             )
-            futures[future] = (index, candidate, candidate_id, candidate_name)
+            futures[future] = (index, candidate, candidate_id, candidate_name, candidate_label, region_hint)
 
         attempted_records: dict[int, BatchProbeRecord] = {}
         for future in concurrent.futures.as_completed(futures):
-            index, candidate, candidate_id, candidate_name = futures[future]
+            index, candidate, candidate_id, candidate_name, candidate_label, region_hint = futures[future]
             try:
                 summary = future.result()
             except Exception as exc:  # pragma: no cover - defensive future boundary
@@ -323,6 +337,8 @@ def _probe_candidates_parallel(
                 skip_reason=None,
                 summary=summary,
                 candidate_protocol=candidate.protocol,
+                candidate_label=candidate_label,
+                region_hint=region_hint,
             )
 
     ordered_records.extend(

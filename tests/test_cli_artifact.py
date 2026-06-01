@@ -206,6 +206,54 @@ def test_artifact_explain_probe_filters_by_protocol_error_category_and_marker(tm
     _assert_no_secrets(captured.out + captured.err)
 
 
+def test_artifact_explain_probe_label_regex_matches_redacted_candidate_label(tmp_path: Path, capsys) -> None:
+    probe_path = tmp_path / "probe_summary.json"
+    probe_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_type": "probe_summary",
+                "run_id": "probe-1",
+                "created_at": "2026-05-27T00:00:00Z",
+                "records": [
+                    {
+                        "index": 0,
+                        "candidate_id": "candidate-001",
+                        "candidate_protocol": "vless",
+                        "candidate_name": "<REDACTED>",
+                        "candidate_label": "美国 Scholar 01",
+                        "region_hint": "US",
+                        "attempted": True,
+                        "passed": False,
+                        "skipped": False,
+                        "skip_reason": None,
+                        "summary": {
+                            "result": {
+                                "home_status": 403,
+                                "query_status": 403,
+                                "error": None,
+                                "failure_markers": ["stage_home_blocked"],
+                            }
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        ["artifact", "explain-probe", "--probe-summary", str(probe_path), "--label-regex", "美国"]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["record_count"] == 1
+    assert payload["records"][0]["label"] == "美国 Scholar 01"
+    assert payload["records"][0]["region_hint"] == "US"
+
+
 def _write_matching_artifacts(tmp_path: Path) -> tuple[Path, Path, Path]:
     candidates_payload = {
         "schema_version": 1,

@@ -59,6 +59,8 @@ def test_serialize_batch_probe_record_supports_missing_summary() -> None:
     )
 
     assert serialized["summary"] is None
+    assert serialized["candidate_label"] == "node-name"
+    assert serialized["region_hint"] is None
 
 
 def test_serialize_batch_probe_summary_includes_schema_version_and_records() -> None:
@@ -107,6 +109,57 @@ def test_candidate_name_and_skip_reason_are_redacted() -> None:
     rendered = json.dumps(serialized)
     assert "https://example.invalid/token=secret" not in rendered
     assert "00000000-0000-0000-0000-000000000000" not in rendered
+    assert serialized["records"][0]["candidate_label"] is None
+
+
+def test_probe_summary_includes_candidate_label_and_region_hint() -> None:
+    """Store the same review-safe label surface used by selection views."""
+    summary = _make_batch_probe_summary(
+        records=[
+            BatchProbeRecord(
+                index=0,
+                candidate_id="candidate-001",
+                candidate_name="raw-source-name",
+                attempted=True,
+                passed=True,
+                skipped=False,
+                skip_reason=None,
+                summary=_make_candidate_probe_summary(),
+                candidate_label="美国 Los Angeles auth=<REDACTED>",
+                region_hint="US-LA",
+            )
+        ]
+    )
+
+    serialized = serialize_batch_probe_summary(summary)
+
+    assert serialized["records"][0]["candidate_label"] == "美国 Los Angeles auth=<REDACTED>"
+    assert serialized["records"][0]["region_hint"] == "US-LA"
+
+
+def test_probe_summary_candidate_label_hides_secret_material() -> None:
+    """Keep candidate labels human-readable without leaking secrets."""
+    summary = _make_batch_probe_summary(
+        records=[
+            BatchProbeRecord(
+                index=0,
+                candidate_id="candidate-001",
+                candidate_name="vless://00000000-0000-0000-0000-000000000000@example.invalid:443",
+                attempted=True,
+                passed=False,
+                skipped=False,
+                skip_reason=None,
+                summary=_make_candidate_probe_summary(),
+            )
+        ]
+    )
+
+    record = serialize_batch_probe_summary(summary)["records"][0]
+    rendered = json.dumps(record)
+
+    assert "vless://" not in rendered
+    assert "00000000-0000-0000-0000-000000000000" not in rendered
+    assert "example.invalid" not in rendered
 
 
 def test_write_batch_probe_summary_persists_json(tmp_path) -> None:

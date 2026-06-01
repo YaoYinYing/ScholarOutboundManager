@@ -559,6 +559,14 @@ scholar-outbound-manager artifact check \
 
 If lineage is missing or inconsistent, rerun `fetch` and `probe` before trusting a manual selection.
 
+For probe troubleshooting, `artifact explain-probe --label-regex` matches redacted but human-readable candidate labels first and falls back to legacy `candidate_name` records when older summaries do not yet carry `candidate_label`.
+
+```bash
+scholar-outbound-manager artifact explain-probe \
+  --probe-summary state_data/probe_summary.json \
+  --label-regex 美国
+```
+
 ## Region hint selection
 
 `region_hint` is based on redacted labels. It is not GeoIP, it only ranks passed candidates, and it should not replace Geo cache when coordinate-based selection is available.

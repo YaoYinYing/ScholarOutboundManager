@@ -376,19 +376,19 @@ def redact_candidate_label(value: object) -> str | None:
     if not text:
         return None
     try:
-        text = re.sub(r"(?i)\b(?:vless|vmess|trojan|ss)://\S+", " ", text)
+        text = re.sub(r"(?i)\b[a-z][a-z0-9+.-]*://\S+", " ", text)
         text = re.sub(
             r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
             "<UUID>",
             text,
         )
         text = re.sub(
-            r"(?i)\b(public[_ -]?key|password|token|secret)\b\s*[:=]\s*\S+",
+            r"(?i)\b(public[_ -]?key|password|token|secret|auth)\b\s*[:=]\s*\S+",
             r"\1=<REDACTED>",
             text,
         )
         text = re.sub(
-            r"(?i)\b(public[_ -]?key|password|token|secret)\b(?:\s+\S+)+",
+            r"(?i)\b(public[_ -]?key|password|token|secret|auth)\b(?:\s+\S+)+",
             lambda match: f"{match.group(1)} <REDACTED>",
             text,
         )

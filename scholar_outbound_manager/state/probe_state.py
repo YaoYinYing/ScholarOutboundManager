@@ -11,6 +11,8 @@ from scholar_outbound_manager.probe.batch_probe import BatchProbeRecord
 from scholar_outbound_manager.probe.batch_probe import BatchProbeSummary
 from scholar_outbound_manager.probe.batch_probe import select_passed_candidates
 from scholar_outbound_manager.probe.candidate_probe import CandidateProbeSummary
+from scholar_outbound_manager.selection import infer_region_hint
+from scholar_outbound_manager.selection import redact_candidate_label
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
 from scholar_outbound_manager.state.artifact_lineage import ArtifactLineage
 from scholar_outbound_manager.state.artifact_lineage import artifact_lineage_to_dict
@@ -54,10 +56,14 @@ def serialize_candidate_probe_summary(summary: CandidateProbeSummary) -> dict[st
 
 def serialize_batch_probe_record(record: BatchProbeRecord) -> dict[str, object]:
     """Serialize one batch probe record with redacted human-readable text fields."""
+    candidate_label = record.candidate_label or redact_candidate_label(record.candidate_name)
+    region_hint = record.region_hint if record.region_hint is not None else infer_region_hint(candidate_label)
     return {
         "index": record.index,
         "candidate_id": record.candidate_id,
         "candidate_name": _redact_free_text(record.candidate_name),
+        "candidate_label": candidate_label,
+        "region_hint": region_hint,
         "candidate_protocol": record.candidate_protocol,
         "attempted": record.attempted,
         "passed": record.passed,

@@ -108,8 +108,12 @@ def test_redact_candidate_label_removes_vless_uri() -> None:
 
 
 def test_redact_candidate_label_removes_secret_fields() -> None:
-    redacted = redact_candidate_label("HK public_key=abc password=def token=ghi secret=jkl")
-    assert redacted == "HK public_key=<REDACTED> password=<REDACTED> token=<REDACTED> secret=<REDACTED>"
+    redacted = redact_candidate_label("HK public_key=abc password=def token=ghi secret=jkl auth=mno")
+    assert redacted == "HK public_key=<REDACTED> password=<REDACTED> token=<REDACTED> secret=<REDACTED> auth=<REDACTED>"
+
+
+def test_redact_candidate_label_removes_generic_url() -> None:
+    assert redact_candidate_label("https://example.invalid/token=secret") is None
 
 
 def test_redact_candidate_label_removes_obvious_ip() -> None:

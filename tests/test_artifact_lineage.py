@@ -73,6 +73,36 @@ def test_probe_explanation_filters_redacted_labels() -> None:
                 "index": 0,
                 "candidate_id": "candidate-001",
                 "candidate_name": "US-LA-01",
+                "candidate_label": "美国 Los Angeles 01",
+                "region_hint": "US-LA",
+                "attempted": True,
+                "passed": False,
+                "skipped": False,
+                "skip_reason": None,
+                "summary": {"result": {"home_status": 403, "query_status": 403, "failure_markers": ["stage_home_blocked"]}},
+            }
+        ],
+    }
+
+    explanation = build_probe_explanation(payload, label_regex="美国")
+
+    rendered = json.dumps(explanation, ensure_ascii=False)
+    assert explanation["record_count"] == 1
+    assert "美国 Los Angeles 01" in rendered
+    assert "raw_uri" not in rendered
+
+
+def test_probe_explanation_legacy_summary_without_candidate_label_still_works() -> None:
+    payload = {
+        "schema_version": 1,
+        "artifact_type": "probe_summary",
+        "run_id": "probe-1",
+        "created_at": "2026-05-27T00:00:00Z",
+        "records": [
+            {
+                "index": 0,
+                "candidate_id": "candidate-001",
+                "candidate_name": "US-LA-01",
                 "attempted": True,
                 "passed": False,
                 "skipped": False,
@@ -84,10 +114,9 @@ def test_probe_explanation_filters_redacted_labels() -> None:
 
     explanation = build_probe_explanation(payload, label_regex="US-LA")
 
-    rendered = json.dumps(explanation, ensure_ascii=False)
     assert explanation["record_count"] == 1
-    assert "US-LA-01" in rendered
-    assert "raw_uri" not in rendered
+    assert explanation["records"][0]["label"] == "US-LA-01"
+    assert explanation["records"][0]["region_hint"] == "US-LA"
 
 
 def _write_matching_artifacts(tmp_path: Path) -> tuple[Path, Path, Path]:
