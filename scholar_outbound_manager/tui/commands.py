@@ -108,20 +108,24 @@ def build_probe_command(
         passed_candidates_output,
         "--parallel",
         str(parallel_workers),
-        "--query",
-        query,
-        "--request-timeout",
-        _format_float(request_timeout),
-        "--transport-retry-count",
-        str(transport_retry_count),
-        "--transport-retry-backoff",
-        _format_float(transport_retry_backoff),
-        "--hysteria2-warmup-attempts",
-        str(hysteria2_warmup_attempts),
-        "--allow-network-probe",
     ]
     if keep_all_passed:
-        argv.insert(11, "--keep-all-passed")
+        argv.append("--keep-all-passed")
+    argv.extend(
+        [
+            "--query",
+            query,
+            "--request-timeout",
+            _format_float(request_timeout),
+            "--transport-retry-count",
+            str(transport_retry_count),
+            "--transport-retry-backoff",
+            _format_float(transport_retry_backoff),
+            "--hysteria2-warmup-attempts",
+            str(hysteria2_warmup_attempts),
+            "--allow-network-probe",
+        ]
+    )
     return argv
 
 

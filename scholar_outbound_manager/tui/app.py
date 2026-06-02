@@ -56,16 +56,6 @@ def _textual_safe_id(value: str) -> str:
     if safe[0].isdigit():
         safe = f"tab-{safe}"
     return safe
-
-
-def _build_tab_id_map(tabs: list[str]) -> dict[str, str]:
-    """Build one stable, unique Textual-safe id map for workflow tabs."""
-    mapping: dict[str, str] = {}
-    for tab in tabs:
-        mapping[tab] = _textual_safe_id(tab)
-    return mapping
-
-
 def _build_tab_specs(tabs: list[str]) -> tuple[list[dict[str, str]], str]:
     """Return workflow tab titles plus safe ids and one initial safe id."""
     if not tabs:

@@ -63,8 +63,18 @@ def test_fetch_and_probe_command_preview_is_correct() -> None:
     )
 
     assert "scholar-outbound-manager fetch --config config.yaml --output candidates.json --allow-network-fetch" in fetch_preview
+    probe_argv = build_probe_command(
+        config_path="config.yaml",
+        candidates_path="candidates.json",
+        summary_output="state_data/probe_summary.json",
+        passed_candidates_output="state_data/passed_candidates.json",
+    )
+    parallel_index = probe_argv.index("--parallel")
+    assert probe_argv[parallel_index + 1] == "2"
+    assert "--keep-all-passed" not in probe_argv[parallel_index:parallel_index + 2]
     assert "--transport-retry-count 2" in probe_preview
     assert "--hysteria2-warmup-attempts 1" in probe_preview
+    assert "--parallel --keep-all-passed 2" not in probe_preview
 
 
 def test_service_stage_command_includes_skip_binary_copy_by_default() -> None:

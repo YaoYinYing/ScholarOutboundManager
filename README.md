@@ -649,11 +649,11 @@ The optional TUI shows the same redacted label and heuristic region columns with
 
 ## TUI workflow control plane
 
-The optional TUI is a workflow control plane for config, artifacts, selection, and sidecar operations. Config edits are transactional: `config.yaml` is changed only after validation and save, with a redacted preview and redacted diff shown before writeback.
+The optional TUI currently provides a transactional config-editing foundation plus workflow previews for config, artifacts, selection, and sidecar operations. Config edits are transactional: `config.yaml` is changed only after validation and save, with a redacted preview and redacted diff shown before writeback.
 
-Undo is backed by a sensitive journal under `state_data/tui/`. That journal applies to config file writes only; it does not roll back arbitrary external side effects.
+Undo is backed by a sensitive journal at `state_data/tui/config_undo_journal.jsonl`. That journal applies to config file writes only; it does not roll back arbitrary external side effects.
 
-Network fetch/probe and systemd actions remain explicit operations. This phase keeps command previews and state inspection inside the TUI without automatically mutating production Xray/XrayR/`x-ui`.
+Network fetch/probe and systemd actions remain explicit operations. This phase keeps command previews and state inspection inside the TUI without automatically mutating production Xray/XrayR/`x-ui` and without claiming full interactive config editing yet.
 
 ## Web panel security model
 

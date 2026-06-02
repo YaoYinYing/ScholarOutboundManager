@@ -205,7 +205,9 @@ def undo_last_config_save(
         (
             entry
             for entry in reversed(entries)
-            if str(entry.get("config_path") or "") == normalized_path and isinstance(entry.get("previous_text"), str)
+            if str(entry.get("config_path") or "") == normalized_path
+            and str(entry.get("reason") or "") == "tui_config_save"
+            and isinstance(entry.get("previous_text"), str)
         ),
         None,
     )
@@ -248,6 +250,7 @@ def has_undo_journal_entry(
     normalized_path = str(Path(config_path))
     return any(
         str(entry.get("config_path") or "") == normalized_path
+        and str(entry.get("reason") or "") == "tui_config_save"
         and isinstance(entry.get("previous_text"), str)
         for entry in _load_undo_entries(undo_journal_path)
     )

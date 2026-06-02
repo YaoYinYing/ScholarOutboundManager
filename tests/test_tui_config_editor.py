@@ -123,6 +123,26 @@ def test_undo_last_config_save_restores_previous_config(tmp_path: Path) -> None:
     assert result.path == str(config_path)
 
 
+def test_second_undo_does_not_toggle_back_to_newer_text(tmp_path: Path) -> None:
+    """Repeated undo should not bounce between save and undo entries."""
+    config_path = _write_valid_config(tmp_path)
+    undo_path = tmp_path / "state_data" / "tui" / "config_undo_journal.jsonl"
+    original_text = config_path.read_text(encoding="utf-8")
+    modified_text = original_text.replace("allow_network_probe: false", "allow_network_probe: true")
+    config_editor.save_config_draft(
+        config_editor.update_config_draft_text(config_editor.load_config_draft(config_path), modified_text),
+        undo_journal_path=undo_path,
+    )
+
+    first = config_editor.undo_last_config_save(config_path=config_path, undo_journal_path=undo_path)
+    second = config_editor.undo_last_config_save(config_path=config_path, undo_journal_path=undo_path)
+
+    assert first.restored is True
+    assert second.restored is True
+    assert config_path.read_text(encoding="utf-8") == original_text
+    assert "allow_network_probe: true" not in config_path.read_text(encoding="utf-8")
+
+
 def test_has_undo_journal_entry_tracks_availability(tmp_path: Path) -> None:
     """Report whether one config has undo history available."""
     config_path = _write_valid_config(tmp_path)
@@ -136,6 +156,31 @@ def test_has_undo_journal_entry_tracks_availability(tmp_path: Path) -> None:
     )
 
     assert config_editor.has_undo_journal_entry(config_path=config_path, undo_journal_path=undo_path) is True
+
+
+def test_has_undo_journal_entry_ignores_pure_undo_audit_entries(tmp_path: Path) -> None:
+    """Undo availability should depend on save entries, not audit-only undo rows."""
+    config_path = _write_valid_config(tmp_path)
+    undo_path = tmp_path / "state_data" / "tui" / "config_undo_journal.jsonl"
+    undo_path.parent.mkdir(parents=True, exist_ok=True)
+    undo_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "created_at": "2026-06-02T00:00:00Z",
+                "config_path": str(config_path),
+                "previous_sha256": "a",
+                "next_sha256": "b",
+                "previous_text": "subscriptions: []\n",
+                "next_redacted_summary": "subscriptions: []",
+                "reason": "tui_config_undo",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert config_editor.has_undo_journal_entry(config_path=config_path, undo_journal_path=undo_path) is False
 
 
 def _write_valid_config(tmp_path: Path, *, subscription_url: str = "https://example.invalid/subscription") -> Path:
