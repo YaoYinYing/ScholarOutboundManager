@@ -657,6 +657,8 @@ Undo is backed by a sensitive journal at `state_data/tui/config_undo_journal.jso
 
 The primary tabs are `Dashboard | Config | Fetch & Probe | Artifacts | Selection | Sidecar | Pool | Troubleshooting | Snippets`. `Dashboard` summarizes config, artifacts, selection, the current blocking reason, and the next recommended action. `Config` is the transactional editor surface with redacted validation errors, preview, diff, undo availability, and restart-required markers for safe editable fields.
 
+For non-interactive smoke checks, prefer typed access such as `state.last_action.summary if state.last_action else None` instead of assuming `last_action` is a raw mapping.
+
 Every save writes the undo journal under `state_data/tui/`. Undo restores config file content only; it does not roll back network operations, systemd side effects, or external Xray processes.
 
 Network fetch/probe and systemd actions remain explicit operations. This phase keeps command previews and state inspection inside the TUI without automatically mutating production Xray/XrayR/`x-ui` and without claiming full interactive config editing yet. Overlong command previews are truncated safely in the TUI surface, while action state remains review-safe.

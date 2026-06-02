@@ -150,6 +150,20 @@ class PoolState:
 
 
 @dataclass(slots=True)
+class LastActionState:
+    key: str | None
+    title: str | None
+    summary: str | None
+    exit_code: int | None
+    succeeded: bool | None
+    redacted_stdout_tail: str
+    redacted_stderr_tail: str
+    warnings: list[str]
+    snapshot_id: str | None = None
+    rollback_hint: str | None = None
+
+
+@dataclass(slots=True)
 class ControlPlaneState:
     workspace: str
     tabs: list[str]
@@ -163,7 +177,7 @@ class ControlPlaneState:
     sidecar_state: SidecarState
     pool_state: PoolState
     warnings: list[str]
-    last_action: dict[str, object] | None
+    last_action: LastActionState | None
     session: dict[str, object]
     snippets: dict[str, object]
     repo_status: str
@@ -457,6 +471,7 @@ def load_control_plane_state(
 
     steps = build_workflow_steps(artifact_check_result=artifact_check)
     blocking_reason = next((step.blocking_reason for step in steps if step.blocking_reason), None)
+    last_action = _normalize_last_action(load_last_action(action_journal_path))
     workflow_state = WorkflowModelState(
         steps=[
             {
@@ -475,7 +490,7 @@ def load_control_plane_state(
             artifact_state=artifact_state,
             selection_state=selection_state,
             selected_candidate_exists=Path(selected_candidate_path).exists(),
-            last_action=load_last_action(action_journal_path),
+            last_action=last_action,
         ),
     )
 
@@ -523,8 +538,6 @@ def load_control_plane_state(
         artifact_snapshot_available=True,
         artifact_rollback_available=latest_snapshot is not None,
     )
-    last_action = load_last_action(action_journal_path)
-
     return ControlPlaneState(
         workspace=os.getcwd(),
         tabs=list(MAIN_TABS),
@@ -564,7 +577,7 @@ def _next_recommended_action(
     artifact_state: ArtifactState,
     selection_state: SelectionState,
     selected_candidate_exists: bool,
-    last_action: dict[str, object] | None,
+    last_action: LastActionState | None,
 ) -> str:
     if not config_state.exists:
         return _with_reason(
@@ -606,13 +619,13 @@ def _next_recommended_action(
             "Review sidecar stage and confirm runtime preparation before touching the managed service.",
             reason="The managed runtime has not been staged from a selected candidate yet.",
         )
-    last_action_key = "" if last_action is None else str(last_action.get("key") or "")
+    last_action_key = "" if last_action is None else str(last_action.key or "")
     if last_action_key != "sidecar_stage" and last_action_key != "service_validate":
         return _with_reason(
             "Review sidecar stage and confirm runtime preparation before touching the managed service.",
             reason="No successful sidecar stage action has been recorded in the current workflow.",
         )
-    if last_action_key != "service_validate" or last_action.get("succeeded") is not True:
+    if last_action_key != "service_validate" or last_action.succeeded is not True:
         return _with_reason(
             "Review sidecar validate and confirm the managed service before exporting the snippet.",
             reason="The managed sidecar service has not been validated successfully yet.",
@@ -713,3 +726,20 @@ def _coerce_optional_str(value: object) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
+
+
+def _normalize_last_action(payload: dict[str, object] | None) -> LastActionState | None:
+    if payload is None:
+        return None
+    return LastActionState(
+        key=_coerce_optional_str(payload.get("key")),
+        title=_coerce_optional_str(payload.get("title")),
+        summary=_coerce_optional_str(payload.get("summary")),
+        exit_code=payload.get("exit_code") if isinstance(payload.get("exit_code"), int) else None,
+        succeeded=payload.get("succeeded") if isinstance(payload.get("succeeded"), bool) else None,
+        redacted_stdout_tail=str(payload.get("redacted_stdout_tail") or ""),
+        redacted_stderr_tail=str(payload.get("redacted_stderr_tail") or ""),
+        warnings=[str(value) for value in list(payload.get("warnings") or [])],
+        snapshot_id=_coerce_optional_str(payload.get("snapshot_id")),
+        rollback_hint=_coerce_optional_str(payload.get("rollback_hint")),
+    )

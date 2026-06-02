@@ -137,6 +137,7 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "network fetch/probe and systemd actions remain explicit operations" in readme_text.lower()
     assert "dashboard" in readme_text.lower() and "blocking reason" in readme_text.lower() and "next recommended action" in readme_text.lower()
     assert "restart-required markers for safe editable fields" in readme_text.lower()
+    assert "state.last_action.summary if state.last_action else none" in readme_text.lower()
     assert "without claiming full interactive config editing yet" in readme_text.lower()
     assert "tabs are for operations" in readme_text.lower()
     assert "wizard is for first deployment or full refresh" in readme_text.lower()

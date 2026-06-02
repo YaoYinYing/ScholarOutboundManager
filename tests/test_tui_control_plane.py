@@ -119,8 +119,87 @@ def test_control_plane_loads_last_action_from_review_safe_journal(tmp_path: Path
     )
 
     assert state.last_action is not None
-    assert state.last_action["key"] == "probe"
-    assert "password=<REDACTED>" in state.last_action["redacted_stderr_tail"]
+    assert state.last_action.key == "probe"
+    assert state.last_action.summary == "Probe Candidates failed with exit code 1."
+    assert "password=<REDACTED>" in state.last_action.redacted_stderr_tail
+
+
+def test_control_plane_normalizes_legacy_last_action_without_summary(tmp_path: Path) -> None:
+    """Older journal rows should still produce one typed last-action state."""
+    candidates_path = _write_passed_candidates(tmp_path)
+    config_path = _write_config(tmp_path)
+    action_journal_path = tmp_path / "state_data" / "tui" / "action_journal.jsonl"
+    action_journal_path.parent.mkdir(parents=True, exist_ok=True)
+    action_journal_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "created_at": "2026-06-02T00:00:00Z",
+                "operation_key": "artifact_check",
+                "title": "Check Artifact Lineage",
+                "exit_code": 0,
+                "succeeded": True,
+                "redacted_stdout": "",
+                "redacted_stderr": "",
+                "warnings": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_control_plane_state(
+        config_path=str(config_path),
+        candidates_path=str(candidates_path),
+        passed_candidates_path=str(candidates_path),
+        probe_summary_path=str(tmp_path / "probe_summary.json"),
+        selected_candidate_path=str(tmp_path / "selected_candidate.json"),
+        session_path=str(tmp_path / "tui_session.json"),
+        action_journal_path=str(action_journal_path),
+    )
+
+    assert state.last_action is not None
+    assert state.last_action.title == "Check Artifact Lineage"
+    assert state.last_action.summary == "Check Artifact Lineage completed successfully."
+    assert state.last_action.redacted_stdout_tail == ""
+    assert state.last_action.redacted_stderr_tail == ""
+
+
+def test_control_plane_smoke_example_can_access_last_action_summary(tmp_path: Path) -> None:
+    """The documented smoke access pattern should work without raw dict access."""
+    candidates_path = _write_passed_candidates(tmp_path)
+    config_path = _write_config(tmp_path)
+    action_journal_path = tmp_path / "state_data" / "tui" / "action_journal.jsonl"
+    action_journal_path.parent.mkdir(parents=True, exist_ok=True)
+    action_journal_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "created_at": "2026-06-02T00:00:00Z",
+                "operation_key": "select",
+                "title": "Select Candidate",
+                "exit_code": 0,
+                "succeeded": True,
+                "redacted_stdout": "",
+                "redacted_stderr": "",
+                "warnings": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_control_plane_state(
+        config_path=str(config_path),
+        candidates_path=str(candidates_path),
+        passed_candidates_path=str(candidates_path),
+        probe_summary_path=str(tmp_path / "probe_summary.json"),
+        selected_candidate_path=str(tmp_path / "selected_candidate.json"),
+        session_path=str(tmp_path / "tui_session.json"),
+        action_journal_path=str(action_journal_path),
+    )
+
+    assert (state.last_action.summary if state.last_action else None) == "Select Candidate completed successfully."
 
 
 def test_control_plane_exposes_snapshot_metadata_and_rollback_availability(tmp_path: Path) -> None:
