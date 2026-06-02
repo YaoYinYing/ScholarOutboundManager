@@ -5,14 +5,21 @@ from __future__ import annotations
 import argparse
 import re
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from scholar_outbound_manager.selection import build_selected_candidate_artifact
 from scholar_outbound_manager.selection import load_candidate_payload
 from scholar_outbound_manager.selection import select_candidate_by_index
 from scholar_outbound_manager.selection import write_selected_candidate_artifact
+from scholar_outbound_manager.tui.action_runner import ActionResult
+from scholar_outbound_manager.tui.action_runner import ActionRunOptions
+from scholar_outbound_manager.tui.action_runner import ActionRunner
+from scholar_outbound_manager.tui.action_runner import FakeActionRunner
+from scholar_outbound_manager.tui.action_runner import SubprocessActionRunner
+from scholar_outbound_manager.tui.action_runner import append_action_journal
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
+from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ACTION_JOURNAL_PATH
 from scholar_outbound_manager.tui.control_plane import ControlPlaneState
 from scholar_outbound_manager.tui.control_plane import control_plane_state_to_dict
 from scholar_outbound_manager.tui.control_plane import load_control_plane_state
@@ -25,11 +32,103 @@ from scholar_outbound_manager.tui.workflow import MAIN_TABS
 TUI_KEY_BINDINGS: tuple[tuple[str, str, str], ...] = (
     ("q", "quit", "Quit"),
     ("r", "reload_state", "Reload State"),
-    ("d", "toggle_diff", "Toggle Diff"),
     ("s", "save_draft", "Save Draft"),
     ("u", "undo_save", "Undo Save"),
+    ("f", "run_fetch", "Run Fetch"),
+    ("p", "run_probe", "Run Probe"),
+    ("a", "run_artifact_check", "Run Artifact Check"),
+    ("c", "run_select", "Run Select"),
+    ("g", "run_stage_sidecar", "Run Stage Sidecar"),
+    ("v", "run_validate_sidecar", "Run Validate"),
     ("?", "show_help", "Help"),
 )
+
+
+@dataclass(slots=True)
+class WorkflowActionState:
+    pending_confirmation: str | None
+    last_result: ActionResult | None
+    status_message: str | None
+
+
+class WorkflowController:
+    """Pure-Python workflow controller with confirmation and runner integration."""
+
+    def __init__(
+        self,
+        *,
+        loader_kwargs: dict[str, object],
+        runner: ActionRunner | None = None,
+        action_journal_path: str = DEFAULT_TUI_ACTION_JOURNAL_PATH,
+    ) -> None:
+        self._loader_kwargs = dict(loader_kwargs)
+        self._runner = SubprocessActionRunner() if runner is None else runner
+        self._action_journal_path = action_journal_path
+        self.workflow_state = load_workflow_state(**self._loader_kwargs)
+        self.action_state = WorkflowActionState(pending_confirmation=None, last_result=None, status_message=None)
+
+    def reload(self) -> None:
+        self.workflow_state = load_workflow_state(**self._loader_kwargs)
+        self.action_state.pending_confirmation = None
+        self.action_state.status_message = "Workflow state reloaded."
+
+    def handle_operation(self, operation_key: str) -> str:
+        spec = self._find_operation(operation_key)
+        if spec is None:
+            self.action_state.status_message = f"Unknown operation: {operation_key}"
+            return str(self.action_state.status_message)
+        if spec.requires_confirmation and self.action_state.pending_confirmation != operation_key:
+            self.action_state.pending_confirmation = operation_key
+            self.action_state.status_message = f"Pending confirmation: press the same key again to run {spec.title}."
+            return str(self.action_state.status_message)
+        self.action_state.pending_confirmation = None
+        result = self._runner.run(spec, self._build_run_options(spec))
+        append_action_journal(result, journal_path=self._action_journal_path)
+        self.action_state.last_result = result
+        self.workflow_state = load_workflow_state(**self._loader_kwargs)
+        self.action_state.status_message = self._summarize_result(result)
+        return str(self.action_state.status_message)
+
+    def _find_operation(self, operation_key: str):
+        operations = self.workflow_state["control_plane"]["command_state"]["operations"]
+        for operation in operations:
+            if operation["key"] == operation_key:
+                return self._dict_to_operation(operation)
+        return None
+
+    def _build_run_options(self, spec) -> ActionRunOptions:
+        return ActionRunOptions(
+            cwd=None,
+            timeout_seconds=30.0,
+            allow_network=spec.network_access,
+            allow_systemd=spec.systemd_access,
+            allow_sensitive_artifact_write=spec.sensitive_outputs,
+        )
+
+    def _summarize_result(self, result: ActionResult) -> str:
+        stderr_tail = result.redacted_stderr[-160:] if result.redacted_stderr else ""
+        if result.succeeded:
+            return result.summary
+        if stderr_tail:
+            return f"{result.summary} Next step: inspect stderr tail: {stderr_tail}"
+        return f"{result.summary} Next step: review the action journal and current control-plane state."
+
+    def _dict_to_operation(self, payload: dict[str, object]):
+        from scholar_outbound_manager.tui.commands import OperationSpec
+
+        return OperationSpec(
+            key=str(payload["key"]),
+            title=str(payload["title"]),
+            command=[str(part) for part in payload["command"]],
+            requires_confirmation=bool(payload["requires_confirmation"]),
+            network_access=bool(payload["network_access"]),
+            systemd_access=bool(payload["systemd_access"]),
+            sensitive_outputs=bool(payload["sensitive_outputs"]),
+            expected_artifacts=[str(part) for part in payload["expected_artifacts"]],
+            success_exit_codes=tuple(int(code) for code in payload.get("success_exit_codes", (0,))),
+            description=str(payload.get("description") or ""),
+            risk_note=None if payload.get("risk_note") is None else str(payload.get("risk_note")),
+        )
 
 
 def _textual_safe_id(value: str) -> str:
@@ -97,6 +196,7 @@ def load_dashboard_state(
     control_plane = load_control_plane_state(
         candidates_path=str(candidates_path),
         passed_candidates_path=str(candidates_path),
+        action_journal_path=DEFAULT_TUI_ACTION_JOURNAL_PATH,
         output_path=str(output_path),
         strategy=strategy,
         geo_cache_path=geo_cache_path,
@@ -124,6 +224,7 @@ def load_workflow_state(
     selected_candidate_path: str = "state_data/selected_candidate.json",
     pool_plan_path: str = "state_data/sidecar_pool_plan.json",
     session_path: str = DEFAULT_TUI_SESSION_PATH,
+    action_journal_path: str = DEFAULT_TUI_ACTION_JOURNAL_PATH,
     output_path: str = "state_data/selected_candidate.json",
     strategy: str = "auto",
     geo_cache_path: str = "state_data/geo/candidate_geo_cache.json",
@@ -140,6 +241,7 @@ def load_workflow_state(
         selected_candidate_path=selected_candidate_path,
         pool_plan_path=pool_plan_path,
         session_path=session_path,
+        action_journal_path=action_journal_path,
         output_path=output_path,
         strategy=strategy,
         geo_cache_path=geo_cache_path,
@@ -174,6 +276,7 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
             "selected_candidate_label": payload["selection_state"]["selected_candidate_label"],
             "current_sidecar_port": payload["current_sidecar_port"],
             "next_recommended_action": payload["workflow_state"]["next_recommended_action"],
+            "last_action": payload["last_action"],
         },
         "wizard_steps": payload["workflow_state"]["steps"],
         "paths": payload["session"]["paths"],
@@ -234,6 +337,8 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
         },
         "warnings": payload["warnings"],
         "snippets": payload["snippets"],
+        "last_action": payload["last_action"],
+        "operation_availability": payload["operation_availability"],
         "control_plane": payload,
     }
 
@@ -255,6 +360,7 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"passed_count: {dashboard['passed_count']}",
                 f"selected_candidate_label: {dashboard['selected_candidate_label']}",
                 f"next_recommended_action: {dashboard['next_recommended_action']}",
+                f"last_action: {dashboard['last_action']}",
             ]
         )
     if tab == "Config":
@@ -268,7 +374,7 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"undo_available: {editor['undo_available']}",
                 "Preview:",
                 editor["redacted_diff"] or editor["redacted_preview"],
-                "Hints: q quit | r reload | d toggle diff | s save draft | u undo save | ? help",
+                "Hints: q quit | r reload | f fetch | p probe | a artifact-check | c select | g stage | v validate | s save | u undo | ? help",
             ]
         )
     if tab == "Fetch & Probe":
@@ -277,6 +383,8 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 workflow_state["warnings"][0],
                 f"fetch: {workflow_state['commands']['fetch']}",
                 f"probe: {workflow_state['commands']['probe']}",
+                f"fetch_available: {workflow_state['operation_availability']['fetch_available']}",
+                f"probe_available: {workflow_state['operation_availability']['probe_available']}",
             ]
         )
     if tab == "Artifacts":
@@ -284,6 +392,7 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
             [
                 f"artifact check: {workflow_state['commands']['artifact_check']}",
                 f"artifact result: {workflow_state['artifacts']['artifact_check']}",
+                f"artifact_check_available: {workflow_state['operation_availability']['artifact_check_available']}",
                 f"candidates_hash: {workflow_state['artifacts']['candidates_hash']}",
                 f"probe_summary_hash: {workflow_state['artifacts']['probe_summary_hash']}",
                 f"passed_candidates_hash: {workflow_state['artifacts']['passed_candidates_hash']}",
@@ -301,6 +410,7 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"selection_method: {workflow_state['selection']['selection_method']}",
                 f"selection_reason: {workflow_state['selection']['selection_reason']}",
                 f"select preview: {workflow_state['commands']['select']}",
+                f"select_available: {workflow_state['operation_availability']['select_available']}",
             ]
         )
     if tab == "Sidecar":
@@ -310,6 +420,8 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 workflow_state["commands"]["sidecar_stage"],
                 workflow_state["commands"]["service_restart"],
                 workflow_state["commands"]["service_validate"],
+                f"sidecar_stage_available: {workflow_state['operation_availability']['sidecar_stage_available']}",
+                f"service_validate_available: {workflow_state['operation_availability']['service_validate_available']}",
                 f"service_active: {control_plane['sidecar_state']['service_active']}",
                 f"service_enabled: {control_plane['sidecar_state']['service_enabled']}",
                 f"socks_tcp_connect: {control_plane['sidecar_state']['socks_tcp_connect']}",
@@ -336,7 +448,13 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
             ]
         )
     if tab == "Snippets":
-        return "\n".join([workflow_state["snippets"]["warning"], workflow_state["commands"]["service_snippet"]])
+        return "\n".join(
+            [
+                workflow_state["snippets"]["warning"],
+                workflow_state["commands"]["service_snippet"],
+                f"snippet_available: {workflow_state['operation_availability']['snippet_available']}",
+            ]
+        )
     return "\n".join(
         [
             "Configured workflow tabs:",
@@ -377,21 +495,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         print('Textual TUI is not installed. Install with:\npip install "ScholarOutboundManager[tui]"')
         return 1
 
-    workflow_state = load_workflow_state(
-        config_path=args.config,
-        candidates_path=args.candidates,
-        probe_summary_path=args.probe_summary,
-        passed_candidates_path=args.passed_candidates,
-        selected_candidate_path=args.selected_candidate,
-        pool_plan_path=args.pool_plan,
-        session_path=args.session,
-        output_path=args.output,
-        strategy=args.strategy,
-        geo_cache_path=args.geo_cache,
-        host_geo_path=args.host_geo,
-        prefer_geo=args.prefer_geo,
-        preferred_region_hint=args.preferred_region_hint,
+    controller = WorkflowController(
+        loader_kwargs={
+            "config_path": args.config,
+            "candidates_path": args.candidates,
+            "probe_summary_path": args.probe_summary,
+            "passed_candidates_path": args.passed_candidates,
+            "selected_candidate_path": args.selected_candidate,
+            "pool_plan_path": args.pool_plan,
+            "session_path": args.session,
+            "action_journal_path": DEFAULT_TUI_ACTION_JOURNAL_PATH,
+            "output_path": args.output,
+            "strategy": args.strategy,
+            "geo_cache_path": args.geo_cache,
+            "host_geo_path": args.host_geo,
+            "prefer_geo": args.prefer_geo,
+            "preferred_region_hint": args.preferred_region_hint,
+        },
     )
+    workflow_state = controller.workflow_state
     write_session_state(
         args.session,
         build_session_state(
@@ -409,20 +531,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         BINDINGS = list(TUI_KEY_BINDINGS)
 
         def compose(self) -> ComposeResult:
-            tab_specs, initial_tab_id = _build_tab_specs(list(workflow_state["tabs"]))
+            tab_specs, initial_tab_id = _build_tab_specs(list(controller.workflow_state["tabs"]))
             yield Header()
             with TabbedContent(initial=initial_tab_id):
                 for tab_spec in tab_specs:
                     with TabPane(tab_spec["title"], id=tab_spec["id"]):
                         with Vertical():
-                            yield Static(render_tab_text(tab_spec["title"], workflow_state))
+                            yield Static(render_tab_text(tab_spec["title"], controller.workflow_state))
             yield Footer()
 
         def action_reload_state(self) -> None:
-            self.notify("Reload state is preview-only in this phase.")
-
-        def action_toggle_diff(self) -> None:
-            self.notify("Diff toggle is preview-only in this phase.")
+            controller.reload()
+            self.notify(str(controller.action_state.status_message))
 
         def action_save_draft(self) -> None:
             self.notify("Config save remains an explicit future action in this phase.")
@@ -430,8 +550,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         def action_undo_save(self) -> None:
             self.notify("Undo remains an explicit future action in this phase.")
 
+        def action_run_fetch(self) -> None:
+            self.notify(controller.handle_operation("fetch"))
+
+        def action_run_probe(self) -> None:
+            self.notify(controller.handle_operation("probe"))
+
+        def action_run_artifact_check(self) -> None:
+            self.notify(controller.handle_operation("artifact_check"))
+
+        def action_run_select(self) -> None:
+            self.notify(controller.handle_operation("select"))
+
+        def action_run_stage_sidecar(self) -> None:
+            self.notify(controller.handle_operation("sidecar_stage"))
+
+        def action_run_validate_sidecar(self) -> None:
+            self.notify(controller.handle_operation("service_validate"))
+
         def action_show_help(self) -> None:
-            self.notify("Keys: q quit | r reload | d toggle diff | s save draft | u undo save | ? help")
+            self.notify("Keys: q quit | r reload | f fetch | p probe | a artifact-check | c select | g stage | v validate | s save | u undo | ? help")
 
     ScholarOutboundWorkflowApp().run()
     return 0

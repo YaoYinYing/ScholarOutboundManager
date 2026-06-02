@@ -12,6 +12,7 @@ from scholar_outbound_manager.tui.control_plane import CommandState
 from scholar_outbound_manager.tui.control_plane import ConfigState
 from scholar_outbound_manager.tui.control_plane import ControlPlaneState
 from scholar_outbound_manager.tui.control_plane import ArtifactState
+from scholar_outbound_manager.tui.control_plane import OperationAvailability
 from scholar_outbound_manager.tui.control_plane import PoolState
 from scholar_outbound_manager.tui.control_plane import SelectionState
 from scholar_outbound_manager.tui.control_plane import SidecarState
@@ -217,10 +218,11 @@ def test_load_workflow_state_uses_control_plane_loader(monkeypatch) -> None:
             "pool",
             [OperationSpec("fetch", "Fetch", ["cmd"], True, True, False, True, ["out"])],
         ),
+        operation_availability=OperationAvailability(True, False, False, False, False, False, False, True),
         sidecar_state=SidecarState("unknown", "unknown", "unknown", "unknown", "warn", True, "/usr/local/bin/xray"),
         pool_state=PoolState(False, [], "warn"),
         warnings=["live warning"],
-        last_operation=None,
+        last_action=None,
         session={
             "schema_version": 1,
             "updated_at": "2026-06-02T00:00:00Z",

@@ -84,6 +84,43 @@ def test_service_stage_command_includes_skip_binary_copy_by_default() -> None:
     assert "--skip-xray-binary-copy" in argv
 
 
+def test_operation_specs_capture_expected_risk_flags() -> None:
+    """Control-plane operations should advertise the right execution risks."""
+    fetch_spec = _spec(
+        key="fetch",
+        command=build_fetch_command(),
+        requires_confirmation=True,
+        network_access=True,
+        systemd_access=False,
+    )
+    probe_spec = _spec(
+        key="probe",
+        command=build_probe_command(),
+        requires_confirmation=True,
+        network_access=True,
+        systemd_access=False,
+    )
+    restart_spec = _spec(
+        key="service_restart",
+        command=build_service_restart_command(),
+        requires_confirmation=True,
+        network_access=False,
+        systemd_access=True,
+    )
+    artifact_spec = _spec(
+        key="artifact_check",
+        command=["scholar-outbound-manager", "artifact", "check"],
+        requires_confirmation=False,
+        network_access=False,
+        systemd_access=False,
+    )
+
+    assert fetch_spec.network_access is True and fetch_spec.requires_confirmation is True
+    assert probe_spec.network_access is True and probe_spec.requires_confirmation is True
+    assert restart_spec.systemd_access is True and restart_spec.requires_confirmation is True
+    assert artifact_spec.network_access is False and artifact_spec.systemd_access is False and artifact_spec.requires_confirmation is False
+
+
 def test_select_command_preview_is_available_for_control_plane() -> None:
     """Build a copy-friendly preview for the explicit selection step."""
     preview = preview_command(build_select_command())
@@ -101,3 +138,18 @@ def test_sidecar_service_previews_cover_restart_validate_and_snippet() -> None:
     assert "sidecar service-restart --unit-name scholar-outbound-sidecar.service" in restart_preview
     assert "sidecar service-validate --unit-name scholar-outbound-sidecar.service" in validate_preview
     assert "sidecar service-snippet --listen-host 127.0.0.1 --listen-port 19080 --tag scholar-sidecar-socks-out" in snippet_preview
+
+
+def _spec(*, key: str, command: list[str], requires_confirmation: bool, network_access: bool, systemd_access: bool):
+    from scholar_outbound_manager.tui.commands import OperationSpec
+
+    return OperationSpec(
+        key=key,
+        title=key,
+        command=command,
+        requires_confirmation=requires_confirmation,
+        network_access=network_access,
+        systemd_access=systemd_access,
+        sensitive_outputs=False,
+        expected_artifacts=[],
+    )

@@ -16,6 +16,7 @@ from scholar_outbound_manager.selection_policy import SelectionPolicyOptions
 from scholar_outbound_manager.selection_policy import select_candidate_with_policy
 from scholar_outbound_manager.state.artifact_lineage import check_artifact_consistency
 from scholar_outbound_manager.state.artifact_lineage import compute_artifact_hash
+from scholar_outbound_manager.tui.action_runner import load_last_action
 from scholar_outbound_manager.tui.commands import OperationSpec
 from scholar_outbound_manager.tui.commands import build_artifact_check_command
 from scholar_outbound_manager.tui.commands import build_fetch_command
@@ -28,6 +29,7 @@ from scholar_outbound_manager.tui.commands import build_service_stage_command
 from scholar_outbound_manager.tui.commands import build_service_validate_command
 from scholar_outbound_manager.tui.commands import build_snippet_warning
 from scholar_outbound_manager.tui.commands import preview_command
+from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ACTION_JOURNAL_PATH
 from scholar_outbound_manager.tui.config_editor import has_undo_journal_entry
 from scholar_outbound_manager.tui.config_editor import load_config_draft
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
@@ -107,6 +109,18 @@ class CommandState:
 
 
 @dataclass(slots=True)
+class OperationAvailability:
+    fetch_available: bool
+    probe_available: bool
+    artifact_check_available: bool
+    select_available: bool
+    sidecar_stage_available: bool
+    service_restart_available: bool
+    service_validate_available: bool
+    snippet_available: bool
+
+
+@dataclass(slots=True)
 class SidecarState:
     service_active: str
     service_enabled: str
@@ -133,10 +147,11 @@ class ControlPlaneState:
     selection_state: SelectionState
     workflow_state: WorkflowModelState
     command_state: CommandState
+    operation_availability: OperationAvailability
     sidecar_state: SidecarState
     pool_state: PoolState
     warnings: list[str]
-    last_operation: dict[str, object] | None
+    last_action: dict[str, object] | None
     session: dict[str, object]
     snippets: dict[str, object]
     repo_status: str
@@ -154,6 +169,7 @@ def load_control_plane_state(
     selected_candidate_path: str = "state_data/selected_candidate.json",
     pool_plan_path: str = "state_data/sidecar_pool_plan.json",
     session_path: str = DEFAULT_TUI_SESSION_PATH,
+    action_journal_path: str = DEFAULT_TUI_ACTION_JOURNAL_PATH,
     output_path: str = "state_data/selected_candidate.json",
     strategy: str = "auto",
     geo_cache_path: str = "state_data/geo/candidate_geo_cache.json",
@@ -315,6 +331,8 @@ def load_control_plane_state(
                 systemd_access=False,
                 sensitive_outputs=True,
                 expected_artifacts=[candidates_path],
+                description="Download and parse subscription content into a local sensitive candidates artifact.",
+                risk_note="Live network operation. Writes a sensitive local artifact.",
             ),
             OperationSpec(
                 key="probe",
@@ -325,6 +343,32 @@ def load_control_plane_state(
                 systemd_access=False,
                 sensitive_outputs=True,
                 expected_artifacts=[probe_summary_path, passed_candidates_path],
+                description="Probe candidates through the managed runtime and persist redacted summary plus passed candidates.",
+                risk_note="Live network operation. Writes sensitive passed-candidate artifacts.",
+            ),
+            OperationSpec(
+                key="artifact_check",
+                title="Check Artifact Lineage",
+                command=artifact_check_command,
+                requires_confirmation=False,
+                network_access=False,
+                systemd_access=False,
+                sensitive_outputs=False,
+                expected_artifacts=[],
+                description="Check candidates, probe summary, and passed candidates for lineage consistency.",
+                risk_note=None,
+            ),
+            OperationSpec(
+                key="select",
+                title="Select Candidate",
+                command=select_command,
+                requires_confirmation=True,
+                network_access=False,
+                systemd_access=False,
+                sensitive_outputs=True,
+                expected_artifacts=[selected_candidate_path],
+                description="Write one sensitive selected-candidate artifact from the current selection policy output.",
+                risk_note="Writes selected_candidate.json.",
             ),
             OperationSpec(
                 key="sidecar_stage",
@@ -335,6 +379,8 @@ def load_control_plane_state(
                 systemd_access=False,
                 sensitive_outputs=True,
                 expected_artifacts=[selected_candidate_path],
+                description="Prepare the managed sidecar runtime without touching production Xray or XrayR.",
+                risk_note="Writes local runtime artifacts.",
             ),
             OperationSpec(
                 key="service_restart",
@@ -345,6 +391,32 @@ def load_control_plane_state(
                 systemd_access=True,
                 sensitive_outputs=False,
                 expected_artifacts=[],
+                description="Restart only the ScholarOutboundManager-managed sidecar service.",
+                risk_note="Touches systemd for the managed sidecar service.",
+            ),
+            OperationSpec(
+                key="service_validate",
+                title="Validate Sidecar Service",
+                command=service_validate_command,
+                requires_confirmation=True,
+                network_access=True,
+                systemd_access=True,
+                sensitive_outputs=False,
+                expected_artifacts=[],
+                description="Validate the managed sidecar service with explicit runtime and network checks.",
+                risk_note="Touches systemd and performs live validation.",
+            ),
+            OperationSpec(
+                key="snippet",
+                title="Render Sidecar Snippet",
+                command=snippet_command,
+                requires_confirmation=False,
+                network_access=False,
+                systemd_access=False,
+                sensitive_outputs=False,
+                expected_artifacts=[],
+                description="Render one copyable SOCKS outbound snippet for manual production integration.",
+                risk_note=None,
             ),
         ],
     )
@@ -367,6 +439,8 @@ def load_control_plane_state(
             config_state=config_state,
             artifact_state=artifact_state,
             selection_state=selection_state,
+            selected_candidate_exists=Path(selected_candidate_path).exists(),
+            last_action=load_last_action(action_journal_path),
         ),
     )
 
@@ -400,6 +474,18 @@ def load_control_plane_state(
         last_results={} if existing_session is None else existing_session.last_results,
     )
 
+    operation_availability = OperationAvailability(
+        fetch_available=config_state.exists and config_state.valid,
+        probe_available=config_state.exists and config_state.valid and artifact_state.candidates_exists,
+        artifact_check_available=artifact_state.candidates_exists and artifact_state.passed_candidates_exists,
+        select_available=artifact_state.passed_candidates_exists and bool(selection_state.rows),
+        sidecar_stage_available=Path(selected_candidate_path).exists(),
+        service_restart_available=Path(selected_candidate_path).exists(),
+        service_validate_available=Path(selected_candidate_path).exists(),
+        snippet_available=True,
+    )
+    last_action = load_last_action(action_journal_path)
+
     return ControlPlaneState(
         workspace=os.getcwd(),
         tabs=list(MAIN_TABS),
@@ -408,13 +494,14 @@ def load_control_plane_state(
         selection_state=selection_state,
         workflow_state=workflow_state,
         command_state=command_state,
+        operation_availability=operation_availability,
         sidecar_state=sidecar_state,
         pool_state=pool_state,
         warnings=[
             "Fetch and probe previews correspond to live network operations when executed.",
             build_snippet_warning(),
         ],
-        last_operation=None,
+        last_action=last_action,
         session=asdict(session_state),
         snippets=build_snippet_view([], warning=build_snippet_warning()),
         repo_status="dirty" if _current_repo_dirty() else "clean",
@@ -434,6 +521,8 @@ def _next_recommended_action(
     config_state: ConfigState,
     artifact_state: ArtifactState,
     selection_state: SelectionState,
+    selected_candidate_exists: bool,
+    last_action: dict[str, object] | None,
 ) -> str:
     if not config_state.exists:
         return "Create or point the TUI at a local config.yaml before proceeding."
@@ -441,11 +530,20 @@ def _next_recommended_action(
         return "Fix redacted config validation errors before any live fetch, probe, or sidecar step."
     if not artifact_state.candidates_exists:
         return "Review the fetch preview, then run fetch explicitly to create candidates.json."
-    if not artifact_state.passed_candidates_exists:
-        return "Review the probe preview, then run probe explicitly to create passed candidates."
-    if selection_state.selected_candidate_id is None:
+    if artifact_state.passed_candidates_exists and not selected_candidate_exists:
         return "Review the selection preview and choose one passed candidate before staging the sidecar."
-    return "Review sidecar stage, restart, validate, and snippet previews before touching the managed service."
+    if not artifact_state.probe_summary_exists or not artifact_state.passed_candidates_exists:
+        return "Review the probe preview, then run probe explicitly to create passed candidates."
+    if artifact_state.overall_consistent is False:
+        return "Review artifact check output and rerun fetch or probe until lineage is consistent."
+    if not selected_candidate_exists:
+        return "Review sidecar stage and confirm runtime preparation before touching the managed service."
+    last_action_key = "" if last_action is None else str(last_action.get("key") or "")
+    if last_action_key != "sidecar_stage" and last_action_key != "service_validate":
+        return "Review sidecar stage and confirm runtime preparation before touching the managed service."
+    if last_action_key != "service_validate" or last_action.get("succeeded") is not True:
+        return "Review sidecar validate and confirm the managed service before exporting the snippet."
+    return "Review the snippet preview for manual production integration; production Xray and XrayR remain out of scope."
 
 
 def _load_pool_rows(path: str | Path) -> list[dict[str, object]]:

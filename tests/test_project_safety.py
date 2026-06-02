@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 
@@ -143,6 +144,13 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "state_data/geo/" in readme_text.lower()
     assert "every save writes the undo journal under `state_data/tui/`" in readme_text.lower()
     assert "undo restores config file content only" in readme_text.lower()
+    assert "confirmed workflow execution" in readme_text.lower()
+    assert "the tui can now run selected workflow operations through the existing cli/helper paths after explicit confirmation" in readme_text.lower()
+    assert "live network actions such as `fetch` and `probe`" in readme_text.lower()
+    assert "review-safe action journal under `state_data/tui/action_journal.jsonl`" in readme_text.lower()
+    assert "undo currently applies to config saves only" in readme_text.lower()
+    assert "artifact rollback is not implemented in tui-3" in readme_text.lower()
+    assert "sidecar runtime rollback remains future work" in readme_text.lower()
     assert "web panel security model" in readme_text.lower()
     assert 'pip install "scholaroutboundmanager[web]"' in readme_text.lower()
     assert "scholar-outbound-manager web user-init --username admin --password-stdin" in readme_text.lower()
@@ -242,3 +250,17 @@ def test_config_example_keeps_network_probe_disabled_by_default() -> None:
     example_text = (PROJECT_ROOT / "config.example.yaml").read_text(encoding="utf-8")
 
     assert "allow_network_probe: false" in example_text
+
+
+def test_action_journal_path_is_not_tracked() -> None:
+    """Keep the TUI action journal out of tracked repository content."""
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "state_data/tui/action_journal.jsonl"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        shell=False,
+    )
+
+    assert tracked.returncode != 0

@@ -37,6 +37,9 @@ class OperationSpec:
     systemd_access: bool
     sensitive_outputs: bool
     expected_artifacts: list[str]
+    success_exit_codes: tuple[int, ...] = (0,)
+    description: str = ""
+    risk_note: str | None = None
 
 
 def run_command(

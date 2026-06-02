@@ -69,7 +69,133 @@ def test_tui_key_bindings_cover_expected_controls() -> None:
 
     assert bindings["q"] == "quit"
     assert bindings["r"] == "reload_state"
-    assert bindings["d"] == "toggle_diff"
     assert bindings["s"] == "save_draft"
     assert bindings["u"] == "undo_save"
+    assert bindings["f"] == "run_fetch"
+    assert bindings["p"] == "run_probe"
+    assert bindings["a"] == "run_artifact_check"
+    assert bindings["c"] == "run_select"
+    assert bindings["g"] == "run_stage_sidecar"
+    assert bindings["v"] == "run_validate_sidecar"
     assert bindings["?"] == "show_help"
+
+
+def test_workflow_controller_requires_second_confirmation_before_network_action(tmp_path, monkeypatch) -> None:
+    """Network actions should not run on the first key press."""
+    call_count = {"runs": 0}
+
+    def fake_load_workflow_state(**kwargs):
+        del kwargs
+        return {
+            "control_plane": {
+                "command_state": {
+                    "operations": [
+                        {
+                            "key": "fetch",
+                            "title": "Fetch Candidates",
+                            "command": ["fetch"],
+                            "requires_confirmation": True,
+                            "network_access": True,
+                            "systemd_access": False,
+                            "sensitive_outputs": True,
+                            "expected_artifacts": ["candidates.json"],
+                            "success_exit_codes": [0],
+                            "description": "",
+                            "risk_note": None,
+                        }
+                    ]
+                }
+            }
+        }
+
+    class DummyRunner:
+        def run(self, spec, options):
+            call_count["runs"] += 1
+            return tui_app.ActionResult(
+                key=spec.key,
+                title=spec.title,
+                command=spec.command,
+                started_at="2026-06-02T00:00:00Z",
+                finished_at="2026-06-02T00:00:01Z",
+                exit_code=0,
+                succeeded=True,
+                stdout="",
+                stderr="",
+                redacted_stdout="",
+                redacted_stderr="",
+                summary="ok",
+                expected_artifacts=[],
+                warnings=[],
+            )
+
+    monkeypatch.setattr(tui_app, "load_workflow_state", fake_load_workflow_state)
+    controller = tui_app.WorkflowController(
+        loader_kwargs={},
+        runner=DummyRunner(),
+        action_journal_path=str(tmp_path / "state_data" / "tui" / "action_journal.jsonl"),
+    )
+
+    first = controller.handle_operation("fetch")
+
+    assert "pending confirmation" in first.lower()
+    assert call_count["runs"] == 0
+
+
+def test_workflow_controller_confirms_fake_action_and_reloads_state(tmp_path, monkeypatch) -> None:
+    """Confirmed actions should execute, journal, and reload workflow state."""
+    load_calls: list[int] = []
+
+    def fake_load_workflow_state(**kwargs):
+        del kwargs
+        load_calls.append(1)
+        return {
+            "control_plane": {
+                "command_state": {
+                    "operations": [
+                        {
+                            "key": "artifact_check",
+                            "title": "Check Artifact Lineage",
+                            "command": ["artifact-check"],
+                            "requires_confirmation": False,
+                            "network_access": False,
+                            "systemd_access": False,
+                            "sensitive_outputs": False,
+                            "expected_artifacts": [],
+                            "success_exit_codes": [0],
+                            "description": "",
+                            "risk_note": None,
+                        }
+                    ]
+                }
+            }
+        }
+
+    monkeypatch.setattr(tui_app, "load_workflow_state", fake_load_workflow_state)
+    result = tui_app.ActionResult(
+        key="artifact_check",
+        title="Check Artifact Lineage",
+        command=["artifact-check"],
+        started_at="2026-06-02T00:00:00Z",
+        finished_at="2026-06-02T00:00:01Z",
+        exit_code=0,
+        succeeded=True,
+        stdout="",
+        stderr="",
+        redacted_stdout="ok",
+        redacted_stderr="",
+        summary="artifact check ok",
+        expected_artifacts=[],
+        warnings=[],
+    )
+    controller = tui_app.WorkflowController(
+        loader_kwargs={},
+        runner=tui_app.FakeActionRunner({"artifact_check": result}),
+        action_journal_path=str(tmp_path / "state_data" / "tui" / "action_journal.jsonl"),
+    )
+
+    message = controller.handle_operation("artifact_check")
+
+    assert "artifact check ok" in message
+    assert controller.action_state.last_result is not None
+    assert controller.action_state.last_result.key == "artifact_check"
+    assert len(load_calls) >= 2

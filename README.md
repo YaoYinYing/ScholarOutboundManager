@@ -663,6 +663,14 @@ Network fetch/probe and systemd actions remain explicit operations. This phase k
 
 Hysteria2 remains experimental and disabled by default in the TUI because it follows the same production-safety boundary as the CLI. The TUI never modifies production Xray, XrayR, or `x-ui` directly.
 
+## Confirmed workflow execution
+
+The TUI can now run selected workflow operations through the existing CLI/helper paths after explicit confirmation. Live network actions such as `fetch` and `probe`, and systemd-related actions such as sidecar validation, require confirmation before execution.
+
+Action output is redacted before display and before journaling. The TUI writes a review-safe action journal under `state_data/tui/action_journal.jsonl`; it contains only redacted stdout/stderr, command previews, exit codes, and review-safe warnings.
+
+Undo currently applies to config saves only. Artifact rollback is not implemented in TUI-3, service restart undo is not guaranteed, and sidecar runtime rollback remains future work. Production Xray, XrayR, and `x-ui` configuration remain manual and out of scope.
+
 ## Web panel security model
 
 The web panel is optional and is a secure operations console for ScholarOutboundManager. It is not a proxy airport backend, not an XrayR manager, not a remote shell, and not a production Xray/XrayR/`x-ui` editor.
