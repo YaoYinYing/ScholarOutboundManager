@@ -7,6 +7,9 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+from scholar_outbound_manager.selection import build_selected_candidate_artifact
+from scholar_outbound_manager.selection import load_candidate_payload
+from scholar_outbound_manager.selection import select_candidate_by_index
 from scholar_outbound_manager.tui.control_plane import control_plane_state_to_dict
 from scholar_outbound_manager.tui.control_plane import load_control_plane_state
 
@@ -122,6 +125,49 @@ def test_control_plane_loads_last_action_from_review_safe_journal(tmp_path: Path
     assert state.last_action.key == "probe"
     assert state.last_action.summary == "Probe Candidates failed with exit code 1."
     assert "password=<REDACTED>" in state.last_action.redacted_stderr_tail
+
+
+def test_control_plane_prefers_selected_candidate_artifact_when_present(tmp_path: Path) -> None:
+    candidates_path = _write_passed_candidates(tmp_path)
+    config_path = _write_config(tmp_path)
+    selected_candidate_path = tmp_path / "selected_candidate.json"
+    payload = load_candidate_payload(candidates_path)
+    record = select_candidate_by_index(payload, 0)
+    selected_candidate_path.write_text(
+        json.dumps(build_selected_candidate_artifact(record, selection_method="index")),
+        encoding="utf-8",
+    )
+
+    state = load_control_plane_state(
+        config_path=str(config_path),
+        candidates_path=str(candidates_path),
+        passed_candidates_path=str(candidates_path),
+        probe_summary_path=str(tmp_path / "probe_summary.json"),
+        selected_candidate_path=str(selected_candidate_path),
+        session_path=str(tmp_path / "tui_session.json"),
+    )
+
+    assert state.selection_state.selected_candidate_id == record.candidate_id
+    assert state.selection_state.selection_method == "manual:selected_candidate"
+
+
+def test_control_plane_ignores_invalid_selected_candidate_artifact_for_row_loading(tmp_path: Path) -> None:
+    candidates_path = _write_passed_candidates(tmp_path)
+    config_path = _write_config(tmp_path)
+    selected_candidate_path = tmp_path / "selected_candidate.json"
+    selected_candidate_path.write_text('{"selected_candidate_id":"previous"}', encoding="utf-8")
+
+    state = load_control_plane_state(
+        config_path=str(config_path),
+        candidates_path=str(candidates_path),
+        passed_candidates_path=str(candidates_path),
+        probe_summary_path=str(tmp_path / "probe_summary.json"),
+        selected_candidate_path=str(selected_candidate_path),
+        session_path=str(tmp_path / "tui_session.json"),
+    )
+
+    assert state.selection_state.rows
+    assert state.selection_state.selected_candidate_id is not None
 
 
 def test_control_plane_normalizes_legacy_last_action_without_summary(tmp_path: Path) -> None:

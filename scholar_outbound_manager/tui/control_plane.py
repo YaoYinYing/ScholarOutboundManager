@@ -238,9 +238,22 @@ def load_control_plane_state(
             payload = load_candidate_payload(effective_candidates_path)
             entries = build_candidate_catalog(payload)
             rows = build_candidate_table_rows(entries)
-            _, _, decision = select_candidate_with_policy(
-                payload,
-                SelectionPolicyOptions(
+            selection_options = SelectionPolicyOptions(
+                selected_candidate_path=selected_candidate_path if Path(selected_candidate_path).exists() else None,
+                strategy=strategy,
+                geo_cache_path=geo_cache_path,
+                host_geo_path=host_geo_path,
+                prefer_geo=prefer_geo,
+                preferred_region_hint=preferred_region_hint,
+                prefer_region_hint=preferred_region_hint is not None,
+                fallback_to_first=True,
+            )
+            try:
+                _, _, decision = select_candidate_with_policy(payload, selection_options)
+            except Exception:
+                if selection_options.selected_candidate_path is None:
+                    raise
+                selection_options = SelectionPolicyOptions(
                     strategy=strategy,
                     geo_cache_path=geo_cache_path,
                     host_geo_path=host_geo_path,
@@ -248,8 +261,8 @@ def load_control_plane_state(
                     preferred_region_hint=preferred_region_hint,
                     prefer_region_hint=preferred_region_hint is not None,
                     fallback_to_first=True,
-                ),
-            )
+                )
+                _, _, decision = select_candidate_with_policy(payload, selection_options)
             selected_candidate_id = decision.selected_candidate_id
             selection_method = decision.method
             selection_reason = decision.reason
