@@ -11,6 +11,7 @@ from scholar_outbound_manager.state.atomic_write import atomic_write_json
 
 
 DEFAULT_TUI_SESSION_PATH = "state_data/tui_session.json"
+DEFAULT_TUI_UNDO_JOURNAL_PATH = "state_data/tui/config_undo_journal.jsonl"
 
 
 @dataclass(slots=True)
@@ -129,4 +130,3 @@ def _sanitize_scalar(value: Any) -> Any:
             return "<REDACTED>"
         return value
     return str(value)
-

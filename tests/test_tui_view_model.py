@@ -52,6 +52,9 @@ def test_dashboard_model_hides_secrets() -> None:
             "current_git_commit": "abc1234",
             "venv_detected": True,
             "config_exists": True,
+            "config_dirty": True,
+            "config_valid": False,
+            "undo_available": True,
             "xray_binary_exists": True,
             "service_active": True,
             "service_enabled": True,
@@ -68,6 +71,9 @@ def test_dashboard_model_hides_secrets() -> None:
     assert "vless://" not in rendered
     assert "example.invalid" not in rendered
     assert "1.2.3.4" not in rendered
+    assert dashboard["config_dirty"] is True
+    assert dashboard["config_valid"] is False
+    assert dashboard["undo_available"] is True
 
 
 def test_pool_plan_view_shows_ports_and_labels_only() -> None:

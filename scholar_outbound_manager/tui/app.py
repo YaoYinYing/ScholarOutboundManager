@@ -8,6 +8,8 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
+from scholar_outbound_manager.config import ConfigError
+from scholar_outbound_manager.config import load_config
 from scholar_outbound_manager.selection import build_candidate_catalog
 from scholar_outbound_manager.selection import build_selected_candidate_artifact
 from scholar_outbound_manager.selection import load_candidate_payload
@@ -17,15 +19,23 @@ from scholar_outbound_manager.selection import write_selected_candidate_artifact
 from scholar_outbound_manager.selection_policy import SelectionPolicyOptions
 from scholar_outbound_manager.selection_policy import select_candidate_with_policy
 from scholar_outbound_manager.state.artifact_lineage import check_artifact_consistency
+from scholar_outbound_manager.state.artifact_lineage import compute_artifact_hash
+from scholar_outbound_manager.state.artifact_lineage import load_artifact_payload
 from scholar_outbound_manager.tui.commands import build_artifact_check_command
 from scholar_outbound_manager.tui.commands import build_fetch_command
 from scholar_outbound_manager.tui.commands import build_pool_stage_command
 from scholar_outbound_manager.tui.commands import build_probe_command
+from scholar_outbound_manager.tui.commands import build_service_restart_command
+from scholar_outbound_manager.tui.commands import build_service_snippet_command
 from scholar_outbound_manager.tui.commands import build_service_stage_command
+from scholar_outbound_manager.tui.commands import build_service_validate_command
 from scholar_outbound_manager.tui.commands import build_snippet_warning
 from scholar_outbound_manager.tui.commands import preview_command
+from scholar_outbound_manager.tui.config_editor import has_undo_journal_entry
+from scholar_outbound_manager.tui.config_editor import load_config_draft
 from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
 from scholar_outbound_manager.tui.state import DEFAULT_TUI_SESSION_PATH
+from scholar_outbound_manager.tui.state import DEFAULT_TUI_UNDO_JOURNAL_PATH
 from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import load_session_state
 from scholar_outbound_manager.tui.state import session_state_to_dict
@@ -154,6 +164,20 @@ def load_workflow_state(
     candidate_rows: list[dict[str, object]] = []
     selected_candidate_id: str | None = None
     selected_candidate_label: str | None = None
+    config_exists = Path(config_path).exists()
+    config_draft = None
+    if config_exists:
+        try:
+            config_draft = load_config_draft(config_path)
+        except Exception:
+            config_draft = None
+    undo_available = has_undo_journal_entry(config_path=config_path, undo_journal_path=DEFAULT_TUI_UNDO_JOURNAL_PATH)
+    parsed_config = None
+    if config_draft is not None and config_draft.parsed_ok:
+        try:
+            parsed_config = load_config(config_path)
+        except (ConfigError, OSError, ValueError):
+            parsed_config = None
 
     effective_candidates_path = passed_candidates_path if Path(passed_candidates_path).exists() else candidates_path
     if Path(effective_candidates_path).exists():
@@ -190,6 +214,12 @@ def load_workflow_state(
             probe_summary_path=probe_summary_path,
             passed_candidates_path=passed_candidates_path,
         )
+    artifact_hashes = {
+        "candidates_hash": _try_compute_artifact_hash(candidates_path),
+        "probe_summary_hash": _try_compute_artifact_hash(probe_summary_path),
+        "passed_candidates_hash": _try_compute_artifact_hash(passed_candidates_path),
+    }
+    artifact_warnings = [] if artifact_check_result is None else list(artifact_check_result.get("warnings") or [])
 
     session_state = build_session_state(
         updated_at=_utc_now_iso8601(),
@@ -211,7 +241,10 @@ def load_workflow_state(
             "repo_status": "dirty" if _current_repo_dirty() else "clean",
             "current_git_commit": _current_git_commit(),
             "venv_detected": os.environ.get("VIRTUAL_ENV") is not None,
-            "config_exists": Path(config_path).exists(),
+            "config_exists": config_exists,
+            "config_dirty": False if config_draft is None else config_draft.dirty,
+            "config_valid": False if config_draft is None else config_draft.parsed_ok,
+            "undo_available": undo_available,
             "xray_binary_exists": Path(".runtime/xray/xray").exists(),
             "service_active": None,
             "service_enabled": None,
@@ -256,17 +289,39 @@ def load_workflow_state(
             "passed_candidates_exists": Path(passed_candidates_path).exists(),
             "selected_candidate_exists": Path(selected_candidate_path).exists(),
             "pool_plan_exists": Path(pool_plan_path).exists(),
+            "candidates_hash": artifact_hashes["candidates_hash"],
+            "probe_summary_hash": artifact_hashes["probe_summary_hash"],
+            "passed_candidates_hash": artifact_hashes["passed_candidates_hash"],
             "artifact_check": artifact_check_result,
+            "warnings": artifact_warnings,
         },
         "preflight": {
-            "config_exists": Path(config_path).exists(),
+            "config_exists": config_exists,
+            "config_valid": False if config_draft is None else config_draft.parsed_ok,
+            "config_validation_errors": [] if config_draft is None else list(config_draft.validation_errors),
+            "enabled_subscription_count": None if parsed_config is None else sum(1 for source in parsed_config.subscriptions if source.enabled),
             "xray_binary_exists": Path(".runtime/xray/xray").exists(),
-            "probe_allow_network_probe": None,
-            "routing_fail_closed": None,
+            "probe_allow_network_probe": None if parsed_config is None else parsed_config.probe.allow_network_probe,
+            "xray_binary_path": None if parsed_config is None else parsed_config.xray.binary_path,
+            "routing_mode": None if parsed_config is None else parsed_config.routing.mode,
+            "routing_fail_closed": None if parsed_config is None else parsed_config.routing.fail_closed,
+        },
+        "config_editor": {
+            "config_path": config_path,
+            "dirty": False if config_draft is None else config_draft.dirty,
+            "parsed_ok": False if config_draft is None else config_draft.parsed_ok,
+            "validation_errors": [] if config_draft is None else list(config_draft.validation_errors),
+            "redacted_preview": "" if config_draft is None else config_draft.redacted_preview,
+            "redacted_diff": "" if config_draft is None else config_draft.diff_preview,
+            "undo_available": undo_available,
+            "last_saved_at": None,
         },
         "selection": {
             "rows": candidate_rows,
             "selected_candidate_id": selected_candidate_id,
+            "preferred_region_hint": preferred_region_hint,
+            "selection_method": None if not candidate_rows else dashboard_state["selection_method"] if 'dashboard_state' in locals() else None,
+            "selection_reason": None if not candidate_rows else dashboard_state["selection_reason"] if 'dashboard_state' in locals() else None,
             "sensitive_notice": "selected_candidate.json is sensitive and will not be displayed.",
         },
         "commands": {
@@ -292,6 +347,9 @@ def load_workflow_state(
                     plan_path=pool_plan_path,
                 )
             ),
+            "service_restart": preview_command(build_service_restart_command()),
+            "service_validate": preview_command(build_service_validate_command()),
+            "service_snippet": preview_command(build_service_snippet_command()),
         },
         "warnings": [
             "This will perform live network fetch/probe from this VPS.",
@@ -374,6 +432,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         workflow_state["tab_strip"],
                         f"repo_status: {dashboard['repo_status']}",
                         f"current_git_commit: {dashboard['current_git_commit']}",
+                        f"config_dirty: {dashboard['config_dirty']}",
+                        f"config_valid: {dashboard['config_valid']}",
+                        f"undo_available: {dashboard['undo_available']}",
                         f"candidate_count: {dashboard['candidate_count']}",
                         f"passed_count: {dashboard['passed_count']}",
                         f"selected_candidate_label: {dashboard['selected_candidate_label']}",
@@ -384,7 +445,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     [
                         "Step 1: Preflight",
                         f"config exists: {workflow_state['preflight']['config_exists']}",
+                        f"config valid: {workflow_state['preflight']['config_valid']}",
+                        f"validation errors: {workflow_state['preflight']['config_validation_errors']}",
+                        f"enabled subscriptions: {workflow_state['preflight']['enabled_subscription_count']}",
+                        f"probe allow_network_probe: {workflow_state['preflight']['probe_allow_network_probe']}",
+                        f"xray binary path: {workflow_state['preflight']['xray_binary_path']}",
                         f"xray binary exists: {workflow_state['preflight']['xray_binary_exists']}",
+                        f"routing mode: {workflow_state['preflight']['routing_mode']}",
+                        f"routing fail_closed: {workflow_state['preflight']['routing_fail_closed']}",
                         f"command preview: {workflow_state['commands']['fetch']}",
                     ]
                 )
@@ -401,17 +469,44 @@ def main(argv: Sequence[str] | None = None) -> int:
                     [
                         f"artifact check: {workflow_state['commands']['artifact_check']}",
                         f"artifact result: {workflow_state['artifacts']['artifact_check']}",
+                        f"candidates_hash: {workflow_state['artifacts']['candidates_hash']}",
+                        f"probe_summary_hash: {workflow_state['artifacts']['probe_summary_hash']}",
+                        f"passed_candidates_hash: {workflow_state['artifacts']['passed_candidates_hash']}",
+                        f"warnings: {workflow_state['artifacts']['warnings']}",
                     ]
                 )
             if tab == "Selection":
-                return workflow_state["selection"]["sensitive_notice"]
+                return "\n".join(
+                    [
+                        workflow_state["selection"]["sensitive_notice"],
+                        f"selected_candidate_id: {workflow_state['selection']['selected_candidate_id']}",
+                        f"preferred_region_hint: {workflow_state['selection']['preferred_region_hint']}",
+                        f"selection_method: {workflow_state['selection']['selection_method']}",
+                        f"selection_reason: {workflow_state['selection']['selection_reason']}",
+                    ]
+                )
             if tab == "Sidecar":
-                return workflow_state["commands"]["sidecar_stage"]
+                return "\n".join(
+                    [
+                        workflow_state["commands"]["sidecar_stage"],
+                        workflow_state["commands"]["service_restart"],
+                        workflow_state["commands"]["service_validate"],
+                    ]
+                )
             if tab == "Pool":
                 return workflow_state["commands"]["pool_stage"]
             if tab == "Troubleshooting":
-                return "Meaning, safe command, expected result, and next action belong here."
-            return workflow_state["snippets"]["warning"]
+                editor = workflow_state["config_editor"]
+                return "\n".join(
+                    [
+                        "Meaning, safe command, expected result, and next action belong here.",
+                        f"config_path: {editor['config_path']}",
+                        f"config_dirty: {editor['dirty']}",
+                        f"undo_available: {editor['undo_available']}",
+                        editor["redacted_diff"] or editor["redacted_preview"],
+                    ]
+                )
+            return "\n".join([workflow_state["snippets"]["warning"], workflow_state["commands"]["service_snippet"]])
 
     ScholarOutboundWorkflowApp().run()
     return 0
@@ -428,6 +523,15 @@ def _try_load_session(path: str | Path):
 
 def _count_passed(rows: list[dict[str, object]]) -> int:
     return sum(1 for row in rows if row.get("passed") is True)
+
+
+def _try_compute_artifact_hash(path: str | Path) -> str | None:
+    try:
+        if not Path(path).exists():
+            return None
+        return compute_artifact_hash(load_artifact_payload(path))
+    except Exception:
+        return None
 
 
 def _current_git_commit() -> str | None:

@@ -6,7 +6,10 @@ import subprocess
 
 from scholar_outbound_manager.tui.commands import build_fetch_command
 from scholar_outbound_manager.tui.commands import build_probe_command
+from scholar_outbound_manager.tui.commands import build_service_restart_command
+from scholar_outbound_manager.tui.commands import build_service_snippet_command
 from scholar_outbound_manager.tui.commands import build_service_stage_command
+from scholar_outbound_manager.tui.commands import build_service_validate_command
 from scholar_outbound_manager.tui.commands import preview_command
 from scholar_outbound_manager.tui.commands import run_command
 
@@ -68,3 +71,14 @@ def test_service_stage_command_includes_skip_binary_copy_by_default() -> None:
     """Default sidecar staging preview should be safe for restaging."""
     argv = build_service_stage_command()
     assert "--skip-xray-binary-copy" in argv
+
+
+def test_sidecar_service_previews_cover_restart_validate_and_snippet() -> None:
+    """Build preview commands for the remaining sidecar workflow steps."""
+    restart_preview = preview_command(build_service_restart_command())
+    validate_preview = preview_command(build_service_validate_command())
+    snippet_preview = preview_command(build_service_snippet_command())
+
+    assert "sidecar service-restart --unit-name scholar-outbound-sidecar.service" in restart_preview
+    assert "sidecar service-validate --unit-name scholar-outbound-sidecar.service" in validate_preview
+    assert "sidecar service-snippet --listen-host 127.0.0.1 --listen-port 19080 --tag scholar-sidecar-socks-out" in snippet_preview

@@ -647,6 +647,14 @@ scholar-outbound-manager-tui \
 
 The optional TUI shows the same redacted label and heuristic region columns without exposing proxy credentials. Tab titles remain human-readable while internal Textual widget ids are sanitized.
 
+## TUI workflow control plane
+
+The optional TUI is a workflow control plane for config, artifacts, selection, and sidecar operations. Config edits are transactional: `config.yaml` is changed only after validation and save, with a redacted preview and redacted diff shown before writeback.
+
+Undo is backed by a sensitive journal under `state_data/tui/`. That journal applies to config file writes only; it does not roll back arbitrary external side effects.
+
+Network fetch/probe and systemd actions remain explicit operations. This phase keeps command previews and state inspection inside the TUI without automatically mutating production Xray/XrayR/`x-ui`.
+
 ## Web panel security model
 
 The web panel is optional and is a secure operations console for ScholarOutboundManager. It is not a proxy airport backend, not an XrayR manager, not a remote shell, and not a production Xray/XrayR/`x-ui` editor.

@@ -191,6 +191,45 @@ def build_pool_stage_command(
     ]
 
 
+def build_service_restart_command(*, unit_name: str = "scholar-outbound-sidecar.service") -> list[str]:
+    return [
+        "scholar-outbound-manager",
+        "sidecar",
+        "service-restart",
+        "--unit-name",
+        unit_name,
+    ]
+
+
+def build_service_validate_command(*, unit_name: str = "scholar-outbound-sidecar.service") -> list[str]:
+    return [
+        "scholar-outbound-manager",
+        "sidecar",
+        "service-validate",
+        "--unit-name",
+        unit_name,
+    ]
+
+
+def build_service_snippet_command(
+    *,
+    listen_host: str = "127.0.0.1",
+    listen_port: int = 19080,
+    tag: str = "scholar-sidecar-socks-out",
+) -> list[str]:
+    return [
+        "scholar-outbound-manager",
+        "sidecar",
+        "service-snippet",
+        "--listen-host",
+        listen_host,
+        "--listen-port",
+        str(listen_port),
+        "--tag",
+        tag,
+    ]
+
+
 def build_snippet_warning() -> str:
     return "These snippets are not automatically written to production Xray/XrayR."
 

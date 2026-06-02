@@ -63,8 +63,10 @@ def test_tui_dashboard_state_is_redacted(tmp_path: Path) -> None:
 def test_tui_load_workflow_state_contains_tabs_and_wizard(tmp_path: Path) -> None:
     """Build the workflow-oriented state model without Textual."""
     candidates_path = _write_passed_candidates(tmp_path)
+    config_path = _write_config(tmp_path)
 
     state = tui_app.load_workflow_state(
+        config_path=str(config_path),
         candidates_path=str(candidates_path),
         passed_candidates_path=str(candidates_path),
         probe_summary_path=str(tmp_path / "probe_summary.json"),
@@ -75,6 +77,17 @@ def test_tui_load_workflow_state_contains_tabs_and_wizard(tmp_path: Path) -> Non
     assert state["tabs"][0] == "Dashboard"
     assert state["wizard_steps"][0]["key"] == "preflight"
     assert state["selection"]["sensitive_notice"].startswith("selected_candidate.json is sensitive")
+    assert state["config_editor"]["config_path"] == str(config_path)
+    assert state["config_editor"]["parsed_ok"] is True
+    assert "https://example.invalid/subscription" not in state["config_editor"]["redacted_preview"]
+    assert state["dashboard"]["config_dirty"] is False
+    assert state["dashboard"]["config_valid"] is True
+    assert state["dashboard"]["undo_available"] is False
+    assert state["preflight"]["probe_allow_network_probe"] is False
+    assert state["preflight"]["enabled_subscription_count"] == 1
+    assert state["commands"]["service_restart"].startswith("scholar-outbound-manager sidecar service-restart")
+    assert state["commands"]["service_validate"].startswith("scholar-outbound-manager sidecar service-validate")
+    assert state["commands"]["service_snippet"].startswith("scholar-outbound-manager sidecar service-snippet")
 
 
 def test_tui_session_state_does_not_store_sensitive_fields(tmp_path: Path) -> None:
@@ -141,6 +154,55 @@ def _write_passed_candidates(tmp_path: Path) -> Path:
                     }
                 ],
             }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_config(tmp_path: Path) -> Path:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "\n".join(
+            [
+                "subscriptions:",
+                '  - name: "fixture-source"',
+                '    url: "https://example.invalid/subscription"',
+                '    format: "auto"',
+                "    enabled: true",
+                "    headers: {}",
+                "filters:",
+                "  include_keywords: []",
+                "  exclude_keywords: []",
+                "  deprioritize_keywords: []",
+                "probe:",
+                "  timeout_seconds: 5",
+                "  concurrency: 1",
+                "  cache_ttl_hours: 24",
+                "  failure_backoff_hours: 24",
+                "  allow_network_probe: false",
+                "xray:",
+                '  binary_path: "/usr/local/bin/xray"',
+                f'  runtime_dir: "{tmp_path / ".runtime"}"',
+                '  local_socks_host: "127.0.0.1"',
+                "  local_socks_port: 1081",
+                "output:",
+                '  outbounds_path: "generated/outbounds.json"',
+                '  routes_path: "generated/routes.json"',
+                '  manifest_path: "generated/manifest.json"',
+                '  history_dir: "state_data/history"',
+                "generation:",
+                '  tag_prefix: "google-scholar-node-"',
+                "  max_passed_nodes: 2",
+                '  fallback_blackhole_tag: "blocked-scholar"',
+                "  previous_output_max_age_hours: 24",
+                "routing:",
+                '  mode: "dedicated_inbound"',
+                "  inbound_tags:",
+                '    - "scholar-in"',
+                "  fail_closed: true",
+                "",
+            ]
         ),
         encoding="utf-8",
     )
