@@ -15,10 +15,8 @@ from pathlib import Path
 
 from scholar_outbound_manager.config import ConfigError
 from scholar_outbound_manager.config import load_config
+from scholar_outbound_manager.tui.constants import DEFAULT_TUI_UNDO_JOURNAL_PATH
 from scholar_outbound_manager.tui.view_model import redact_text
-
-
-DEFAULT_TUI_UNDO_JOURNAL_PATH = "state_data/tui/config_undo_journal.jsonl"
 
 
 @dataclass(slots=True)
@@ -135,7 +133,10 @@ def build_redacted_config_preview(text: str) -> str:
     redacted = text
     patterns = [
         (r'(?im)^(\s*url\s*:\s*)(["\']?).*$', r'\1\2<REDACTED_URL>'),
-        (r'(?im)^(\s*(?:password|auth|token|public[_ -]?key|private[_ -]?key|server_name|servername|sni|server|obfs-password)\s*:\s*)(["\']?).*$', r'\1\2<REDACTED>'),
+        (
+            r'(?im)^(\s*(?:password|auth|token|public[_ -]?key|private[_ -]?key|server_name|servername|sni|server|obfs-password|authorization|set[_ -]?cookie|cookie|api[_ -]?key|x[_ -]?api[_ -]?key|x[_ -]?auth[_ -]?token|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|secret|bearer)\s*:\s*)(["\']?).*$',
+            r'\1\2<REDACTED>',
+        ),
         (r"(?i)\bhttps?://[^\s\"']+", "<REDACTED_URL>"),
         (r"(?i)\b(?:vless|vmess|trojan|ss|hysteria2)://[^\s\"']+", "<REDACTED_URI>"),
         (r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", "<UUID>"),
@@ -198,23 +199,18 @@ def undo_last_config_save(
     config_path: str | Path,
     undo_journal_path: str | Path = DEFAULT_TUI_UNDO_JOURNAL_PATH,
 ) -> ConfigUndoResult:
-    """Restore the previous config text from the most recent journal entry."""
+    """Restore the previous config text from the matching journal entry."""
     normalized_path = str(Path(config_path))
     entries = _load_undo_entries(undo_journal_path)
-    target_entry = next(
-        (
-            entry
-            for entry in reversed(entries)
-            if str(entry.get("config_path") or "") == normalized_path
-            and str(entry.get("reason") or "") == "tui_config_save"
-            and isinstance(entry.get("previous_text"), str)
-        ),
-        None,
+    current_text = Path(config_path).read_text(encoding="utf-8")
+    target_entry = _find_matching_undo_save_entry(
+        entries,
+        config_path=normalized_path,
+        current_sha256=_sha256_text(current_text),
     )
     if target_entry is None:
-        raise ValueError("No compatible config undo entry is available.")
+        raise ValueError("No compatible config undo entry is available for the current config state.")
 
-    current_text = Path(config_path).read_text(encoding="utf-8")
     previous_text = str(target_entry["previous_text"])
     _validate_config_text(previous_text)
     _atomic_write_text(config_path, previous_text)
@@ -247,13 +243,38 @@ def has_undo_journal_entry(
     undo_journal_path: str | Path = DEFAULT_TUI_UNDO_JOURNAL_PATH,
 ) -> bool:
     """Return whether one compatible undo entry exists for the config."""
+    config_file = Path(config_path)
+    if not config_file.exists():
+        return False
     normalized_path = str(Path(config_path))
-    return any(
-        str(entry.get("config_path") or "") == normalized_path
-        and str(entry.get("reason") or "") == "tui_config_save"
-        and isinstance(entry.get("previous_text"), str)
-        for entry in _load_undo_entries(undo_journal_path)
+    current_sha256 = _sha256_text(config_file.read_text(encoding="utf-8"))
+    return (
+        _find_matching_undo_save_entry(
+            _load_undo_entries(undo_journal_path),
+            config_path=normalized_path,
+            current_sha256=current_sha256,
+        )
+        is not None
     )
+
+
+def _find_matching_undo_save_entry(
+    entries: list[dict[str, object]],
+    *,
+    config_path: str,
+    current_sha256: str,
+) -> dict[str, object] | None:
+    for entry in reversed(entries):
+        if str(entry.get("reason") or "") != "tui_config_save":
+            continue
+        if str(entry.get("config_path") or "") != config_path:
+            continue
+        if not isinstance(entry.get("previous_text"), str):
+            continue
+        if str(entry.get("next_sha256") or "") != current_sha256:
+            continue
+        return entry
+    return None
 
 
 def _append_undo_entry(path: str | Path, entry: dict[str, object]) -> None:

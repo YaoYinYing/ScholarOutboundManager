@@ -203,6 +203,9 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "do not use `killall xray`" in readme_text.lower()
     assert "do not use `pkill xray`" in readme_text.lower()
     assert "step 5: generate xray fragments from passed candidates" not in readme_text.lower()
+    assert "authorization: bearer " not in readme_text.lower()
+    assert "cookie: session=" not in readme_text.lower()
+    assert "x-api-key: " not in readme_text.lower()
 
 
 def test_security_doc_exists_and_warns_about_sensitive_material() -> None:

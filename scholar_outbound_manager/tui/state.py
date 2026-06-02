@@ -8,10 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
-
-
-DEFAULT_TUI_SESSION_PATH = "state_data/tui_session.json"
-DEFAULT_TUI_UNDO_JOURNAL_PATH = "state_data/tui/config_undo_journal.jsonl"
+from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
+from scholar_outbound_manager.tui.constants import DEFAULT_TUI_UNDO_JOURNAL_PATH
 
 
 @dataclass(slots=True)

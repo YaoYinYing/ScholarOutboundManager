@@ -56,6 +56,30 @@ def test_redacted_config_preview_hides_password_auth_token_and_uuid() -> None:
     assert "00000000-0000-0000-0000-000000000000" not in preview
 
 
+def test_redacted_config_preview_hides_secret_like_header_keys() -> None:
+    """Hide common secret-bearing header and token keys from preview output."""
+    preview = config_editor.build_redacted_config_preview(
+        "\n".join(
+            [
+                "subscriptions:",
+                "  - headers:",
+                '      Authorization: "Bearer super-secret"',
+                '      Cookie: "sessionid=super-secret"',
+                '      X-Api-Key: "api-key-secret"',
+                '      access_token: "access-token-secret"',
+                "probe:",
+                "  concurrency: 2",
+            ]
+        )
+    )
+
+    assert "Bearer super-secret" not in preview
+    assert "sessionid=super-secret" not in preview
+    assert "api-key-secret" not in preview
+    assert "access-token-secret" not in preview
+    assert "concurrency: 2" in preview
+
+
 def test_build_config_diff_redacts_secrets() -> None:
     """Redacted diff must not leak changed secret values."""
     diff = config_editor.build_config_diff(
@@ -67,6 +91,37 @@ def test_build_config_diff_redacts_secrets() -> None:
     assert "new-token" not in diff
     assert "oldsecret" not in diff
     assert "newsecret" not in diff
+
+
+def test_build_config_diff_redacts_changed_header_and_token_values() -> None:
+    """Redacted diff must hide changed Authorization, Cookie, and access-token values."""
+    diff = config_editor.build_config_diff(
+        "\n".join(
+            [
+                "subscriptions:",
+                "  - headers:",
+                '      Authorization: "Bearer old-secret"',
+                '      Cookie: "sessionid=old-secret"',
+                '      access_token: "old-token-value"',
+            ]
+        )
+        + "\n",
+        "\n".join(
+            [
+                "subscriptions:",
+                "  - headers:",
+                '      Authorization: "Bearer new-secret"',
+                '      Cookie: "sessionid=new-secret"',
+                '      access_token: "new-token-value"',
+            ]
+        )
+        + "\n",
+    )
+
+    assert "old-secret" not in diff
+    assert "new-secret" not in diff
+    assert "old-token-value" not in diff
+    assert "new-token-value" not in diff
 
 
 def test_save_config_draft_validates_before_writing(tmp_path: Path) -> None:
@@ -123,24 +178,33 @@ def test_undo_last_config_save_restores_previous_config(tmp_path: Path) -> None:
     assert result.path == str(config_path)
 
 
-def test_second_undo_does_not_toggle_back_to_newer_text(tmp_path: Path) -> None:
-    """Repeated undo should not bounce between save and undo entries."""
+def test_undo_last_config_save_supports_multi_step_stack(tmp_path: Path) -> None:
+    """Repeated undo should walk back through matching saved states."""
     config_path = _write_valid_config(tmp_path)
     undo_path = tmp_path / "state_data" / "tui" / "config_undo_journal.jsonl"
     original_text = config_path.read_text(encoding="utf-8")
-    modified_text = original_text.replace("allow_network_probe: false", "allow_network_probe: true")
+    first_text = original_text.replace("allow_network_probe: false", "allow_network_probe: true")
+    second_text = first_text.replace("concurrency: 1", "concurrency: 2")
     config_editor.save_config_draft(
-        config_editor.update_config_draft_text(config_editor.load_config_draft(config_path), modified_text),
+        config_editor.update_config_draft_text(config_editor.load_config_draft(config_path), first_text),
+        undo_journal_path=undo_path,
+    )
+    config_editor.save_config_draft(
+        config_editor.update_config_draft_text(config_editor.load_config_draft(config_path), second_text),
         undo_journal_path=undo_path,
     )
 
-    first = config_editor.undo_last_config_save(config_path=config_path, undo_journal_path=undo_path)
-    second = config_editor.undo_last_config_save(config_path=config_path, undo_journal_path=undo_path)
+    assert config_editor.has_undo_journal_entry(config_path=config_path, undo_journal_path=undo_path) is True
 
+    first = config_editor.undo_last_config_save(config_path=config_path, undo_journal_path=undo_path)
     assert first.restored is True
+    assert config_path.read_text(encoding="utf-8") == first_text
+    assert config_editor.has_undo_journal_entry(config_path=config_path, undo_journal_path=undo_path) is True
+
+    second = config_editor.undo_last_config_save(config_path=config_path, undo_journal_path=undo_path)
     assert second.restored is True
     assert config_path.read_text(encoding="utf-8") == original_text
-    assert "allow_network_probe: true" not in config_path.read_text(encoding="utf-8")
+    assert config_editor.has_undo_journal_entry(config_path=config_path, undo_journal_path=undo_path) is False
 
 
 def test_has_undo_journal_entry_tracks_availability(tmp_path: Path) -> None:
@@ -156,6 +220,59 @@ def test_has_undo_journal_entry_tracks_availability(tmp_path: Path) -> None:
     )
 
     assert config_editor.has_undo_journal_entry(config_path=config_path, undo_journal_path=undo_path) is True
+
+
+def test_has_undo_journal_entry_ignores_stale_save_entries(tmp_path: Path) -> None:
+    """Undo availability should ignore save rows that do not match the current config hash."""
+    config_path = _write_valid_config(tmp_path)
+    undo_path = tmp_path / "state_data" / "tui" / "config_undo_journal.jsonl"
+    undo_path.parent.mkdir(parents=True, exist_ok=True)
+    undo_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "created_at": "2026-06-02T00:00:00Z",
+                "config_path": str(config_path),
+                "previous_sha256": "a",
+                "next_sha256": "not-the-current-sha",
+                "previous_text": "subscriptions: []\n",
+                "next_redacted_summary": "subscriptions: []",
+                "reason": "tui_config_save",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert config_editor.has_undo_journal_entry(config_path=config_path, undo_journal_path=undo_path) is False
+    with pytest.raises(ValueError, match="current config state"):
+        config_editor.undo_last_config_save(config_path=config_path, undo_journal_path=undo_path)
+
+
+def test_legacy_save_entry_without_next_sha256_is_ignored(tmp_path: Path) -> None:
+    """Legacy journal rows without next_sha256 should not crash or count as undoable."""
+    config_path = _write_valid_config(tmp_path)
+    undo_path = tmp_path / "state_data" / "tui" / "config_undo_journal.jsonl"
+    undo_path.parent.mkdir(parents=True, exist_ok=True)
+    undo_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "created_at": "2026-06-02T00:00:00Z",
+                "config_path": str(config_path),
+                "previous_sha256": "a",
+                "previous_text": "subscriptions: []\n",
+                "next_redacted_summary": "subscriptions: []",
+                "reason": "tui_config_save",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert config_editor.has_undo_journal_entry(config_path=config_path, undo_journal_path=undo_path) is False
+    with pytest.raises(ValueError, match="current config state"):
+        config_editor.undo_last_config_save(config_path=config_path, undo_journal_path=undo_path)
 
 
 def test_has_undo_journal_entry_ignores_pure_undo_audit_entries(tmp_path: Path) -> None:
