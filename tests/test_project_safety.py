@@ -206,6 +206,9 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "authorization: bearer " not in readme_text.lower()
     assert "cookie: session=" not in readme_text.lower()
     assert "x-api-key: " not in readme_text.lower()
+    assert "subscription-token" not in readme_text.lower()
+    assert "password_placeholder" not in readme_text.lower()
+    assert "auth_secret" not in readme_text.lower()
 
 
 def test_security_doc_exists_and_warns_about_sensitive_material() -> None:

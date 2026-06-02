@@ -99,7 +99,7 @@ def validate_config_draft(draft: ConfigDraft) -> ConfigDraft:
         parsed_ok = True
     except (ConfigError, ValueError) as exc:
         parsed_ok = False
-        errors.append(str(exc))
+        errors.append(redact_validation_error(str(exc)))
     return ConfigDraft(
         path=draft.path,
         original_text=draft.original_text,
@@ -144,6 +144,11 @@ def build_redacted_config_preview(text: str) -> str:
     for pattern, replacement in patterns:
         redacted = re.sub(pattern, replacement, redacted)
     return redact_text(redacted)
+
+
+def redact_validation_error(message: str) -> str:
+    """Return a review-safe config validation error."""
+    return build_redacted_config_preview(message)
 
 
 def save_config_draft(

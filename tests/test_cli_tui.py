@@ -88,6 +88,47 @@ def test_tui_load_workflow_state_contains_tabs_and_wizard(tmp_path: Path) -> Non
     assert state["commands"]["service_restart"].startswith("scholar-outbound-manager sidecar service-restart")
     assert state["commands"]["service_validate"].startswith("scholar-outbound-manager sidecar service-validate")
     assert state["commands"]["service_snippet"].startswith("scholar-outbound-manager sidecar service-snippet")
+    assert state["selection"]["selection_method"] is not None
+    assert state["selection"]["selection_reason"]
+
+
+def test_tui_workflow_state_redacts_config_validation_errors(tmp_path: Path, monkeypatch) -> None:
+    """Workflow state should not expose secret-bearing config validation messages."""
+    candidates_path = _write_passed_candidates(tmp_path)
+    config_path = _write_config(tmp_path)
+    config_path.write_text("subscriptions: [\n", encoding="utf-8")
+    secret_message = (
+        'invalid url https://example.invalid/subscription-token password="PASSWORD_PLACEHOLDER" '
+        'auth="AUTH_SECRET" token="TOKEN_VALUE" server_name="example.invalid"'
+    )
+
+    def fake_validate(text: str) -> None:
+        raise ValueError(secret_message)
+
+    monkeypatch.setattr("scholar_outbound_manager.tui.config_editor._validate_config_text", fake_validate)
+
+    state = tui_app.load_workflow_state(
+        config_path=str(config_path),
+        candidates_path=str(candidates_path),
+        passed_candidates_path=str(candidates_path),
+        probe_summary_path=str(tmp_path / "probe_summary.json"),
+        selected_candidate_path=str(tmp_path / "selected_candidate.json"),
+        session_path=str(tmp_path / "tui_session.json"),
+    )
+
+    preflight_rendered = json.dumps(state["preflight"], ensure_ascii=False, sort_keys=True)
+    editor_rendered = json.dumps(state["config_editor"], ensure_ascii=False, sort_keys=True)
+    preflight_line = f"validation errors: {state['preflight']['config_validation_errors']}"
+    for rendered in (preflight_rendered, editor_rendered, preflight_line):
+        assert "https://example.invalid/subscription-token" not in rendered
+        assert "PASSWORD_PLACEHOLDER" not in rendered
+        assert "AUTH_SECRET" not in rendered
+        assert "TOKEN_VALUE" not in rendered
+        assert "server_name=\"example.invalid\"" not in rendered
+    assert state["preflight"]["config_valid"] is False
+    assert state["config_editor"]["parsed_ok"] is False
+    assert state["preflight"]["config_validation_errors"]
+    assert state["config_editor"]["validation_errors"]
 
 
 def test_tui_session_state_does_not_store_sensitive_fields(tmp_path: Path) -> None:

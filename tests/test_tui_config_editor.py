@@ -80,6 +80,25 @@ def test_redacted_config_preview_hides_secret_like_header_keys() -> None:
     assert "concurrency: 2" in preview
 
 
+def test_redact_validation_error_hides_url() -> None:
+    """Validation errors must not leak subscription URLs."""
+    rendered = config_editor.redact_validation_error("invalid source url: https://example.invalid/subscription-token")
+
+    assert "https://example.invalid/subscription-token" not in rendered
+    assert "<REDACTED_URL>" in rendered
+
+
+def test_redact_validation_error_hides_password_auth_and_token() -> None:
+    """Validation errors must not leak secret-like key material."""
+    rendered = config_editor.redact_validation_error(
+        'password: "PASSWORD_PLACEHOLDER" auth: "AUTH_SECRET" token: "TOKEN_VALUE"'
+    )
+
+    assert "PASSWORD_PLACEHOLDER" not in rendered
+    assert "AUTH_SECRET" not in rendered
+    assert "TOKEN_VALUE" not in rendered
+
+
 def test_build_config_diff_redacts_secrets() -> None:
     """Redacted diff must not leak changed secret values."""
     diff = config_editor.build_config_diff(
@@ -122,6 +141,45 @@ def test_build_config_diff_redacts_changed_header_and_token_values() -> None:
     assert "new-secret" not in diff
     assert "old-token-value" not in diff
     assert "new-token-value" not in diff
+
+
+def test_validate_config_draft_stores_redacted_validation_errors(tmp_path: Path) -> None:
+    """Draft validation errors should remain useful without exposing secrets."""
+    config_path = _write_valid_config(tmp_path)
+    secret_message = (
+        'invalid url https://example.invalid/subscription-token password="PASSWORD_PLACEHOLDER" '
+        'auth="AUTH_SECRET" token="TOKEN_VALUE"'
+    )
+    draft = config_editor.ConfigDraft(
+        path=str(config_path),
+        original_text=config_path.read_text(encoding="utf-8"),
+        current_text="subscriptions: [\n",
+        parsed_ok=False,
+        validation_errors=[],
+        redacted_preview="",
+        diff_preview="",
+        dirty=True,
+    )
+
+    original_validate = config_editor._validate_config_text
+
+    def fake_validate(text: str) -> None:
+        raise ValueError(secret_message)
+
+    config_editor._validate_config_text = fake_validate
+    try:
+        validated = config_editor.validate_config_draft(draft)
+    finally:
+        config_editor._validate_config_text = original_validate
+
+    assert validated.parsed_ok is False
+    assert validated.validation_errors
+    rendered = "\n".join(validated.validation_errors)
+    assert "https://example.invalid/subscription-token" not in rendered
+    assert "PASSWORD_PLACEHOLDER" not in rendered
+    assert "AUTH_SECRET" not in rendered
+    assert "TOKEN_VALUE" not in rendered
+    assert "<REDACTED_URL>" in rendered or "<REDACTED>" in rendered
 
 
 def test_save_config_draft_validates_before_writing(tmp_path: Path) -> None:

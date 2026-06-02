@@ -154,6 +154,8 @@ def load_workflow_state(
     candidate_rows: list[dict[str, object]] = []
     selected_candidate_id: str | None = None
     selected_candidate_label: str | None = None
+    selection_method: str | None = None
+    selection_reason: str | None = None
     config_exists = Path(config_path).exists()
     config_draft = None
     if config_exists:
@@ -183,6 +185,8 @@ def load_workflow_state(
             )
             candidate_rows = list(dashboard_state["rows"])
             selected_candidate_id = dashboard_state["selected_candidate_id"]
+            selection_method = str(dashboard_state["selection_method"])
+            selection_reason = str(dashboard_state["selection_reason"])
             if candidate_rows:
                 selected_row = candidate_rows[int(dashboard_state["selected_index"])]
                 selected_candidate_label = str(selected_row.get("label") or "")
@@ -310,8 +314,8 @@ def load_workflow_state(
             "rows": candidate_rows,
             "selected_candidate_id": selected_candidate_id,
             "preferred_region_hint": preferred_region_hint,
-            "selection_method": None if not candidate_rows else dashboard_state["selection_method"] if 'dashboard_state' in locals() else None,
-            "selection_reason": None if not candidate_rows else dashboard_state["selection_reason"] if 'dashboard_state' in locals() else None,
+            "selection_method": selection_method if candidate_rows else None,
+            "selection_reason": selection_reason if candidate_rows else None,
             "sensitive_notice": "selected_candidate.json is sensitive and will not be displayed.",
         },
         "commands": {
