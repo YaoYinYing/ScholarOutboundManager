@@ -77,6 +77,29 @@ def test_choose_selected_candidate_no_longer_depends_on_string_snapshot_message(
     assert "selected_candidate.json" in result.output_path
 
 
+def test_choose_selected_candidate_uses_row_source_index_not_visible_position(tmp_path: Path) -> None:
+    controller = _build_controller(tmp_path)
+    controller.state.selection_state.rows = [
+        {
+            **controller.state.selection_state.rows[0],
+            "index": 1,
+            "candidate_id": "candidate-002",
+        },
+        {
+            **controller.state.selection_state.rows[1],
+            "index": 0,
+            "candidate_id": "candidate-001",
+        },
+    ]
+    controller.selection.selected_candidate_index = 1
+
+    result = controller.choose_selected_candidate()
+
+    payload = json.loads((tmp_path / "state_data" / "selected_candidate.json").read_text(encoding="utf-8"))
+    assert result.candidate_id == "candidate-001"
+    assert payload["selected_candidate_id"] == "candidate-001"
+
+
 def test_config_field_selection_moves_within_bounds(tmp_path: Path) -> None:
     controller = _build_controller(tmp_path)
 

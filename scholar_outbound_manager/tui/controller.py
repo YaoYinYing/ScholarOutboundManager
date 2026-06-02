@@ -124,17 +124,22 @@ class WorkbenchController:
         return self.selection
 
     def choose_selected_candidate(self) -> CandidateChooseResult:
-        index = self.selection.selected_candidate_index
-        if index is None:
+        row = self._selected_candidate_row()
+        if row is None:
             raise ValueError("No candidate is selected.")
+        row_position = self.selection.selected_candidate_index
+        source_index = row.get("index")
+        if not isinstance(source_index, int):
+            raise ValueError("Selected candidate row is missing its source index.")
         snapshot = self.create_snapshot("pre_choose_selected_candidate")
         payload_path = self._candidate_payload_path()
         payload = load_candidate_payload(payload_path)
-        record = select_candidate_by_index(payload, index)
+        record = select_candidate_by_index(payload, source_index)
         artifact = build_selected_candidate_artifact(record, selection_method="index")
         output_path = self._paths()["selected_candidate"]
         write_selected_candidate_artifact(output_path, artifact)
         self.reload()
+        self.selection.selected_candidate_index = row_position
         result = CandidateChooseResult(
             candidate_id=record.candidate_id,
             output_path=output_path,
@@ -445,6 +450,16 @@ class WorkbenchController:
             if field.key == key:
                 return field
         return fields[0]
+
+    def _selected_candidate_row(self) -> dict[str, object] | None:
+        index = self.selection.selected_candidate_index
+        rows = self.state.selection_state.rows
+        if index is None or index < 0 or index >= len(rows):
+            return None
+        row = rows[index]
+        if not isinstance(row, dict):
+            return None
+        return row
 
     def _selected_config_value(self, field_key: str) -> object:
         for field in self.state.config_form_state.fields:
