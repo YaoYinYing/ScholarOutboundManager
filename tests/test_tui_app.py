@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+from scholar_outbound_manager.tui.control_plane import ArtifactState
+from scholar_outbound_manager.tui.control_plane import CommandState
+from scholar_outbound_manager.tui.control_plane import ConfigState
+from scholar_outbound_manager.tui.control_plane import ControlPlaneState
+from scholar_outbound_manager.tui.control_plane import OperationAvailability
+from scholar_outbound_manager.tui.control_plane import PoolState
+from scholar_outbound_manager.tui.control_plane import SelectionState
+from scholar_outbound_manager.tui.control_plane import SidecarState
+from scholar_outbound_manager.tui.control_plane import WorkflowModelState
+from scholar_outbound_manager.tui.commands import OperationSpec
+from scholar_outbound_manager.tui.config_form import ConfigFormState
 from scholar_outbound_manager.tui import app as tui_app
 from scholar_outbound_manager.tui.workflow import MAIN_TABS
 
@@ -69,6 +80,10 @@ def test_tui_key_bindings_cover_expected_controls() -> None:
 
     assert bindings["q"] == "quit"
     assert bindings["r"] == "reload_state"
+    assert bindings["j"] == "cursor_down"
+    assert bindings["k"] == "cursor_up"
+    assert bindings["enter"] == "confirm_selected"
+    assert bindings["escape"] == "cancel_pending"
     assert bindings["e"] == "edit_config_field"
     assert bindings["d"] == "show_config_diff"
     assert bindings["s"] == "save_draft"
@@ -149,32 +164,12 @@ def test_workflow_controller_confirms_fake_action_and_reloads_state(tmp_path, mo
     """Confirmed actions should execute, journal, and reload workflow state."""
     load_calls: list[int] = []
 
-    def fake_load_workflow_state(**kwargs):
+    def fake_load_control_plane_state(**kwargs):
         del kwargs
         load_calls.append(1)
-        return {
-            "control_plane": {
-                "command_state": {
-                    "operations": [
-                        {
-                            "key": "artifact_check",
-                            "title": "Check Artifact Lineage",
-                            "command": ["artifact-check"],
-                            "requires_confirmation": False,
-                            "network_access": False,
-                            "systemd_access": False,
-                            "sensitive_outputs": False,
-                            "expected_artifacts": [],
-                            "success_exit_codes": [0],
-                            "description": "",
-                            "risk_note": None,
-                        }
-                    ]
-                }
-            }
-        }
+        return _fake_control_plane_state()
 
-    monkeypatch.setattr(tui_app, "load_workflow_state", fake_load_workflow_state)
+    monkeypatch.setattr("scholar_outbound_manager.tui.controller.load_control_plane_state", fake_load_control_plane_state)
     result = tui_app.ActionResult(
         key="artifact_check",
         title="Check Artifact Lineage",
@@ -231,25 +226,16 @@ def test_workflow_controller_can_update_state_via_config_field_patch(tmp_path, m
     """Controller field updates should route through the structured config form path and refresh state."""
     load_calls: list[int] = []
 
-    def fake_load_workflow_state(**kwargs):
+    def fake_load_control_plane_state(**kwargs):
         del kwargs
         load_calls.append(1)
-        return {
-            "paths": {
-                "config": str(tmp_path / "config.yaml"),
-                "candidates": "candidates.json",
-                "probe_summary": "state_data/probe_summary.json",
-                "passed_candidates": "state_data/passed_candidates.json",
-                "selected_candidate": "state_data/selected_candidate.json",
-                "pool_plan": "state_data/sidecar_pool_plan.json",
-            },
-            "config_form": {"fields": [{"key": "probe.concurrency", "current_value": 1}], "redacted_diff": ""},
-            "config_editor": {"redacted_diff": ""},
-            "control_plane": {"command_state": {"operations": []}},
-        }
+        return _fake_control_plane_state(config_path=str(tmp_path / "config.yaml"))
 
-    monkeypatch.setattr(tui_app, "load_workflow_state", fake_load_workflow_state)
-    monkeypatch.setattr(tui_app, "apply_config_form_patch", lambda *args, **kwargs: None)
+    monkeypatch.setattr("scholar_outbound_manager.tui.controller.load_control_plane_state", fake_load_control_plane_state)
+    monkeypatch.setattr(
+        "scholar_outbound_manager.tui.controller.apply_config_form_patch",
+        lambda *args, **kwargs: type("FakeSaveResult", (), {"message": "updated probe.concurrency", "saved": True})(),
+    )
     controller = tui_app.WorkflowController(loader_kwargs={})
 
     message = controller.update_config_field("probe.concurrency", 4)
@@ -387,3 +373,62 @@ def test_render_dashboard_and_config_tabs_show_reason_and_field_safety() -> None
     assert "sensitive fields excluded:" in config_rendered
     assert "probe.concurrency | type=int | editable=True | restart_required=False" in config_rendered
     assert "xray.local_socks_port | type=int | editable=True | restart_required=True" in config_rendered
+
+
+def _fake_control_plane_state(*, config_path: str = "config.yaml") -> ControlPlaneState:
+    return ControlPlaneState(
+        workspace="/tmp/workspace",
+        tabs=["Dashboard", "Config", "Selection"],
+        config_state=ConfigState(True, True, False, False, "preview", "", [], 1, False, "dedicated_inbound", True),
+        config_form_state=ConfigFormState(
+            fields=[],
+            dirty=False,
+            valid=True,
+            validation_errors=[],
+            redacted_diff="",
+        ),
+        artifact_state=ArtifactState(True, False, False, False, None, None, [], None, None, None, 0, None, None),
+        selection_state=SelectionState([], None, None, None, None, None, None),
+        workflow_state=WorkflowModelState([], None, "next action"),
+        command_state=CommandState(
+            "fetch",
+            "probe",
+            "artifact",
+            "select",
+            "stage",
+            "restart",
+            "validate",
+            "snippet",
+            "pool",
+            [
+                OperationSpec(
+                    "artifact_check",
+                    "Check Artifact Lineage",
+                    ["artifact-check"],
+                    False,
+                    False,
+                    False,
+                    False,
+                    [],
+                )
+            ],
+        ),
+        operation_availability=OperationAvailability(True, False, False, False, False, False, False, True, False, False, True, False),
+        sidecar_state=SidecarState("unknown", "unknown", "unknown", "unknown", "warn", True, "/usr/local/bin/xray"),
+        pool_state=PoolState(False, [], "warn"),
+        warnings=["live warning"],
+        last_action=None,
+        session={
+            "schema_version": 1,
+            "updated_at": "2026-06-02T00:00:00Z",
+            "workspace": "/tmp/workspace",
+            "last_step": None,
+            "paths": {"config": config_path},
+            "last_results": {},
+        },
+        snippets={"warning": "snippet warning", "rendered": "[]"},
+        repo_status="clean",
+        current_git_commit="abc1234",
+        venv_detected=True,
+        current_sidecar_port=19080,
+    )

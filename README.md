@@ -679,6 +679,12 @@ The TUI edits only a safe allowlist of config fields such as probe concurrency, 
 
 Structured config changes are validated before atomic save and still flow through the transactional config draft layer. Saves create the sensitive undo journal under `state_data/tui/`, and undo restores `config.yaml` content only. The structured form explicitly excludes sensitive fields such as subscription URLs, raw proxy URIs, UUIDs, passwords, auth values, tokens, public keys, and server names.
 
+## Interactive workflow workbench
+
+The TUI now acts as an interactive workflow workbench rather than only a static state report. The Selection tab supports redacted candidate navigation and choosing, the Config tab supports allowlisted field editing only, and recent operation history is shown from a redacted action journal.
+
+Network and systemd actions still require confirmation before side effects. Artifact rollback restores local artifacts only, and operation history remains redacted. Production Xray, XrayR, and `x-ui` stay manual and out of scope.
+
 ## Artifact snapshots and rollback
 
 The TUI snapshots local artifacts before overwrite-prone workflow steps such as `fetch`, `probe`, `select`, and pool staging. Snapshots are sensitive and are stored under the ignored `state_data/tui/artifact_snapshots/` directory.

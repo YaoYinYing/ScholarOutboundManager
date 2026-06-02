@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from scholar_outbound_manager.selection import CandidateCatalogEntry
 from scholar_outbound_manager.tui.view_model import build_dashboard_model
+from scholar_outbound_manager.tui.view_model import build_candidate_detail
 from scholar_outbound_manager.tui.view_model import build_pool_plan_rows
 from scholar_outbound_manager.tui.view_model import build_snippet_view
 from scholar_outbound_manager.tui.view_model import build_candidate_table_rows
+from scholar_outbound_manager.tui.view_model import truncate_display_value
 
 
 def test_build_candidate_table_rows_hides_secrets() -> None:
@@ -42,6 +44,63 @@ def test_build_candidate_table_rows_hides_secrets() -> None:
     assert "address" not in rendered
     assert "raw_uri" not in rendered
     assert "public_key" not in rendered
+
+
+def test_candidate_detail_hides_secrets_and_shows_status() -> None:
+    """Selected candidate detail should remain review-safe while showing workflow status."""
+    detail = build_candidate_detail(
+        {
+            "candidate_id": "candidate-001",
+            "label": "vless://secret@example.invalid",
+            "region": "US",
+            "protocol": "vless",
+            "passed": True,
+            "stage": "full_access",
+            "home_status": 200,
+            "query_status": 200,
+            "markers": ["ok"],
+        },
+        selected_candidate_id="candidate-001",
+        artifact_lineage_warning="warn",
+    )
+
+    rendered = str(detail)
+    assert "vless://" not in rendered
+    assert detail["protocol"] == "vless"
+    assert detail["passed"] is True
+    assert detail["selected"] is True
+    assert detail["artifact_lineage_warning"] == "warn"
+
+
+def test_candidate_table_truncates_long_labels_safely() -> None:
+    """Overlong labels should be truncated for dense workbench rendering."""
+    rows = build_candidate_table_rows(
+        [
+            CandidateCatalogEntry(
+                index=0,
+                candidate_id="candidate-001",
+                protocol="vless",
+                label="United States Candidate " + ("x" * 80),
+                source_label="fixture",
+                region_hint="US",
+                source_name="fixture",
+                supported=True,
+                scholar_stage="full_access",
+                passed=True,
+                home_status=200,
+                query_status=200,
+                checked_at="2026-05-27T00:00:00Z",
+                failure_marker_count=0,
+                failure_markers=[],
+                latency_ms=10,
+                tags=["scholar"],
+            )
+        ]
+    )
+
+    assert rows[0]["label"].endswith("...")
+    assert len(rows[0]["label"]) <= 48
+    assert truncate_display_value("abc", limit=8) == "abc"
 
 
 def test_dashboard_model_hides_secrets() -> None:

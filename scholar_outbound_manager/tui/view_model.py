@@ -12,7 +12,7 @@ def build_candidate_table_rows(entries: list[CandidateCatalogEntry]) -> list[dic
     return [
         {
             "index": entry.index,
-            "label": entry.label or entry.source_label or "<unnamed>",
+            "label": truncate_display_value(entry.label or entry.source_label or "<unnamed>", limit=48),
             "region": entry.region_hint,
             "candidate_id": entry.candidate_id,
             "protocol": entry.protocol,
@@ -26,6 +26,37 @@ def build_candidate_table_rows(entries: list[CandidateCatalogEntry]) -> list[dic
         }
         for entry in entries
     ]
+
+
+def build_candidate_detail(
+    row: dict[str, object],
+    *,
+    selected_candidate_id: str | None,
+    artifact_lineage_warning: str | None,
+) -> dict[str, object]:
+    """Build one selected candidate detail view without secret-bearing fields."""
+    return {
+        "candidate_id": row.get("candidate_id"),
+        "label": redact_text(str(row.get("label") or "")),
+        "region_hint": row.get("region"),
+        "protocol": row.get("protocol"),
+        "passed": row.get("passed"),
+        "stage": row.get("stage"),
+        "home_status": row.get("home_status"),
+        "query_status": row.get("query_status"),
+        "failure_markers": list(row.get("markers") or []),
+        "selected": row.get("candidate_id") == selected_candidate_id,
+        "artifact_lineage_warning": artifact_lineage_warning,
+    }
+
+
+def truncate_display_value(value: str, *, limit: int = 48) -> str:
+    """Truncate one human-readable display value for dense TUI rendering."""
+    if len(value) <= limit:
+        return value
+    if limit <= 3:
+        return value[:limit]
+    return value[: limit - 3] + "..."
 
 
 def build_dashboard_model(payload: dict[str, object]) -> dict[str, object]:

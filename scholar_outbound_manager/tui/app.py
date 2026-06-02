@@ -12,24 +12,15 @@ from scholar_outbound_manager.selection import build_selected_candidate_artifact
 from scholar_outbound_manager.selection import load_candidate_payload
 from scholar_outbound_manager.selection import select_candidate_by_index
 from scholar_outbound_manager.selection import write_selected_candidate_artifact
-from scholar_outbound_manager.tui.artifact_rollback import create_artifact_snapshot
-from scholar_outbound_manager.tui.artifact_rollback import list_artifact_snapshots
-from scholar_outbound_manager.tui.artifact_rollback import rollback_artifact_snapshot
 from scholar_outbound_manager.tui.action_runner import ActionResult
-from scholar_outbound_manager.tui.action_runner import ActionRunOptions
-from scholar_outbound_manager.tui.action_runner import ActionRunner
 from scholar_outbound_manager.tui.action_runner import FakeActionRunner
-from scholar_outbound_manager.tui.action_runner import SubprocessActionRunner
-from scholar_outbound_manager.tui.action_runner import append_action_journal
-from scholar_outbound_manager.tui.config_editor import undo_last_config_save
-from scholar_outbound_manager.tui.config_form import apply_config_form_patch
-from scholar_outbound_manager.tui.config_form import build_config_patch_from_field_update
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ACTION_JOURNAL_PATH
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT
 from scholar_outbound_manager.tui.control_plane import ControlPlaneState
 from scholar_outbound_manager.tui.control_plane import control_plane_state_to_dict
 from scholar_outbound_manager.tui.control_plane import load_control_plane_state
+from scholar_outbound_manager.tui.controller import WorkbenchController as BaseWorkbenchController
 from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
 from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import write_session_state
@@ -39,6 +30,10 @@ from scholar_outbound_manager.tui.workflow import MAIN_TABS
 TUI_KEY_BINDINGS: tuple[tuple[str, str, str], ...] = (
     ("q", "quit", "Quit"),
     ("r", "reload_state", "Reload State"),
+    ("j", "cursor_down", "Move Down"),
+    ("k", "cursor_up", "Move Up"),
+    ("enter", "confirm_selected", "Confirm"),
+    ("escape", "cancel_pending", "Cancel Pending"),
     ("e", "edit_config_field", "Edit Config Field"),
     ("d", "show_config_diff", "Show Config Diff"),
     ("s", "save_draft", "Save Draft"),
@@ -54,148 +49,45 @@ TUI_KEY_BINDINGS: tuple[tuple[str, str, str], ...] = (
     ("?", "show_help", "Help"),
 )
 
+class WorkflowController(BaseWorkbenchController):
+    """Compatibility wrapper that exposes workbench state for the TUI app/tests."""
 
-@dataclass(slots=True)
-class WorkflowActionState:
-    pending_confirmation: str | None
-    last_result: ActionResult | None
-    status_message: str | None
-
-
-class WorkflowController:
-    """Pure-Python workflow controller with confirmation and runner integration."""
-
-    def __init__(
-        self,
-        *,
-        loader_kwargs: dict[str, object],
-        runner: ActionRunner | None = None,
-        action_journal_path: str = DEFAULT_TUI_ACTION_JOURNAL_PATH,
-        snapshot_root: str = DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT,
-    ) -> None:
-        self._loader_kwargs = dict(loader_kwargs)
-        self._runner = SubprocessActionRunner() if runner is None else runner
-        self._action_journal_path = action_journal_path
-        self._snapshot_root = snapshot_root
-        self.workflow_state = load_workflow_state(**self._loader_kwargs)
-        self.action_state = WorkflowActionState(pending_confirmation=None, last_result=None, status_message=None)
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.workflow_state = _build_workflow_state(self)
 
     def reload(self) -> None:
-        self.workflow_state = load_workflow_state(**self._loader_kwargs)
-        self.action_state.pending_confirmation = None
-        self.action_state.status_message = "Workflow state reloaded."
+        super().reload()
+        self.workflow_state = _build_workflow_state(self)
 
-    def handle_operation(self, operation_key: str) -> str:
-        spec = self._find_operation(operation_key)
-        if spec is None:
-            self.action_state.status_message = f"Unknown operation: {operation_key}"
-            return str(self.action_state.status_message)
-        if spec.requires_confirmation and self.action_state.pending_confirmation != operation_key:
-            self.action_state.pending_confirmation = operation_key
-            self.action_state.status_message = f"Pending confirmation: press the same key again to run {spec.title}."
-            return str(self.action_state.status_message)
-        self.action_state.pending_confirmation = None
-        result = self._runner.run(spec, self._build_run_options(spec))
-        append_action_journal(result, journal_path=self._action_journal_path)
-        self.action_state.last_result = result
-        self.workflow_state = load_workflow_state(**self._loader_kwargs)
-        self.action_state.status_message = self._summarize_result(result)
-        return str(self.action_state.status_message)
+    def handle_operation(self, action_key: str) -> str:
+        message = super().handle_operation(action_key)
+        self.workflow_state = _build_workflow_state(self)
+        return message
 
     def update_config_field(self, field_key: str, value: object) -> str:
-        patch = build_config_patch_from_field_update(field_key, value)
-        config_path = str(self.workflow_state["paths"]["config"])
-        apply_config_form_patch(config_path, patch)
-        self.workflow_state = load_workflow_state(**self._loader_kwargs)
-        self.action_state.status_message = f"Updated config field {field_key} through the structured form."
-        return str(self.action_state.status_message)
+        result = super().update_config_field(field_key, value)
+        self.workflow_state = _build_workflow_state(self)
+        return result.message
 
     def undo_config_save(self) -> str:
-        config_path = str(self.workflow_state["paths"]["config"])
-        result = undo_last_config_save(config_path=config_path)
-        self.workflow_state = load_workflow_state(**self._loader_kwargs)
-        self.action_state.status_message = result.message
+        result = super().undo_config()
+        self.workflow_state = _build_workflow_state(self)
         return result.message
 
     def create_snapshot(self, reason: str = "manual_tui_snapshot") -> str:
-        snapshot = create_artifact_snapshot(
-            reason=reason,
-            snapshot_root=self._snapshot_root,
-            candidates_path=str(self.workflow_state["paths"]["candidates"]),
-            probe_summary_path=str(self.workflow_state["paths"]["probe_summary"]),
-            passed_candidates_path=str(self.workflow_state["paths"]["passed_candidates"]),
-            selected_candidate_path=str(self.workflow_state["paths"]["selected_candidate"]),
-            pool_plan_path=str(self.workflow_state["paths"]["pool_plan"]),
-        )
-        self.workflow_state = load_workflow_state(**self._loader_kwargs)
-        self.action_state.status_message = f"Created artifact snapshot {snapshot.snapshot_id}."
-        return str(self.action_state.status_message)
+        snapshot = super().create_snapshot(reason)
+        self.workflow_state = _build_workflow_state(self)
+        return f"Created artifact snapshot {snapshot.snapshot_id}."
 
     def rollback_latest_snapshot(self) -> str:
-        snapshots = list_artifact_snapshots(self._snapshot_root)
-        if not snapshots:
-            self.action_state.status_message = "No artifact snapshot is available for rollback."
-            return str(self.action_state.status_message)
-        pending_key = "artifact_rollback"
-        if self.action_state.pending_confirmation != pending_key:
-            self.action_state.pending_confirmation = pending_key
-            self.action_state.status_message = "Pending confirmation: press rollback again to restore the latest local artifact snapshot."
-            return str(self.action_state.status_message)
-        self.action_state.pending_confirmation = None
-        result = rollback_artifact_snapshot(snapshots[0].snapshot_id, snapshot_root=self._snapshot_root)
-        self.workflow_state = load_workflow_state(**self._loader_kwargs)
-        self.action_state.status_message = result.message
-        return result.message
-
-    def _find_operation(self, operation_key: str):
-        operations = self.workflow_state["control_plane"]["command_state"]["operations"]
-        for operation in operations:
-            if operation["key"] == operation_key:
-                return self._dict_to_operation(operation)
-        return None
-
-    def _build_run_options(self, spec) -> ActionRunOptions:
-        paths = self.workflow_state.get("paths", {})
-        return ActionRunOptions(
-            cwd=None,
-            timeout_seconds=30.0,
-            allow_network=spec.network_access,
-            allow_systemd=spec.systemd_access,
-            allow_sensitive_artifact_write=spec.sensitive_outputs,
-            snapshot_root=self._snapshot_root,
-            artifact_paths={
-                "candidates": str(paths.get("candidates", "candidates.json")),
-                "probe_summary": str(paths.get("probe_summary", "state_data/probe_summary.json")),
-                "passed_candidates": str(paths.get("passed_candidates", "state_data/passed_candidates.json")),
-                "selected_candidate": str(paths.get("selected_candidate", "state_data/selected_candidate.json")),
-                "pool_plan": str(paths.get("pool_plan", "state_data/sidecar_pool_plan.json")),
-            },
-        )
-
-    def _summarize_result(self, result: ActionResult) -> str:
-        stderr_tail = result.redacted_stderr[-160:] if result.redacted_stderr else ""
-        if result.succeeded:
+        if self.pending_action is not None and self.pending_action.key == "rollback_snapshot":
+            result = super().confirm_action("rollback_snapshot")
+            self.workflow_state = _build_workflow_state(self)
             return result.summary
-        if stderr_tail:
-            return f"{result.summary} Next step: inspect stderr tail: {stderr_tail}"
-        return f"{result.summary} Next step: review the action journal and current control-plane state."
-
-    def _dict_to_operation(self, payload: dict[str, object]):
-        from scholar_outbound_manager.tui.commands import OperationSpec
-
-        return OperationSpec(
-            key=str(payload["key"]),
-            title=str(payload["title"]),
-            command=[str(part) for part in payload["command"]],
-            requires_confirmation=bool(payload["requires_confirmation"]),
-            network_access=bool(payload["network_access"]),
-            systemd_access=bool(payload["systemd_access"]),
-            sensitive_outputs=bool(payload["sensitive_outputs"]),
-            expected_artifacts=[str(part) for part in payload["expected_artifacts"]],
-            success_exit_codes=tuple(int(code) for code in payload.get("success_exit_codes", (0,))),
-            description=str(payload.get("description") or ""),
-            risk_note=None if payload.get("risk_note") is None else str(payload.get("risk_note")),
-        )
+        pending = super().prepare_action("rollback_snapshot")
+        self.workflow_state = _build_workflow_state(self)
+        return f"Pending confirmation: press rollback again to run {pending.title}."
 
 
 def _format_last_action(last_action: dict[str, object] | None) -> str:
@@ -473,8 +365,82 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
     }
 
 
+def _build_workflow_state(controller: WorkflowController) -> dict[str, object]:
+    payload = control_plane_state_to_workflow_dict(controller.state)
+    workbench = controller.build_workbench_state()
+    workbench["selection_rows"] = _build_selection_rows(payload["selection"]["rows"], workbench)
+    payload["workbench"] = workbench
+    return payload
+
+
+def _build_selection_rows(rows: list[dict[str, object]], workbench: dict[str, object]) -> list[dict[str, object]]:
+    selected_index = (
+        workbench.get("selection", {}).get("selected_candidate_index")
+        if isinstance(workbench.get("selection"), dict)
+        else None
+    )
+    rendered: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rendered.append(
+            {
+                **row,
+                "selected": row.get("index") == selected_index,
+            }
+        )
+    return rendered
+
+
+def _render_candidate_rows(workbench: dict[str, object]) -> list[str]:
+    rows = workbench.get("selection_rows", [])
+    if not isinstance(rows, list) or not rows:
+        return ["candidate_table: no candidates"]
+    lines = ["candidate_table:"]
+    for row in rows[:8]:
+        if not isinstance(row, dict):
+            continue
+        marker = ">" if row.get("selected") else " "
+        lines.append(
+            f"{marker} #{row.get('index')} {row.get('label')} | {row.get('region')} | {row.get('protocol')} | "
+            f"passed={row.get('passed')} | stage={row.get('stage')} | home={row.get('home_status')} | query={row.get('query_status')} | "
+            f"markers={row.get('failure_marker_count')} | id={row.get('candidate_id')}"
+        )
+    return lines
+
+
+def _render_action_history(workbench: dict[str, object]) -> list[str]:
+    history = workbench.get("action_history", [])
+    if not isinstance(history, list) or not history:
+        return ["action_history: none"]
+    lines = ["action_history:"]
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        lines.append(
+            f" - {entry.get('created_at')} | {entry.get('key')} | exit={entry.get('exit_code')} | ok={entry.get('succeeded')} | "
+            f"snapshot={entry.get('snapshot_id')} | {entry.get('summary')}"
+        )
+    return lines
+
+
+def _render_snapshot_rows(workbench: dict[str, object]) -> list[str]:
+    rows = workbench.get("snapshots", [])
+    if not isinstance(rows, list) or not rows:
+        return ["snapshots: none"]
+    lines = ["snapshots:"]
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        lines.append(
+            f" - {row.get('snapshot_id')} | reason={row.get('reason')} | files={row.get('file_count')} | created_at={row.get('created_at')}"
+        )
+    return lines
+
+
 def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
     """Render one tab body from the redacted workflow state."""
+    workbench = workflow_state.get("workbench", {}) if isinstance(workflow_state.get("workbench"), dict) else {}
     if tab == "Dashboard":
         dashboard = workflow_state["dashboard"]
         blocking_reason = workflow_state["control_plane"]["workflow_state"]["blocking_reason"]
@@ -495,6 +461,8 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"last_action: {_format_last_action(dashboard['last_action'])}",
                 f"snapshot_count: {dashboard['snapshot_count']}",
                 f"latest_snapshot_id: {dashboard['latest_snapshot_id']}",
+                *(["pending_action: " + str(workbench.get("pending_action"))] if workbench.get("pending_action") else []),
+                *_render_action_history(workbench),
             ]
         )
     if tab == "Config":
@@ -510,9 +478,10 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
             f"config_undo_available: {workflow_state['operation_availability']['config_undo_available']}",
             "fields:",
             *_render_config_field_lines(form),
+            f"selected_config_field: {workbench.get('selected_config_field')}",
             "Preview:",
             form["redacted_diff"] or editor["redacted_diff"] or editor["redacted_preview"],
-            "Hints: q quit | r reload | e edit field | d show diff | s save | u undo | x snapshot | z rollback | ? help",
+            "Hints: q quit | r reload | j/k move field | e edit field | d show diff | s save | u undo | x snapshot | z rollback | ? help",
         ]
         return "\n".join(lines)
     if tab == "Fetch & Probe":
@@ -525,6 +494,7 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 _render_operation_status_line(workflow_state["control_plane"], "probe"),
                 f"fetch_available: {workflow_state['operation_availability']['fetch_available']}",
                 f"probe_available: {workflow_state['operation_availability']['probe_available']}",
+                *_render_action_history(workbench),
             ]
         )
     if tab == "Artifacts":
@@ -543,12 +513,17 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"passed_candidates_hash: {workflow_state['artifacts']['passed_candidates_hash']}",
                 f"warnings: {workflow_state['artifacts']['warnings']}",
                 "rollback_warning: rollback restores local artifacts only and does not undo network or systemd side effects.",
+                "rollback_warning_2: rollback does not restart the sidecar and does not modify production Xray/XrayR/x-ui.",
+                *_render_snapshot_rows(workbench),
             ]
         )
     if tab == "Selection":
+        detail = workbench.get("selected_candidate_detail")
         return "\n".join(
             [
                 workflow_state["selection"]["sensitive_notice"],
+                *_render_candidate_rows(workbench),
+                f"selected_candidate_detail: {detail}",
                 f"selected_candidate_id: {workflow_state['selection']['selected_candidate_id']}",
                 f"selected_candidate_label: {workflow_state['selection']['selected_candidate_label']}",
                 f"selected_region_hint: {workflow_state['selection']['selected_region_hint']}",
@@ -557,15 +532,18 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"selection_reason: {workflow_state['selection']['selection_reason']}",
                 f"select preview: {workflow_state['commands']['select']}",
                 f"select_available: {workflow_state['operation_availability']['select_available']}",
+                "Hints: j/k move candidate | enter inspect | c choose selected candidate | r reload",
             ]
         )
     if tab == "Sidecar":
         control_plane = workflow_state["control_plane"]
         return "\n".join(
             [
+                f"selected_candidate_label: {workflow_state['selection']['selected_candidate_label']}",
                 workflow_state["commands"]["sidecar_stage"],
                 workflow_state["commands"]["service_restart"],
                 workflow_state["commands"]["service_validate"],
+                workflow_state["commands"]["service_snippet"],
                 _render_operation_status_line(control_plane, "sidecar_stage"),
                 _render_operation_status_line(control_plane, "service_restart"),
                 _render_operation_status_line(control_plane, "service_validate"),
@@ -576,6 +554,8 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"socks_tcp_connect: {control_plane['sidecar_state']['socks_tcp_connect']}",
                 f"last_validation: {control_plane['sidecar_state']['last_validation']}",
                 f"warning: {control_plane['sidecar_state']['warning']}",
+                f"next_recommended_action: {workflow_state['dashboard']['next_recommended_action']}",
+                "production_boundary: Production Xray/XrayR/x-ui are not modified automatically.",
             ]
         )
     if tab == "Pool":
@@ -591,9 +571,14 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
     if tab == "Troubleshooting":
         return "\n".join(
             [
+                "artifact check",
+                "select list",
+                "artifact explain-probe --protocol hysteria2",
+                "artifact explain-probe --error-category ssl_eof",
                 "artifact explain-probe --label-regex 美国 --error-category ssl_eof",
                 "Hysteria2 remains experimental and disabled by default.",
                 "Persistent ssl_eof usually means transport-layer failure, not Scholar blocking.",
+                "Artifact mismatch: rerun fetch + probe and do not select from stale passed artifacts.",
             ]
         )
     if tab == "Snippets":
@@ -692,25 +677,50 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         def action_reload_state(self) -> None:
             controller.reload()
+            controller.workflow_state = _build_workflow_state(controller)
             self.notify(str(controller.action_state.status_message))
 
         def action_save_draft(self) -> None:
-            self.notify("Structured config saves are available through the controller field update path in this phase.")
+            self.notify(controller.save_config().message)
 
         def action_undo_save(self) -> None:
             self.notify(controller.undo_config_save())
 
         def action_edit_config_field(self) -> None:
-            form_fields = controller.workflow_state["config_form"]["fields"]
-            if not form_fields:
+            selected = controller.build_workbench_state().get("selected_config_field")
+            if not isinstance(selected, dict):
                 self.notify("No editable structured config fields are available.")
                 return
-            first_field = form_fields[0]
-            self.notify(f"Structured config field available: {first_field['key']} current={first_field['current_value']}")
+            self.notify(f"Structured config field: {selected['key']} current={selected['current_value']}")
 
         def action_show_config_diff(self) -> None:
             diff = controller.workflow_state["config_form"]["redacted_diff"] or controller.workflow_state["config_editor"]["redacted_diff"]
             self.notify(diff or "No pending redacted config diff is available.")
+
+        def action_cursor_down(self) -> None:
+            if controller.selection.active_tab == "Config":
+                controller.move_config_field(1)
+            else:
+                controller.move_candidate(1)
+            controller.workflow_state = _build_workflow_state(controller)
+            self.notify("Selection moved down.")
+
+        def action_cursor_up(self) -> None:
+            if controller.selection.active_tab == "Config":
+                controller.move_config_field(-1)
+            else:
+                controller.move_candidate(-1)
+            controller.workflow_state = _build_workflow_state(controller)
+            self.notify("Selection moved up.")
+
+        def action_confirm_selected(self) -> None:
+            detail = controller.preview_selected_candidate()
+            self.notify(str(detail))
+
+        def action_cancel_pending(self) -> None:
+            controller.clear_pending_action()
+            controller.workflow_state = _build_workflow_state(controller)
+            self.notify("Pending action cleared.")
 
         def action_run_fetch(self) -> None:
             self.notify(controller.handle_operation("fetch"))
@@ -722,7 +732,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.notify(controller.handle_operation("artifact_check"))
 
         def action_run_select(self) -> None:
-            self.notify(controller.handle_operation("select"))
+            self.notify(controller.handle_operation("choose_selected_candidate"))
 
         def action_run_stage_sidecar(self) -> None:
             self.notify(controller.handle_operation("sidecar_stage"))
@@ -737,7 +747,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.notify(controller.rollback_latest_snapshot())
 
         def action_show_help(self) -> None:
-            self.notify("Keys: q quit | r reload | e edit field | d show diff | s save | u undo | f fetch | p probe | a artifact-check | c select | g stage | v validate | x snapshot | z rollback | ? help")
+            self.notify("Keys: q quit | r reload | j/k move | enter inspect | esc cancel | e edit field | d show diff | s save | u undo | f fetch | p probe | a artifact-check | c choose | g stage | v validate | x snapshot | z rollback | ? help")
 
     ScholarOutboundWorkflowApp().run()
     return 0
