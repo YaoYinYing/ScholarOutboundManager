@@ -503,7 +503,7 @@ class WorkbenchController:
     @staticmethod
     def _build_default_selection(state: ControlPlaneState) -> WorkbenchSelection:
         return WorkbenchSelection(
-            active_tab=state.tabs[0] if state.tabs else "Dashboard",
+            active_tab=state.tabs[0] if state.tabs else "Overview",
             selected_candidate_index=0 if state.selection_state.rows else None,
             selected_config_field_key=state.config_form_state.fields[0].key if state.config_form_state.fields else None,
             selected_snapshot_id=state.artifact_state.latest_snapshot_id,
@@ -518,7 +518,7 @@ class WorkbenchController:
         snapshot_root: str,
     ) -> WorkbenchSelection:
         normalized = WorkbenchSelection(
-            active_tab=selection.active_tab if selection.active_tab in state.tabs else (state.tabs[0] if state.tabs else "Dashboard"),
+            active_tab=selection.active_tab if selection.active_tab in state.tabs else (state.tabs[0] if state.tabs else "Overview"),
             selected_candidate_index=selection.selected_candidate_index,
             selected_config_field_key=selection.selected_config_field_key,
             selected_snapshot_id=selection.selected_snapshot_id,

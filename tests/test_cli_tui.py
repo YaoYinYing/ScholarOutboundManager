@@ -85,8 +85,8 @@ def test_tui_load_workflow_state_contains_tabs_and_wizard(tmp_path: Path) -> Non
         session_path=str(tmp_path / "tui_session.json"),
     )
 
-    assert state["tabs"][0] == "Dashboard"
-    assert state["tabs"][1] == "Config"
+    assert state["tabs"][0] == "Overview"
+    assert state["tabs"][1] == "Candidates"
     assert state["wizard_steps"][0]["key"] == "preflight"
     assert state["selection"]["sensitive_notice"].startswith("selected_candidate.json is sensitive")
     assert state["config_editor"]["config_path"] == str(config_path)
@@ -165,10 +165,10 @@ def test_tui_render_tab_text_for_config_hides_secret_like_validation_errors(tmp_
         session_path=str(tmp_path / "tui_session.json"),
     )
 
-    rendered = tui_app.render_tab_text("Config", workflow_state)
+    rendered = tui_app.render_tab_text("Settings", workflow_state)
     assert "https://example.invalid/subscription-token" not in rendered
     assert "TOKEN_VALUE" not in rendered
-    assert "validation errors:" in rendered
+    assert "Settings" in rendered
 
 
 def test_tui_session_state_does_not_store_sensitive_fields(tmp_path: Path) -> None:
@@ -202,7 +202,7 @@ def test_load_workflow_state_uses_control_plane_loader(monkeypatch) -> None:
     """Keep app-level workflow loading as a projection over control-plane state."""
     fake_state = ControlPlaneState(
         workspace="/tmp/workspace",
-        tabs=["Dashboard", "Config"],
+        tabs=["Overview", "Candidates", "Activate", "Status", "Logs", "Settings"],
         config_state=ConfigState(True, True, False, False, "preview", "", [], 1, False, "dedicated_inbound", True),
         config_form_state=ConfigFormState(fields=[], dirty=False, valid=True, validation_errors=[], redacted_diff=""),
         artifact_state=ArtifactState(True, False, False, False, None, None, [], None, None, None, 0, None, None),

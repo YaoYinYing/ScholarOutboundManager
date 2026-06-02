@@ -411,7 +411,7 @@ scholar-outbound-manager geo refresh-plan \
 
 Layout:
 
-`Dashboard | Preflight | Fetch & Probe | Artifacts | Selection | Sidecar | Pool | Troubleshooting | Snippets`
+`Overview | Candidates | Activate | Status | Logs | Settings`
 
 ## Production operations
 
@@ -655,7 +655,7 @@ Config edits are transactional: `config.yaml` is changed only after validation a
 
 Undo is backed by a sensitive journal at `state_data/tui/config_undo_journal.jsonl`. That journal applies to config file writes only; it does not roll back arbitrary external side effects.
 
-The primary tabs are `Dashboard | Config | Fetch & Probe | Artifacts | Selection | Sidecar | Pool | Troubleshooting | Snippets`. `Dashboard` summarizes config, artifacts, selection, the current blocking reason, and the next recommended action. `Config` is the transactional editor surface with redacted validation errors, preview, diff, undo availability, and restart-required markers for safe editable fields.
+The primary tabs are `Overview | Candidates | Activate | Status | Logs | Settings`. `Overview` summarizes config health, route readiness, the current selected route, local runtime state, and the next safe action. `Candidates` is the route-selection surface, `Activate` explains local runtime preparation and validation, `Logs` is the only top-level page that shows raw command previews and workflow-file diagnostics, and `Settings` is the transactional editor surface with redacted validation errors, preview, diff, undo availability, and restart-required markers for safe editable fields.
 
 For non-interactive smoke checks, prefer typed access such as `state.last_action.summary if state.last_action else None` instead of assuming `last_action` is a raw mapping.
 
@@ -681,7 +681,9 @@ Structured config changes are validated before atomic save and still flow throug
 
 ## Interactive workflow workbench
 
-The TUI now acts as an interactive workflow workbench rather than only a static state report. The Selection tab supports redacted candidate navigation and choosing, the Config tab supports allowlisted field editing only, and recent operation history is shown from a redacted action journal.
+The TUI now acts as an interactive workflow workbench rather than only a static state report. The top-level workflow is organized as `Overview | Candidates | Activate | Status | Logs | Settings`, so the operator sees route readiness, the current selected route, local runtime state, and the next safe action before any lower-level diagnostic details.
+
+The `Candidates` page presents redacted route navigation and choosing while keeping the current selected route separate from the cursor-highlighted route. `Settings` groups allowlisted field editing by purpose and keeps sensitive values hidden. `Logs` is the only top-level page that shows raw command previews, workflow-file consistency, snapshot metadata, hashes, and recent operation history from the redacted action journal. The bottom shortcut bar is contextual, so each page shows only the keys that are relevant to the current workflow step.
 
 Network and systemd actions still require confirmation before side effects. Artifact rollback restores local artifacts only, and operation history remains redacted. Production Xray, XrayR, and `x-ui` stay manual and out of scope.
 

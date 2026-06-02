@@ -26,7 +26,17 @@ from scholar_outbound_manager.tui.controller import WorkbenchController as BaseW
 from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
 from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import write_session_state
+from scholar_outbound_manager.tui.view_model import ActivateStep
+from scholar_outbound_manager.tui.view_model import RouteSummary
+from scholar_outbound_manager.tui.view_model import SettingsFieldView
+from scholar_outbound_manager.tui.view_model import build_activate_steps
+from scholar_outbound_manager.tui.view_model import build_operation_impact
+from scholar_outbound_manager.tui.view_model import build_route_detail
+from scholar_outbound_manager.tui.view_model import build_route_summaries
+from scholar_outbound_manager.tui.view_model import build_settings_groups
+from scholar_outbound_manager.tui.view_model import build_workflow_summary
 from scholar_outbound_manager.tui.view_model import redact_text
+from scholar_outbound_manager.tui.view_model import resolve_next_action
 from scholar_outbound_manager.tui.workflow import MAIN_TABS
 
 
@@ -157,40 +167,130 @@ def _run_safe_tui_action(
     return message, True
 
 
-def _render_config_field_lines(form: dict[str, object]) -> list[str]:
-    rendered = [
-        "sensitive fields excluded: subscription URLs, proxy URIs, UUIDs, passwords, auth, tokens, public keys, server names, and obfs passwords.",
-    ]
-    for field in form.get("fields", []):
-        if not isinstance(field, dict):
-            continue
-        rendered.append(
-            " - {key} | type={value_type} | editable={editable} | restart_required={requires_restart}".format(
-                key=field.get("key"),
-                value_type=field.get("value_type"),
-                editable=field.get("editable"),
-                requires_restart=field.get("requires_restart"),
-            )
-        )
-    return rendered
+def _format_health(state: str) -> str:
+    return {
+        "ok": "OK",
+        "warning": "Warning",
+        "blocked": "Blocked",
+        "unknown": "Unknown",
+    }.get(state, state.title())
 
 
-def _render_operation_status_line(control_plane: dict[str, object], operation_key: str) -> str:
-    operations = (
-        control_plane.get("command_state", {}).get("operations", [])
-        if isinstance(control_plane, dict)
-        else []
-    )
+def _find_operation(workflow_state: dict[str, object], key: str) -> dict[str, object] | None:
+    operations = workflow_state.get("control_plane", {}).get("command_state", {}).get("operations", [])
     for operation in operations:
-        if not isinstance(operation, dict) or operation.get("key") != operation_key:
-            continue
-        return (
-            f"{operation_key}: confirm_required={operation.get('requires_confirmation')} "
-            f"network={operation.get('network_access')} "
-            f"systemd={operation.get('systemd_access')} "
-            f"risk={operation.get('risk_note')}"
+        if isinstance(operation, dict) and operation.get("key") == key:
+            return operation
+    return None
+
+
+def _selected_cursor_candidate_id(workbench: dict[str, object]) -> str | None:
+    rows = workbench.get("selection_rows", [])
+    selection = workbench.get("selection", {})
+    if not isinstance(rows, list) or not isinstance(selection, dict):
+        return None
+    selected_index = selection.get("selected_candidate_index")
+    if not isinstance(selected_index, int) or selected_index < 0 or selected_index >= len(rows):
+        return None
+    row = rows[selected_index]
+    if not isinstance(row, dict):
+        return None
+    candidate_id = row.get("candidate_id")
+    return str(candidate_id) if isinstance(candidate_id, str) else None
+
+
+def _shortcuts_for_tab(tab: str, *, pending_confirmation: bool) -> str:
+    if pending_confirmation:
+        return "Shortcuts: Enter confirm | Esc cancel | q quit"
+    shortcuts = {
+        "Overview": "Shortcuts: Tab change page | Enter next action | r refresh | l logs | q quit",
+        "Candidates": "Shortcuts: j/k move | Enter select route | d details | c choose | r re-test routes | q quit",
+        "Activate": "Shortcuts: Enter run next step | v validate | l logs | Esc back | q quit",
+        "Status": "Shortcuts: v validate | a activate | l logs | r refresh | q quit",
+        "Logs": "Shortcuts: j/k scroll | c copy command | r refresh | q quit",
+        "Settings": "Shortcuts: j/k move | e edit | s save | u undo | d diff | q quit",
+    }
+    return shortcuts.get(tab, "Shortcuts: r refresh | q quit")
+
+
+def _render_route_table(routes: list[RouteSummary]) -> list[str]:
+    if not routes:
+        return ["  No routes are available yet."]
+    lines = [
+        "  #   Region       Provider         Protocol   Latency   Result   Note",
+    ]
+    for route in routes[:8]:
+        result = "Passed" if route.passed else "Review"
+        prefix = ">" if route.is_cursor else " "
+        lines.append(
+            f"{prefix} {route.index:<2}  {route.region:<12} {route.provider:<16} {route.protocol:<9} "
+            f"{route.latency_label:<8} {result:<8} {route.note}"
         )
-    return f"{operation_key}: operation metadata unavailable"
+    return lines
+
+
+def _render_activate_steps(steps: list[ActivateStep]) -> list[str]:
+    lines: list[str] = []
+    for index, step in enumerate(steps, start=1):
+        lines.append(f"  {index}. {step.title:<32} {step.status}")
+        lines.append(f"     {step.note}")
+    return lines
+
+
+def _render_settings_groups(groups: dict[str, list[SettingsFieldView]]) -> list[str]:
+    lines = [
+        "Sensitive values are hidden: subscription URLs, proxy URLs, UUIDs, passwords, tokens, public keys, server names, and obfs passwords.",
+    ]
+    for title, fields in groups.items():
+        lines.append("")
+        lines.append(title)
+        if not fields:
+            lines.append("  No editable fields in this group.")
+            continue
+        for field in fields:
+            suffix = "    restart required" if field.restart_required else ""
+            lines.append(f"  {field.title}: {field.value}{suffix}")
+    return lines
+
+
+def _render_logs_history(workbench: dict[str, object]) -> list[str]:
+    history = workbench.get("action_history", [])
+    if not isinstance(history, list) or not history:
+        return ["  No actions recorded in this session."]
+    lines: list[str] = []
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        status = "OK" if entry.get("succeeded") else "Failed"
+        lines.append(f"  {entry.get('created_at')}  {entry.get('title') or entry.get('key')}  {status}")
+    return lines
+
+
+def _render_logs_snapshots(workbench: dict[str, object]) -> list[str]:
+    snapshots = workbench.get("snapshots", [])
+    if not isinstance(snapshots, list) or not snapshots:
+        return ["  No local file snapshots are recorded."]
+    first = snapshots[0]
+    if not isinstance(first, dict):
+        return ["  No local file snapshots are recorded."]
+    return [
+        f"  Latest: {first.get('snapshot_id')}",
+        f"  Reason: {first.get('reason')}",
+    ]
+
+
+def _enabled_label(value: str) -> str:
+    normalized = str(value or "unknown")
+    return {
+        "true": "Enabled",
+        "false": "Disabled",
+        "unknown": "Unknown",
+    }.get(normalized, normalized.title())
+
+
+def _last_check_label(value: str) -> str:
+    normalized = str(value or "unknown")
+    return "Never" if normalized == "unknown" else normalized
 
 
 def _textual_safe_id(value: str) -> str:
@@ -217,8 +317,8 @@ def _build_tab_specs(tabs: list[str]) -> tuple[list[dict[str, str]], str]:
         counts[base] = count
         safe_id = base if count == 1 else f"{base}-{count}"
         specs.append({"title": tab, "id": safe_id})
-        if (tab == "Dashboard" and initial_id == "tab") or index == 0:
-            initial_id = safe_id if tab == "Dashboard" else initial_id
+        if (tab == "Overview" and initial_id == "tab") or index == 0:
+            initial_id = safe_id if tab == "Overview" else initial_id
     if initial_id == "tab":
         initial_id = specs[0]["id"]
     return specs, initial_id
@@ -428,13 +528,13 @@ def _build_selection_rows(rows: list[dict[str, object]], workbench: dict[str, ob
         else None
     )
     rendered: list[dict[str, object]] = []
-    for row in rows:
+    for position, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
         rendered.append(
             {
                 **row,
-                "selected": row.get("index") == selected_index,
+                "selected": position == selected_index,
             }
         )
     return rendered
@@ -489,154 +589,209 @@ def _render_snapshot_rows(workbench: dict[str, object]) -> list[str]:
 def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
     """Render one tab body from the redacted workflow state."""
     workbench = workflow_state.get("workbench", {}) if isinstance(workflow_state.get("workbench"), dict) else {}
-    if tab == "Dashboard":
-        dashboard = workflow_state["dashboard"]
-        blocking_reason = workflow_state["control_plane"]["workflow_state"]["blocking_reason"]
-        return "\n".join(
-            [
-                "Workflow-oriented TUI",
-                workflow_state["tab_strip"],
-                f"repo_status: {dashboard['repo_status']}",
-                f"current_git_commit: {dashboard['current_git_commit']}",
-                f"config_dirty: {dashboard['config_dirty']}",
-                f"config_valid: {dashboard['config_valid']}",
-                f"undo_available: {dashboard['undo_available']}",
-                f"candidate_count: {dashboard['candidate_count']}",
-                f"passed_count: {dashboard['passed_count']}",
-                f"selected_candidate_label: {dashboard['selected_candidate_label']}",
-                f"blocking_reason: {blocking_reason}",
-                f"next_recommended_action: {dashboard['next_recommended_action']}",
-                f"last_action: {_format_last_action(dashboard['last_action'])}",
-                f"snapshot_count: {dashboard['snapshot_count']}",
-                f"latest_snapshot_id: {dashboard['latest_snapshot_id']}",
-                *(["pending_action: " + str(workbench.get("pending_action"))] if workbench.get("pending_action") else []),
-                *_render_action_history(workbench),
-            ]
-        )
-    if tab == "Config":
-        editor = workflow_state["config_editor"]
-        form = workflow_state["config_form"]
+    pending_confirmation = bool(workbench.get("pending_action"))
+    selected_candidate_id = workflow_state.get("selection", {}).get("selected_candidate_id")
+    cursor_candidate_id = _selected_cursor_candidate_id(workbench)
+    route_summaries = build_route_summaries(
+        workbench.get("selection_rows", []),
+        selected_candidate_id=selected_candidate_id,
+        cursor_candidate_id=cursor_candidate_id,
+    )
+    if tab == "Overview":
+        summary = build_workflow_summary(workflow_state)
         lines = [
-            "Step 1: Config",
-            f"config exists: {workflow_state['preflight']['config_exists']}",
-            f"config valid: {workflow_state['preflight']['config_valid']}",
-            f"validation errors: {workflow_state['preflight']['config_validation_errors']}",
-            f"undo_available: {editor['undo_available']}",
-            f"config_save_available: {workflow_state['operation_availability']['config_save_available']}",
-            f"config_undo_available: {workflow_state['operation_availability']['config_undo_available']}",
-            "fields:",
-            *_render_config_field_lines(form),
-            f"selected_config_field: {workbench.get('selected_config_field')}",
-            "Preview:",
-            form["redacted_diff"] or editor["redacted_diff"] or editor["redacted_preview"],
-            "Hints: q quit | r reload | j/k move field | e edit field | d show diff | s save | u undo | x snapshot | z rollback | ? help",
+            "Scholar Outbound",
+            "",
+            "Summary",
+            f"  Config:          {_format_health(summary.config_state.value)}",
+            f"  Routes:          {summary.route_count} found, {summary.passed_route_count} passed",
+            f"  Selected route:  {summary.selected_route_label or 'None selected'}",
+            f"  Local service:   {summary.service_state_label}",
+            f"  Local SOCKS:     {summary.local_proxy_state_label}",
+            "",
+            "Next action",
+            f"  {summary.next_action_label}",
+            "",
+            "Reason",
+            f"  {summary.next_action_reason}",
+            "",
+            "Details",
+            f"  Last action: {summary.last_action_label}",
+            f"  Route state: {_format_health(summary.route_state.value)}",
         ]
+        if pending_confirmation:
+            lines.extend(["", "Pending confirmation", f"  {workbench.get('pending_action')}"])
+        lines.extend(["", _shortcuts_for_tab(tab, pending_confirmation=pending_confirmation)])
         return "\n".join(lines)
-    if tab == "Fetch & Probe":
-        return "\n".join(
-            [
-                workflow_state["warnings"][0],
-                f"fetch: {workflow_state['commands']['fetch']}",
-                f"probe: {workflow_state['commands']['probe']}",
-                _render_operation_status_line(workflow_state["control_plane"], "fetch"),
-                _render_operation_status_line(workflow_state["control_plane"], "probe"),
-                f"fetch_available: {workflow_state['operation_availability']['fetch_available']}",
-                f"probe_available: {workflow_state['operation_availability']['probe_available']}",
-                *_render_action_history(workbench),
-            ]
-        )
-    if tab == "Artifacts":
-        return "\n".join(
-            [
-                f"artifact check: {workflow_state['commands']['artifact_check']}",
-                f"artifact result: {workflow_state['artifacts']['artifact_check']}",
-                f"artifact_check_available: {workflow_state['operation_availability']['artifact_check_available']}",
-                f"snapshot_count: {workflow_state['artifacts']['snapshot_count']}",
-                f"latest_snapshot_id: {workflow_state['artifacts']['latest_snapshot_id']}",
-                f"latest_snapshot_reason: {workflow_state['artifacts']['latest_snapshot_reason']}",
-                f"artifact_snapshot_available: {workflow_state['operation_availability']['artifact_snapshot_available']}",
-                f"artifact_rollback_available: {workflow_state['operation_availability']['artifact_rollback_available']}",
-                f"candidates_hash: {workflow_state['artifacts']['candidates_hash']}",
-                f"probe_summary_hash: {workflow_state['artifacts']['probe_summary_hash']}",
-                f"passed_candidates_hash: {workflow_state['artifacts']['passed_candidates_hash']}",
-                f"warnings: {workflow_state['artifacts']['warnings']}",
-                "rollback_warning: rollback restores local artifacts only and does not undo network or systemd side effects.",
-                "rollback_warning_2: rollback does not restart the sidecar and does not modify production Xray/XrayR/x-ui.",
-                *_render_snapshot_rows(workbench),
-            ]
-        )
-    if tab == "Selection":
-        detail = workbench.get("selected_candidate_detail")
-        return "\n".join(
-            [
-                workflow_state["selection"]["sensitive_notice"],
-                *_render_candidate_rows(workbench),
-                f"selected_candidate_detail: {detail}",
-                f"selected_candidate_id: {workflow_state['selection']['selected_candidate_id']}",
-                f"selected_candidate_label: {workflow_state['selection']['selected_candidate_label']}",
-                f"selected_region_hint: {workflow_state['selection']['selected_region_hint']}",
-                f"preferred_region_hint: {workflow_state['selection']['preferred_region_hint']}",
-                f"selection_method: {workflow_state['selection']['selection_method']}",
-                f"selection_reason: {workflow_state['selection']['selection_reason']}",
-                f"select preview: {workflow_state['commands']['select']}",
-                f"select_available: {workflow_state['operation_availability']['select_available']}",
-                "Hints: j/k move candidate | enter inspect | c choose selected candidate | r reload",
-            ]
-        )
-    if tab == "Sidecar":
-        control_plane = workflow_state["control_plane"]
-        return "\n".join(
-            [
-                f"selected_candidate_label: {workflow_state['selection']['selected_candidate_label']}",
-                workflow_state["commands"]["sidecar_stage"],
-                workflow_state["commands"]["service_restart"],
-                workflow_state["commands"]["service_validate"],
-                workflow_state["commands"]["service_snippet"],
-                _render_operation_status_line(control_plane, "sidecar_stage"),
-                _render_operation_status_line(control_plane, "service_restart"),
-                _render_operation_status_line(control_plane, "service_validate"),
-                f"sidecar_stage_available: {workflow_state['operation_availability']['sidecar_stage_available']}",
-                f"service_validate_available: {workflow_state['operation_availability']['service_validate_available']}",
-                f"service_active: {control_plane['sidecar_state']['service_active']}",
-                f"service_enabled: {control_plane['sidecar_state']['service_enabled']}",
-                f"socks_tcp_connect: {control_plane['sidecar_state']['socks_tcp_connect']}",
-                f"last_validation: {control_plane['sidecar_state']['last_validation']}",
-                f"warning: {control_plane['sidecar_state']['warning']}",
-                f"next_recommended_action: {workflow_state['dashboard']['next_recommended_action']}",
-                "production_boundary: Production Xray/XrayR/x-ui are not modified automatically.",
-            ]
-        )
-    if tab == "Pool":
-        control_plane = workflow_state["control_plane"]
-        return "\n".join(
-            [
-                f"plan_exists: {control_plane['pool_state']['plan_exists']}",
-                f"pool_stage: {workflow_state['commands']['pool_stage']}",
-                f"port_warning: {control_plane['pool_state']['port_warning']}",
-                f"pool_rows: {control_plane['pool_state']['rows']}",
-            ]
-        )
-    if tab == "Troubleshooting":
-        return "\n".join(
-            [
-                "artifact check",
-                "select list",
-                "artifact explain-probe --protocol hysteria2",
-                "artifact explain-probe --error-category ssl_eof",
-                "artifact explain-probe --label-regex 美国 --error-category ssl_eof",
-                "Hysteria2 remains experimental and disabled by default.",
-                "Persistent ssl_eof usually means transport-layer failure, not Scholar blocking.",
-                "Artifact mismatch: rerun fetch + probe and do not select from stale passed artifacts.",
-            ]
-        )
-    if tab == "Snippets":
-        return "\n".join(
-            [
-                workflow_state["snippets"]["warning"],
-                workflow_state["commands"]["service_snippet"],
-                f"snippet_available: {workflow_state['operation_availability']['snippet_available']}",
-            ]
-        )
+    if tab == "Candidates":
+        current_route = workflow_state["selection"]["selected_candidate_label"] or "None selected"
+        cursor_route = next((route.display_label for route in route_summaries if route.is_cursor), "No cursor route")
+        detail = build_route_detail(workbench.get("selected_candidate_detail"))
+        lines = [
+            "Routes",
+            "",
+            "Summary",
+            f"  Current selected route: {current_route}",
+            f"  Cursor route:           {cursor_route}",
+            "",
+            "Next action / Available actions",
+            "  Choose the cursor route for local activation.",
+            "",
+            "Details",
+            "Available routes",
+            *_render_route_table(route_summaries),
+        ]
+        if detail is not None:
+            lines.extend(
+                [
+                    "",
+                    "Cursor details",
+                    f"  Label:        {detail.display_label}",
+                    f"  Region:       {detail.region}",
+                    f"  Protocol:     {detail.protocol}",
+                    f"  Result:       {'Passed' if detail.passed else 'Needs review'}",
+                    f"  Stage:        {detail.stage_label}",
+                    f"  Candidate ID: {detail.raw_id}",
+                    f"  Home status:  {detail.home_status}",
+                    f"  Query status: {detail.query_status}",
+                    f"  Markers:      {detail.failure_marker_count}",
+                ]
+            )
+        if pending_confirmation:
+            lines.extend(
+                [
+                    "",
+                    "Confirm action",
+                    "  Replace selected route?",
+                    f"  Current: {current_route}",
+                    f"  New:     {cursor_route}",
+                ]
+            )
+        lines.extend(["", _shortcuts_for_tab(tab, pending_confirmation=pending_confirmation)])
+        return "\n".join(lines)
+    if tab == "Activate":
+        steps = build_activate_steps(workflow_state)
+        next_action_label, next_action_reason = resolve_next_action(workflow_state)
+        stage_impact = build_operation_impact(_find_operation(workflow_state, "sidecar_stage"), action_label="Prepare local runtime files")
+        validate_impact = build_operation_impact(_find_operation(workflow_state, "service_validate"), action_label="Validate local SOCKS proxy")
+        lines = [
+            "Activate selected route",
+            "",
+            "Summary",
+            f"  Selected route: {workflow_state['selection']['selected_candidate_label'] or 'None selected'}",
+            f"  Local service:  {build_workflow_summary(workflow_state).service_state_label}",
+            "",
+            "Next action / Available actions",
+            f"  {next_action_label}",
+            f"  {next_action_reason}",
+            "",
+            "Details",
+            "Steps",
+            *_render_activate_steps(steps),
+            "",
+            "Impact",
+            f"  {stage_impact.summary}: {'Confirmation required' if stage_impact.confirmation_required else 'No confirmation'}",
+            f"  {validate_impact.summary}: {'Uses network' if validate_impact.uses_network else 'No network use'}",
+            "  This does not modify production Xray/XrayR/x-ui.",
+        ]
+        if not workflow_state["control_plane"]["pool_state"]["plan_exists"]:
+            lines.extend(
+                [
+                    "",
+                    "  No staged runtime plan exists yet.",
+                    "  Prepare local runtime files before restarting the local service.",
+                ]
+            )
+        lines.extend(["", _shortcuts_for_tab(tab, pending_confirmation=pending_confirmation)])
+        return "\n".join(lines)
+    if tab == "Status":
+        sidecar = workflow_state["control_plane"]["sidecar_state"]
+        selected_route = workflow_state["selection"]["selected_candidate_label"] or "None selected"
+        lines = [
+            "Status",
+            "",
+            "Summary",
+            f"  Service:       {build_workflow_summary(workflow_state).service_state_label}",
+            f"  Enabled:       {_enabled_label(sidecar['service_enabled'])}",
+            f"  Local SOCKS:   {build_workflow_summary(workflow_state).local_proxy_state_label}",
+            f"  Last check:    {_last_check_label(sidecar['last_validation'])}",
+            "",
+            "Next action / Available actions",
+            "  Run validation" if sidecar["socks_tcp_connect"] != "true" else "  Ready for local use",
+            "",
+            "Details",
+            f"  Selected route: {selected_route}",
+            f"  Warning:        {sidecar['warning'] or 'None'}",
+            "  Service state is unknown because validation has not been run in this session."
+            if sidecar["service_active"] == "unknown"
+            else "  Validation state reflects the latest managed local runtime check.",
+        ]
+        lines.extend(["", _shortcuts_for_tab(tab, pending_confirmation=pending_confirmation)])
+        return "\n".join(lines)
+    if tab == "Logs":
+        artifacts = workflow_state["artifacts"]
+        lines = [
+            "Logs",
+            "",
+            "Summary",
+            "Recent actions",
+            *_render_logs_history(workbench),
+            "",
+            "Next action / Available actions",
+            "  Review command previews and local workflow file status.",
+            "",
+            "Details",
+            "Workflow files",
+            f"  candidates.json              {'present' if artifacts['candidates_exists'] else 'missing'}",
+            f"  probe_summary.json           {'present' if artifacts['probe_summary_exists'] else 'missing'}",
+            f"  passed_candidates.json       {'present' if artifacts['passed_candidates_exists'] else 'missing'}",
+            f"  consistency                  {'OK' if artifacts['artifact_check'] and artifacts['artifact_check'].get('overall_consistent') is True else 'Review'}",
+            "",
+            "Snapshots",
+            *_render_logs_snapshots(workbench),
+            "",
+            "Commands",
+            f"  fetch:    {workflow_state['commands']['fetch']}",
+            f"  probe:    {workflow_state['commands']['probe']}",
+            f"  validate: {workflow_state['commands']['service_validate']}",
+            "",
+            "Developer details",
+            f"  candidates_hash:       {artifacts['candidates_hash']}",
+            f"  probe_summary_hash:    {artifacts['probe_summary_hash']}",
+            f"  passed_candidates_hash:{artifacts['passed_candidates_hash']}",
+            f"  latest_snapshot_id:    {artifacts['latest_snapshot_id']}",
+        ]
+        lines.extend(["", _shortcuts_for_tab(tab, pending_confirmation=pending_confirmation)])
+        return "\n".join(lines)
+    if tab == "Settings":
+        groups = build_settings_groups(workflow_state["config_form"])
+        lines = [
+            "Settings",
+            "",
+            "Summary",
+            f"  Config valid: {workflow_state['preflight']['config_valid']}",
+            f"  Undo available: {workflow_state['config_editor']['undo_available']}",
+            "",
+            "Next action / Available actions",
+            "  Edit one allowlisted setting and save it through the structured form.",
+            "",
+            "Details",
+            *_render_settings_groups(groups),
+        ]
+        selected_field = workbench.get("selected_config_field")
+        if isinstance(selected_field, dict):
+            lines.extend(
+                [
+                    "",
+                    "Selected field",
+                    f"  {selected_field.get('title') or selected_field.get('key')}: {selected_field.get('current_value')}",
+                ]
+            )
+        diff = workflow_state["config_form"]["redacted_diff"] or workflow_state["config_editor"]["redacted_diff"]
+        if diff:
+            lines.extend(["", "Redacted diff", f"  {diff}"])
+        lines.extend(["", _shortcuts_for_tab(tab, pending_confirmation=pending_confirmation)])
+        return "\n".join(lines)
     return "\n".join(
         [
             "Configured workflow tabs:",
@@ -666,7 +821,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         from textual.app import App
         from textual.app import ComposeResult
         from textual.containers import Vertical
-        from textual.widgets import Footer
         from textual.widgets import Header
         from textual.widgets import Static
         from textual.widgets import TabbedContent
@@ -713,6 +867,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         BINDINGS = list(TUI_KEY_BINDINGS)
 
+        def _current_tab_title(self) -> str:
+            try:
+                tabbed = self.query_one(TabbedContent)
+                active_id = str(tabbed.active or "")
+            except Exception:
+                return controller.selection.active_tab
+            for tab_name in controller.workflow_state["tabs"]:
+                if _textual_safe_id(tab_name) == active_id:
+                    return tab_name
+            return controller.selection.active_tab
+
+        def _sync_active_tab(self) -> None:
+            controller.selection.active_tab = self._current_tab_title()
+
         def compose(self) -> ComposeResult:
             tab_specs, initial_tab_id = _build_tab_specs(list(controller.workflow_state["tabs"]))
             yield Header()
@@ -724,7 +892,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 render_tab_text(tab_spec["title"], controller.workflow_state),
                                 id=_tab_body_id(tab_spec["title"]),
                             )
-            yield Footer()
+            yield Static(
+                _shortcuts_for_tab(controller.selection.active_tab, pending_confirmation=bool(controller.pending_action)),
+                id="shortcut-bar",
+            )
 
         def _refresh_all_tabs(self) -> None:
             _refresh_tab_bodies(
@@ -732,8 +903,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 controller.workflow_state,
                 lambda body_id, text: self.query_one(f"#{body_id}", Static).update(text),
             )
+            self.query_one("#shortcut-bar", Static).update(
+                _shortcuts_for_tab(self._current_tab_title(), pending_confirmation=bool(controller.pending_action))
+            )
 
         def _run_tui_action(self, description: str, func: Callable[[], str | None]) -> None:
+            self._sync_active_tab()
             message, succeeded = _run_safe_tui_action(controller, description, func)
             self._refresh_all_tabs()
             if message:
@@ -760,16 +935,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             self._run_tui_action("Inspect config field", _describe_selected_field)
 
         def action_show_config_diff(self) -> None:
-            self._run_tui_action(
-                "Show config diff",
-                lambda: controller.workflow_state["config_form"]["redacted_diff"]
-                or controller.workflow_state["config_editor"]["redacted_diff"]
-                or "No pending redacted config diff is available.",
-            )
+            def _show_contextual_details() -> str:
+                if controller.selection.active_tab == "Candidates":
+                    return str(build_route_detail(controller.build_workbench_state().get("selected_candidate_detail")) or "No route details are available.")
+                return (
+                    controller.workflow_state["config_form"]["redacted_diff"]
+                    or controller.workflow_state["config_editor"]["redacted_diff"]
+                    or "No pending redacted config diff is available."
+                )
+
+            self._run_tui_action("Show details", _show_contextual_details)
 
         def action_cursor_down(self) -> None:
             def _move_down() -> str:
-                if controller.selection.active_tab == "Config":
+                if controller.selection.active_tab == "Settings":
                     controller.move_config_field(1)
                 else:
                     controller.move_candidate(1)
@@ -779,7 +958,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         def action_cursor_up(self) -> None:
             def _move_up() -> str:
-                if controller.selection.active_tab == "Config":
+                if controller.selection.active_tab == "Settings":
                     controller.move_config_field(-1)
                 else:
                     controller.move_candidate(-1)
@@ -788,7 +967,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             self._run_tui_action("Move selection", _move_up)
 
         def action_confirm_selected(self) -> None:
-            self._run_tui_action("Inspect selected candidate", lambda: str(controller.preview_selected_candidate()))
+            def _primary_action() -> str:
+                if controller.selection.active_tab == "Candidates":
+                    return controller.handle_operation("choose_selected_candidate")
+                if controller.selection.active_tab == "Activate":
+                    return controller.handle_operation("sidecar_stage")
+                if controller.selection.active_tab == "Status":
+                    return controller.handle_operation("service_validate")
+                return str(controller.preview_selected_candidate())
+
+            self._run_tui_action("Primary action", _primary_action)
 
         def action_cancel_pending(self) -> None:
             self._run_tui_action("Cancel pending action", lambda: (controller.clear_pending_action(), "Pending action cleared.")[1])
@@ -820,7 +1008,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         def action_show_help(self) -> None:
             self._run_tui_action(
                 "Show help",
-                lambda: "Keys: q quit | r reload | j/k move | enter inspect | esc cancel | e edit field | d show diff | s save | u undo | f fetch | p probe | a artifact-check | c choose | g stage | v validate | x snapshot | z rollback | ? help",
+                lambda: _shortcuts_for_tab(controller.selection.active_tab, pending_confirmation=bool(controller.pending_action)),
             )
 
     ScholarOutboundWorkflowApp().run()

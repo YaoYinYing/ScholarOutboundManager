@@ -54,11 +54,11 @@ def test_workflow_tabs_all_produce_textual_safe_ids() -> None:
     """Ensure current workflow tabs never emit raw invalid ids."""
     specs, initial_id = tui_app._build_tab_specs(list(MAIN_TABS))
 
-    assert initial_id == "dashboard"
+    assert initial_id == "overview"
     assert all(spec["id"] for spec in specs)
     assert all(spec["id"].replace("-", "").replace("_", "").isalnum() for spec in specs)
-    assert specs[2]["title"] == "Fetch & Probe"
-    assert specs[2]["id"] == "fetch-probe"
+    assert specs[1]["title"] == "Candidates"
+    assert specs[1]["id"] == "candidates"
 
 
 def test_build_tab_specs_do_not_use_raw_tab_label_as_id() -> None:
@@ -71,7 +71,7 @@ def test_build_tab_specs_do_not_use_raw_tab_label_as_id() -> None:
 
 def test_workflow_tabs_include_config_tab() -> None:
     """Expose the plan-aligned config tab in the primary workflow."""
-    assert MAIN_TABS[1] == "Config"
+    assert MAIN_TABS == ("Overview", "Candidates", "Activate", "Status", "Logs", "Settings")
 
 
 def test_tui_key_bindings_cover_expected_controls() -> None:
@@ -271,7 +271,7 @@ def test_workflow_controller_can_update_state_via_config_field_patch(tmp_path, m
 def test_refresh_tab_bodies_updates_selection_view_after_cursor_move() -> None:
     updates: dict[str, str] = {}
     workflow_state = {
-        "tabs": ["Selection"],
+        "tabs": ["Candidates"],
         "selection": {
             "sensitive_notice": "notice",
             "selected_candidate_id": "candidate-002",
@@ -284,6 +284,7 @@ def test_refresh_tab_bodies_updates_selection_view_after_cursor_move() -> None:
         "commands": {"select": "select ..."},
         "operation_availability": {"select_available": True},
         "workbench": {
+            "selection": {"selected_candidate_index": 1},
             "selection_rows": [
                 {
                     "index": 0,
@@ -317,14 +318,15 @@ def test_refresh_tab_bodies_updates_selection_view_after_cursor_move() -> None:
     }
 
     tui_app._refresh_tab_bodies(
-        ["Selection"],
+        ["Candidates"],
         workflow_state,
         lambda body_id, text: updates.__setitem__(body_id, text),
     )
 
-    rendered = updates["selection-body"]
-    assert "> #1 label-2" in rendered
-    assert "selected_candidate_detail: {'candidate_id': 'candidate-002'" in rendered
+    rendered = updates["candidates-body"]
+    assert "Current selected route: label-2" in rendered
+    assert "Cursor route:           label-2" in rendered
+    assert "Available routes" in rendered
 
 
 def test_run_safe_tui_action_redacts_exception_details(tmp_path, monkeypatch) -> None:
@@ -357,8 +359,8 @@ def test_run_safe_tui_action_redacts_exception_details(tmp_path, monkeypatch) ->
     assert controller.message.level == "error"
 
 
-def test_render_dashboard_and_config_tabs_show_reason_and_field_safety() -> None:
-    """Rendered tabs should show blocking reason, structured field hints, and exclusion notice."""
+def test_render_overview_and_settings_tabs_show_reason_and_field_safety() -> None:
+    """Rendered tabs should show workflow-oriented copy and grouped settings."""
     workflow_state = {
         "tab_strip": "tabs",
         "dashboard": {
@@ -392,15 +394,22 @@ def test_render_dashboard_and_config_tabs_show_reason_and_field_safety() -> None
             "redacted_preview": "preview",
         },
         "config_form": {
+            "dirty": False,
             "fields": [
                 {
                     "key": "probe.concurrency",
+                    "title": "Probe Concurrency",
+                    "current_value": 4,
+                    "draft_value": 4,
                     "value_type": "int",
                     "editable": True,
                     "requires_restart": False,
                 },
                 {
                     "key": "xray.local_socks_port",
+                    "title": "Local SOCKS Port",
+                    "current_value": 19080,
+                    "draft_value": 19080,
                     "value_type": "int",
                     "editable": True,
                     "requires_restart": True,
@@ -453,7 +462,7 @@ def test_render_dashboard_and_config_tabs_show_reason_and_field_safety() -> None
             "selection_reason": "closest",
         },
         "snippets": {"warning": "warning"},
-        "tabs": ["Dashboard", "Config"],
+        "tabs": ["Overview", "Settings"],
         "control_plane": {
             "workflow_state": {"blocking_reason": "Artifact mismatch detected."},
             "command_state": {
@@ -478,20 +487,22 @@ def test_render_dashboard_and_config_tabs_show_reason_and_field_safety() -> None
         },
     }
 
-    dashboard_rendered = tui_app.render_tab_text("Dashboard", workflow_state)
-    config_rendered = tui_app.render_tab_text("Config", workflow_state)
+    dashboard_rendered = tui_app.render_tab_text("Overview", workflow_state)
+    config_rendered = tui_app.render_tab_text("Settings", workflow_state)
 
-    assert "blocking_reason: Artifact mismatch detected." in dashboard_rendered
-    assert "last_action: title=Probe Candidates" in dashboard_rendered
-    assert "sensitive fields excluded:" in config_rendered
-    assert "probe.concurrency | type=int | editable=True | restart_required=False" in config_rendered
-    assert "xray.local_socks_port | type=int | editable=True | restart_required=True" in config_rendered
+    assert "Scholar Outbound" in dashboard_rendered
+    assert "Next action" in dashboard_rendered
+    assert "Routes:          1 found, 1 passed" in dashboard_rendered
+    assert "Sensitive values are hidden:" in config_rendered
+    assert "Connectivity test" in config_rendered
+    assert "Probe Concurrency: 4" in config_rendered
+    assert "Local SOCKS Port: 19080    restart required" in config_rendered
 
 
 def _fake_control_plane_state(*, config_path: str = "config.yaml") -> ControlPlaneState:
     return ControlPlaneState(
         workspace="/tmp/workspace",
-        tabs=["Dashboard", "Config", "Selection"],
+        tabs=["Overview", "Candidates", "Activate", "Status", "Logs", "Settings"],
         config_state=ConfigState(True, True, False, False, "preview", "", [], 1, False, "dedicated_inbound", True),
         config_form_state=ConfigFormState(
             fields=[],
