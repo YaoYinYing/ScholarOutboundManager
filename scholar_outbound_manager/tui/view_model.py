@@ -114,9 +114,18 @@ def redact_text(value: str) -> str:
         (r"(vless|vmess|trojan|ss|hysteria2)://[^\s\"']+", "<REDACTED_URI>"),
         (r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", "<UUID>"),
         (r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "<IP>"),
-        (r'(?i)"(public[_ -]?key|password|token|auth|obfs-password|server_name|servername|sni|host)"\s*:\s*"[^"]*"', r'"\1": "<REDACTED>"'),
-        (r"(?i)\b(public[_ -]?key|password|token|auth|obfs-password|server_name|servername|sni|host)\b\s*[:=]\s*\S+", r"\1=<REDACTED>"),
-        (r"(?i)\b(public[_ -]?key|password|token|auth|obfs-password|server_name|servername|sni|host)\b", "<REDACTED_FIELD>"),
+        (
+            r'(?i)"(public[_ -]?key|password|token|auth|obfs-password|server_name|servername|sni|host|address|user_id|raw_uri|path)"\s*:\s*"[^"]*"',
+            r'"\1": "<REDACTED>"',
+        ),
+        (
+            r"(?i)\b(public[_ -]?key|password|token|auth|obfs-password|server_name|servername|sni|host|address|user_id|raw_uri|path)\b\s*[:=]\s*\S+",
+            r"\1=<REDACTED>",
+        ),
+        (
+            r"(?i)\b(public[_ -]?key|password|token|auth|obfs-password|server_name|servername|sni|host|address|user_id|raw_uri|path)\b",
+            "<REDACTED_FIELD>",
+        ),
         (r"\b[a-z0-9.-]+\.(?:invalid|example|com|net|org)\b", "<HOST>"),
     ]
     for pattern, replacement in patterns:

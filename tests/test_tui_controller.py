@@ -59,6 +59,24 @@ def test_choose_selected_candidate_snapshots_previous_selected_artifact(tmp_path
     assert snapshots[0].files["selected_candidate"].exists is True
 
 
+def test_workflow_controller_create_snapshot_returns_snapshot_object(tmp_path: Path) -> None:
+    controller = _build_controller(tmp_path)
+
+    snapshot = controller.create_snapshot("manual_test")
+
+    assert snapshot.snapshot_id.startswith("snap-")
+    assert snapshot.reason == "manual_test"
+
+
+def test_choose_selected_candidate_no_longer_depends_on_string_snapshot_message(tmp_path: Path) -> None:
+    controller = _build_controller(tmp_path)
+
+    result = controller.choose_selected_candidate()
+
+    assert result.snapshot_id is not None
+    assert "selected_candidate.json" in result.output_path
+
+
 def test_config_field_selection_moves_within_bounds(tmp_path: Path) -> None:
     controller = _build_controller(tmp_path)
 

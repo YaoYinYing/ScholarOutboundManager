@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import re
+from collections.abc import Callable
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 
 from scholar_outbound_manager.selection import build_selected_candidate_artifact
@@ -13,6 +13,7 @@ from scholar_outbound_manager.selection import load_candidate_payload
 from scholar_outbound_manager.selection import select_candidate_by_index
 from scholar_outbound_manager.selection import write_selected_candidate_artifact
 from scholar_outbound_manager.tui.action_runner import ActionResult
+from scholar_outbound_manager.tui.artifact_rollback import ArtifactSnapshot
 from scholar_outbound_manager.tui.action_runner import FakeActionRunner
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ACTION_JOURNAL_PATH
@@ -20,10 +21,12 @@ from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ARTIFACT_SNAPSHOT
 from scholar_outbound_manager.tui.control_plane import ControlPlaneState
 from scholar_outbound_manager.tui.control_plane import control_plane_state_to_dict
 from scholar_outbound_manager.tui.control_plane import load_control_plane_state
+from scholar_outbound_manager.tui.controller import WorkbenchMessage
 from scholar_outbound_manager.tui.controller import WorkbenchController as BaseWorkbenchController
 from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
 from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import write_session_state
+from scholar_outbound_manager.tui.view_model import redact_text
 from scholar_outbound_manager.tui.workflow import MAIN_TABS
 
 
@@ -75,9 +78,13 @@ class WorkflowController(BaseWorkbenchController):
         self.workflow_state = _build_workflow_state(self)
         return result.message
 
-    def create_snapshot(self, reason: str = "manual_tui_snapshot") -> str:
+    def create_snapshot(self, reason: str = "manual_tui_snapshot") -> ArtifactSnapshot:
         snapshot = super().create_snapshot(reason)
         self.workflow_state = _build_workflow_state(self)
+        return snapshot
+
+    def create_snapshot_message(self, reason: str = "manual_tui_snapshot") -> str:
+        snapshot = self.create_snapshot(reason)
         return f"Created artifact snapshot {snapshot.snapshot_id}."
 
     def rollback_latest_snapshot(self) -> str:
@@ -107,6 +114,47 @@ def _format_last_action(last_action: dict[str, object] | None) -> str:
     if rollback_hint:
         parts.append(f"rollback_hint={rollback_hint}")
     return "; ".join(parts)
+
+
+def _tab_body_id(tab: str) -> str:
+    """Return one stable Static body id for a workflow tab."""
+    return f"{_textual_safe_id(tab)}-body"
+
+
+def redact_exception_message(message: str) -> str:
+    """Return one review-safe TUI error summary."""
+    redacted = redact_text(message)
+    if len(redacted) <= 240:
+        return redacted
+    return redacted[:237] + "..."
+
+
+def _refresh_tab_bodies(
+    tabs: list[str],
+    workflow_state: dict[str, object],
+    update_body: Callable[[str, str], None],
+) -> None:
+    """Refresh all rendered tab bodies after one state mutation."""
+    for tab in tabs:
+        update_body(_tab_body_id(tab), render_tab_text(tab, workflow_state))
+
+
+def _run_safe_tui_action(
+    controller: WorkflowController,
+    description: str,
+    func: Callable[[], str | None],
+) -> tuple[str | None, bool]:
+    """Run one TUI action without letting raw exceptions escape into Textual tracebacks."""
+    try:
+        message = func()
+    except Exception as exc:
+        safe_message = redact_exception_message(str(exc))
+        controller.message = WorkbenchMessage("error", description, safe_message)
+        controller.action_state.status_message = safe_message
+        controller.workflow_state = _build_workflow_state(controller)
+        return f"{description} failed: {safe_message}", False
+    controller.workflow_state = _build_workflow_state(controller)
+    return message, True
 
 
 def _render_config_field_lines(form: dict[str, object]) -> list[str]:
@@ -672,82 +720,108 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for tab_spec in tab_specs:
                     with TabPane(tab_spec["title"], id=tab_spec["id"]):
                         with Vertical():
-                            yield Static(render_tab_text(tab_spec["title"], controller.workflow_state))
+                            yield Static(
+                                render_tab_text(tab_spec["title"], controller.workflow_state),
+                                id=_tab_body_id(tab_spec["title"]),
+                            )
             yield Footer()
 
+        def _refresh_all_tabs(self) -> None:
+            _refresh_tab_bodies(
+                list(controller.workflow_state["tabs"]),
+                controller.workflow_state,
+                lambda body_id, text: self.query_one(f"#{body_id}", Static).update(text),
+            )
+
+        def _run_tui_action(self, description: str, func: Callable[[], str | None]) -> None:
+            message, succeeded = _run_safe_tui_action(controller, description, func)
+            self._refresh_all_tabs()
+            if message:
+                self.notify(message)
+            elif succeeded and controller.action_state.status_message:
+                self.notify(str(controller.action_state.status_message))
+
         def action_reload_state(self) -> None:
-            controller.reload()
-            controller.workflow_state = _build_workflow_state(controller)
-            self.notify(str(controller.action_state.status_message))
+            self._run_tui_action("Reload state", lambda: (controller.reload(), str(controller.action_state.status_message))[1])
 
         def action_save_draft(self) -> None:
-            self.notify(controller.save_config().message)
+            self._run_tui_action("Save config draft", lambda: controller.save_config().message)
 
         def action_undo_save(self) -> None:
-            self.notify(controller.undo_config_save())
+            self._run_tui_action("Undo config save", controller.undo_config_save)
 
         def action_edit_config_field(self) -> None:
-            selected = controller.build_workbench_state().get("selected_config_field")
-            if not isinstance(selected, dict):
-                self.notify("No editable structured config fields are available.")
-                return
-            self.notify(f"Structured config field: {selected['key']} current={selected['current_value']}")
+            def _describe_selected_field() -> str:
+                selected = controller.build_workbench_state().get("selected_config_field")
+                if not isinstance(selected, dict):
+                    return "No editable structured config fields are available."
+                return f"Structured config field: {selected['key']} current={selected['current_value']}"
+
+            self._run_tui_action("Inspect config field", _describe_selected_field)
 
         def action_show_config_diff(self) -> None:
-            diff = controller.workflow_state["config_form"]["redacted_diff"] or controller.workflow_state["config_editor"]["redacted_diff"]
-            self.notify(diff or "No pending redacted config diff is available.")
+            self._run_tui_action(
+                "Show config diff",
+                lambda: controller.workflow_state["config_form"]["redacted_diff"]
+                or controller.workflow_state["config_editor"]["redacted_diff"]
+                or "No pending redacted config diff is available.",
+            )
 
         def action_cursor_down(self) -> None:
-            if controller.selection.active_tab == "Config":
-                controller.move_config_field(1)
-            else:
-                controller.move_candidate(1)
-            controller.workflow_state = _build_workflow_state(controller)
-            self.notify("Selection moved down.")
+            def _move_down() -> str:
+                if controller.selection.active_tab == "Config":
+                    controller.move_config_field(1)
+                else:
+                    controller.move_candidate(1)
+                return "Selection moved down."
+
+            self._run_tui_action("Move selection", _move_down)
 
         def action_cursor_up(self) -> None:
-            if controller.selection.active_tab == "Config":
-                controller.move_config_field(-1)
-            else:
-                controller.move_candidate(-1)
-            controller.workflow_state = _build_workflow_state(controller)
-            self.notify("Selection moved up.")
+            def _move_up() -> str:
+                if controller.selection.active_tab == "Config":
+                    controller.move_config_field(-1)
+                else:
+                    controller.move_candidate(-1)
+                return "Selection moved up."
+
+            self._run_tui_action("Move selection", _move_up)
 
         def action_confirm_selected(self) -> None:
-            detail = controller.preview_selected_candidate()
-            self.notify(str(detail))
+            self._run_tui_action("Inspect selected candidate", lambda: str(controller.preview_selected_candidate()))
 
         def action_cancel_pending(self) -> None:
-            controller.clear_pending_action()
-            controller.workflow_state = _build_workflow_state(controller)
-            self.notify("Pending action cleared.")
+            self._run_tui_action("Cancel pending action", lambda: (controller.clear_pending_action(), "Pending action cleared.")[1])
 
         def action_run_fetch(self) -> None:
-            self.notify(controller.handle_operation("fetch"))
+            self._run_tui_action("Run fetch", lambda: controller.handle_operation("fetch"))
 
         def action_run_probe(self) -> None:
-            self.notify(controller.handle_operation("probe"))
+            self._run_tui_action("Run probe", lambda: controller.handle_operation("probe"))
 
         def action_run_artifact_check(self) -> None:
-            self.notify(controller.handle_operation("artifact_check"))
+            self._run_tui_action("Run artifact check", lambda: controller.handle_operation("artifact_check"))
 
         def action_run_select(self) -> None:
-            self.notify(controller.handle_operation("choose_selected_candidate"))
+            self._run_tui_action("Choose selected candidate", lambda: controller.handle_operation("choose_selected_candidate"))
 
         def action_run_stage_sidecar(self) -> None:
-            self.notify(controller.handle_operation("sidecar_stage"))
+            self._run_tui_action("Stage sidecar", lambda: controller.handle_operation("sidecar_stage"))
 
         def action_run_validate_sidecar(self) -> None:
-            self.notify(controller.handle_operation("service_validate"))
+            self._run_tui_action("Validate sidecar", lambda: controller.handle_operation("service_validate"))
 
         def action_create_snapshot(self) -> None:
-            self.notify(controller.create_snapshot())
+            self._run_tui_action("Create snapshot", controller.create_snapshot_message)
 
         def action_rollback_latest_snapshot(self) -> None:
-            self.notify(controller.rollback_latest_snapshot())
+            self._run_tui_action("Rollback latest snapshot", controller.rollback_latest_snapshot)
 
         def action_show_help(self) -> None:
-            self.notify("Keys: q quit | r reload | j/k move | enter inspect | esc cancel | e edit field | d show diff | s save | u undo | f fetch | p probe | a artifact-check | c choose | g stage | v validate | x snapshot | z rollback | ? help")
+            self._run_tui_action(
+                "Show help",
+                lambda: "Keys: q quit | r reload | j/k move | enter inspect | esc cancel | e edit field | d show diff | s save | u undo | f fetch | p probe | a artifact-check | c choose | g stage | v validate | x snapshot | z rollback | ? help",
+            )
 
     ScholarOutboundWorkflowApp().run()
     return 0

@@ -103,29 +103,22 @@ def test_workflow_controller_requires_second_confirmation_before_network_action(
     """Network actions should not run on the first key press."""
     call_count = {"runs": 0}
 
-    def fake_load_workflow_state(**kwargs):
+    def fake_load_control_plane_state(**kwargs):
         del kwargs
-        return {
-            "control_plane": {
-                "command_state": {
-                    "operations": [
-                        {
-                            "key": "fetch",
-                            "title": "Fetch Candidates",
-                            "command": ["fetch"],
-                            "requires_confirmation": True,
-                            "network_access": True,
-                            "systemd_access": False,
-                            "sensitive_outputs": True,
-                            "expected_artifacts": ["candidates.json"],
-                            "success_exit_codes": [0],
-                            "description": "",
-                            "risk_note": None,
-                        }
-                    ]
-                }
-            }
-        }
+        state = _fake_control_plane_state()
+        state.command_state.operations = [
+            OperationSpec(
+                "fetch",
+                "Fetch Candidates",
+                ["fetch"],
+                True,
+                True,
+                False,
+                True,
+                ["candidates.json"],
+            )
+        ]
+        return state
 
     class DummyRunner:
         def run(self, spec, options):
@@ -147,7 +140,7 @@ def test_workflow_controller_requires_second_confirmation_before_network_action(
                 warnings=[],
             )
 
-    monkeypatch.setattr(tui_app, "load_workflow_state", fake_load_workflow_state)
+    monkeypatch.setattr("scholar_outbound_manager.tui.controller.load_control_plane_state", fake_load_control_plane_state)
     controller = tui_app.WorkflowController(
         loader_kwargs={},
         runner=DummyRunner(),
@@ -211,15 +204,46 @@ def test_workflow_controller_requires_confirmation_before_rollback(tmp_path, mon
     )
 
     monkeypatch.setattr(
-        tui_app,
-        "load_workflow_state",
-        lambda **kwargs: {"paths": {"config": "config.yaml", "candidates": "candidates.json", "probe_summary": "state_data/probe_summary.json", "passed_candidates": "state_data/passed_candidates.json", "selected_candidate": "state_data/selected_candidate.json", "pool_plan": "state_data/sidecar_pool_plan.json"}, "config_form": {"fields": []}, "config_editor": {"redacted_diff": ""}, "control_plane": {"command_state": {"operations": []}}},
+        "scholar_outbound_manager.tui.controller.load_control_plane_state",
+        lambda **kwargs: _fake_control_plane_state(config_path=str(tmp_path / "config.yaml")),
     )
     controller = tui_app.WorkflowController(loader_kwargs={}, snapshot_root=str(root))
 
     first = controller.rollback_latest_snapshot()
 
     assert "pending confirmation" in first.lower()
+
+
+def test_workflow_controller_create_snapshot_returns_artifact_snapshot(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "state_data" / "tui" / "artifact_snapshots"
+
+    def fake_load_control_plane_state(**kwargs):
+        del kwargs
+        return _fake_control_plane_state(config_path=str(tmp_path / "config.yaml"))
+
+    monkeypatch.setattr("scholar_outbound_manager.tui.controller.load_control_plane_state", fake_load_control_plane_state)
+    controller = tui_app.WorkflowController(loader_kwargs={}, snapshot_root=str(root))
+
+    snapshot = controller.create_snapshot("manual_test")
+
+    assert snapshot.snapshot_id.startswith("snap-")
+    assert snapshot.reason == "manual_test"
+
+
+def test_workflow_controller_create_snapshot_message_returns_user_string(tmp_path, monkeypatch) -> None:
+    def fake_load_control_plane_state(**kwargs):
+        del kwargs
+        return _fake_control_plane_state(config_path=str(tmp_path / "config.yaml"))
+
+    monkeypatch.setattr("scholar_outbound_manager.tui.controller.load_control_plane_state", fake_load_control_plane_state)
+    controller = tui_app.WorkflowController(
+        loader_kwargs={},
+        snapshot_root=str(tmp_path / "state_data" / "tui" / "artifact_snapshots"),
+    )
+
+    message = controller.create_snapshot_message("manual_test")
+
+    assert message.startswith("Created artifact snapshot snap-")
 
 
 def test_workflow_controller_can_update_state_via_config_field_patch(tmp_path, monkeypatch) -> None:
@@ -242,6 +266,95 @@ def test_workflow_controller_can_update_state_via_config_field_patch(tmp_path, m
 
     assert "probe.concurrency" in message
     assert len(load_calls) >= 2
+
+
+def test_refresh_tab_bodies_updates_selection_view_after_cursor_move() -> None:
+    updates: dict[str, str] = {}
+    workflow_state = {
+        "tabs": ["Selection"],
+        "selection": {
+            "sensitive_notice": "notice",
+            "selected_candidate_id": "candidate-002",
+            "selected_candidate_label": "label-2",
+            "selected_region_hint": "US",
+            "preferred_region_hint": None,
+            "selection_method": "manual",
+            "selection_reason": "operator",
+        },
+        "commands": {"select": "select ..."},
+        "operation_availability": {"select_available": True},
+        "workbench": {
+            "selection_rows": [
+                {
+                    "index": 0,
+                    "label": "label-1",
+                    "region": "JP",
+                    "protocol": "vless",
+                    "passed": True,
+                    "stage": "full_access",
+                    "home_status": 200,
+                    "query_status": 200,
+                    "failure_marker_count": 0,
+                    "candidate_id": "candidate-001",
+                    "selected": False,
+                },
+                {
+                    "index": 1,
+                    "label": "label-2",
+                    "region": "US",
+                    "protocol": "vless",
+                    "passed": True,
+                    "stage": "full_access",
+                    "home_status": 200,
+                    "query_status": 200,
+                    "failure_marker_count": 0,
+                    "candidate_id": "candidate-002",
+                    "selected": True,
+                },
+            ],
+            "selected_candidate_detail": {"candidate_id": "candidate-002", "label": "label-2"},
+        },
+    }
+
+    tui_app._refresh_tab_bodies(
+        ["Selection"],
+        workflow_state,
+        lambda body_id, text: updates.__setitem__(body_id, text),
+    )
+
+    rendered = updates["selection-body"]
+    assert "> #1 label-2" in rendered
+    assert "selected_candidate_detail: {'candidate_id': 'candidate-002'" in rendered
+
+
+def test_run_safe_tui_action_redacts_exception_details(tmp_path, monkeypatch) -> None:
+    def fake_load_control_plane_state(**kwargs):
+        del kwargs
+        return _fake_control_plane_state(config_path=str(tmp_path / "config.yaml"))
+
+    monkeypatch.setattr("scholar_outbound_manager.tui.controller.load_control_plane_state", fake_load_control_plane_state)
+    controller = tui_app.WorkflowController(loader_kwargs={})
+
+    message, succeeded = tui_app._run_safe_tui_action(
+        controller,
+        "Choose selected candidate",
+        lambda: (_ for _ in ()).throw(
+            ValueError(
+                "raw_uri=vless://00000000-0000-0000-0000-000000000000@example.internal:443 "
+                "server_name=secret.example.internal user_id=00000000-0000-0000-0000-000000000000 "
+                "address=secret.example.internal path=/credential-bearing"
+            )
+        ),
+    )
+
+    assert succeeded is False
+    assert message is not None
+    assert "00000000-0000-0000-0000-000000000000" not in message
+    assert "secret.example.internal" not in message
+    assert "vless://" not in message
+    assert "/credential-bearing" not in message
+    assert controller.message is not None
+    assert controller.message.level == "error"
 
 
 def test_render_dashboard_and_config_tabs_show_reason_and_field_safety() -> None:
