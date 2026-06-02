@@ -69,6 +69,8 @@ def test_tui_key_bindings_cover_expected_controls() -> None:
 
     assert bindings["q"] == "quit"
     assert bindings["r"] == "reload_state"
+    assert bindings["e"] == "edit_config_field"
+    assert bindings["d"] == "show_config_diff"
     assert bindings["s"] == "save_draft"
     assert bindings["u"] == "undo_save"
     assert bindings["f"] == "run_fetch"
@@ -77,6 +79,8 @@ def test_tui_key_bindings_cover_expected_controls() -> None:
     assert bindings["c"] == "run_select"
     assert bindings["g"] == "run_stage_sidecar"
     assert bindings["v"] == "run_validate_sidecar"
+    assert bindings["x"] == "create_snapshot"
+    assert bindings["z"] == "rollback_latest_snapshot"
     assert bindings["?"] == "show_help"
 
 
@@ -198,4 +202,57 @@ def test_workflow_controller_confirms_fake_action_and_reloads_state(tmp_path, mo
     assert "artifact check ok" in message
     assert controller.action_state.last_result is not None
     assert controller.action_state.last_result.key == "artifact_check"
+    assert len(load_calls) >= 2
+
+
+def test_workflow_controller_requires_confirmation_before_rollback(tmp_path, monkeypatch) -> None:
+    """Artifact rollback should require a second confirmation press."""
+    root = tmp_path / "state_data" / "tui" / "artifact_snapshots"
+    snapshot_dir = root / "snap-20260602-000000-deadbe"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    (snapshot_dir / "snapshot.json").write_text(
+        '{"schema_version":1,"snapshot_id":"snap-20260602-000000-deadbe","created_at":"2026-06-02T00:00:00Z","reason":"test","files":{}}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        tui_app,
+        "load_workflow_state",
+        lambda **kwargs: {"paths": {"config": "config.yaml", "candidates": "candidates.json", "probe_summary": "state_data/probe_summary.json", "passed_candidates": "state_data/passed_candidates.json", "selected_candidate": "state_data/selected_candidate.json", "pool_plan": "state_data/sidecar_pool_plan.json"}, "config_form": {"fields": []}, "config_editor": {"redacted_diff": ""}, "control_plane": {"command_state": {"operations": []}}},
+    )
+    controller = tui_app.WorkflowController(loader_kwargs={}, snapshot_root=str(root))
+
+    first = controller.rollback_latest_snapshot()
+
+    assert "pending confirmation" in first.lower()
+
+
+def test_workflow_controller_can_update_state_via_config_field_patch(tmp_path, monkeypatch) -> None:
+    """Controller field updates should route through the structured config form path and refresh state."""
+    load_calls: list[int] = []
+
+    def fake_load_workflow_state(**kwargs):
+        del kwargs
+        load_calls.append(1)
+        return {
+            "paths": {
+                "config": str(tmp_path / "config.yaml"),
+                "candidates": "candidates.json",
+                "probe_summary": "state_data/probe_summary.json",
+                "passed_candidates": "state_data/passed_candidates.json",
+                "selected_candidate": "state_data/selected_candidate.json",
+                "pool_plan": "state_data/sidecar_pool_plan.json",
+            },
+            "config_form": {"fields": [{"key": "probe.concurrency", "current_value": 1}], "redacted_diff": ""},
+            "config_editor": {"redacted_diff": ""},
+            "control_plane": {"command_state": {"operations": []}},
+        }
+
+    monkeypatch.setattr(tui_app, "load_workflow_state", fake_load_workflow_state)
+    monkeypatch.setattr(tui_app, "apply_config_form_patch", lambda *args, **kwargs: None)
+    controller = tui_app.WorkflowController(loader_kwargs={})
+
+    message = controller.update_config_field("probe.concurrency", 4)
+
+    assert "probe.concurrency" in message
     assert len(load_calls) >= 2

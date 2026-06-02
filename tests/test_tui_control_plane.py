@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from scholar_outbound_manager.tui.control_plane import control_plane_state_to_dict
 from scholar_outbound_manager.tui.control_plane import load_control_plane_state
@@ -49,11 +50,13 @@ def test_control_plane_state_contains_expected_sections_and_command_previews(tmp
     )
 
     assert state.config_state.exists is True
+    assert state.config_form_state.fields
     assert state.artifact_state.candidates_exists is True
     assert state.command_state.fetch_command_preview.startswith("scholar-outbound-manager fetch")
     assert state.command_state.select_command_preview.startswith("scholar-outbound-manager select choose")
     assert state.workflow_state.next_recommended_action
     assert state.operation_availability.fetch_available is True
+    assert state.operation_availability.config_save_available is True
 
 
 def test_control_plane_state_does_not_leak_secret_values(tmp_path: Path) -> None:
@@ -119,6 +122,41 @@ def test_control_plane_loads_last_action_from_review_safe_journal(tmp_path: Path
     assert "password=<REDACTED>" in state.last_action["redacted_stderr_tail"]
 
 
+def test_control_plane_exposes_snapshot_metadata_and_rollback_availability(tmp_path: Path) -> None:
+    """Latest snapshot metadata should appear in passive control-plane state."""
+    candidates_path = _write_passed_candidates(tmp_path)
+    config_path = _write_config(tmp_path)
+    snapshot_root = tmp_path / "state_data" / "tui" / "artifact_snapshots"
+    snapshot_dir = snapshot_root / "snap-20260602-000000-abcd12"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    (snapshot_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "snapshot_id": "snap-20260602-000000-abcd12",
+                "created_at": "2026-06-02T00:00:00Z",
+                "reason": "pre_probe",
+                "files": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = load_control_plane_state(
+        config_path=str(config_path),
+        candidates_path=str(candidates_path),
+        passed_candidates_path=str(candidates_path),
+        probe_summary_path=str(tmp_path / "probe_summary.json"),
+        selected_candidate_path=str(tmp_path / "selected_candidate.json"),
+        session_path=str(tmp_path / "tui_session.json"),
+        snapshot_root=str(snapshot_root),
+    )
+
+    assert state.artifact_state.snapshot_count == 1
+    assert state.artifact_state.latest_snapshot_id == "snap-20260602-000000-abcd12"
+    assert state.operation_availability.artifact_rollback_available is True
+
+
 def test_control_plane_next_recommended_action_tracks_artifact_progression(tmp_path: Path) -> None:
     """Recommend fetch, probe, or select according to current artifact presence."""
     config_path = _write_config(tmp_path)
@@ -155,6 +193,36 @@ def test_control_plane_next_recommended_action_tracks_artifact_progression(tmp_p
     )
     assert "choose one passed candidate" in select_state.workflow_state.next_recommended_action.lower()
     assert select_state.operation_availability.select_available is True
+
+
+def test_control_plane_next_recommended_action_prefers_fix_or_save_config(tmp_path: Path) -> None:
+    """Config invalidity or dirty form state should outrank downstream workflow steps."""
+    config_path = _write_config(tmp_path)
+
+    invalid_state = load_control_plane_state(
+        config_path=str(tmp_path / "missing-config.yaml"),
+        candidates_path=str(tmp_path / "candidates.json"),
+        passed_candidates_path=str(tmp_path / "passed_candidates.json"),
+        probe_summary_path=str(tmp_path / "probe_summary.json"),
+        selected_candidate_path=str(tmp_path / "selected_candidate.json"),
+        session_path=str(tmp_path / "tui_session.json"),
+    )
+    assert "create or point the tui" in invalid_state.workflow_state.next_recommended_action.lower()
+
+    config_path = _write_config(tmp_path)
+    with patch(
+        "scholar_outbound_manager.tui.control_plane.build_config_form_state",
+        return_value=type("DummyForm", (), {"fields": [], "dirty": True, "valid": True, "validation_errors": [], "redacted_diff": "diff"})(),
+    ):
+        dirty_state = load_control_plane_state(
+            config_path=str(config_path),
+            candidates_path=str(tmp_path / "candidates.json"),
+            passed_candidates_path=str(tmp_path / "passed_candidates.json"),
+            probe_summary_path=str(tmp_path / "probe_summary.json"),
+            selected_candidate_path=str(tmp_path / "selected_candidate.json"),
+            session_path=str(tmp_path / "tui_session.json"),
+        )
+    assert "save config changes" in dirty_state.workflow_state.next_recommended_action.lower()
 
 
 def _write_passed_candidates(tmp_path: Path) -> Path:

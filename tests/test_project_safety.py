@@ -151,6 +151,13 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "undo currently applies to config saves only" in readme_text.lower()
     assert "artifact rollback is not implemented in tui-3" in readme_text.lower()
     assert "sidecar runtime rollback remains future work" in readme_text.lower()
+    assert "structured config editing" in readme_text.lower()
+    assert "the tui edits only a safe allowlist of config fields" in readme_text.lower()
+    assert "subscription urls, proxy credentials, raw uris, uuids, public keys, tokens, passwords" in readme_text.lower()
+    assert "structured config changes are validated before atomic save" in readme_text.lower()
+    assert "artifact snapshots and rollback" in readme_text.lower()
+    assert "state_data/tui/artifact_snapshots/" in readme_text.lower()
+    assert "artifact rollback restores local artifact files only" in readme_text.lower()
     assert "web panel security model" in readme_text.lower()
     assert 'pip install "scholaroutboundmanager[web]"' in readme_text.lower()
     assert "scholar-outbound-manager web user-init --username admin --password-stdin" in readme_text.lower()
@@ -264,3 +271,20 @@ def test_action_journal_path_is_not_tracked() -> None:
     )
 
     assert tracked.returncode != 0
+
+
+def test_sensitive_tui_paths_are_not_tracked() -> None:
+    """Keep sensitive TUI rollback and undo paths out of tracked files."""
+    for path in (
+        "state_data/tui/config_undo_journal.jsonl",
+        "state_data/tui/artifact_snapshots",
+    ):
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", path],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            shell=False,
+        )
+        assert tracked.returncode != 0

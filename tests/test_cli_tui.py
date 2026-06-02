@@ -18,6 +18,7 @@ from scholar_outbound_manager.tui.control_plane import SelectionState
 from scholar_outbound_manager.tui.control_plane import SidecarState
 from scholar_outbound_manager.tui.control_plane import WorkflowModelState
 from scholar_outbound_manager.tui.commands import OperationSpec
+from scholar_outbound_manager.tui.config_form import ConfigFormState
 
 
 def test_cli_tui_missing_textual_gives_install_hint(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -203,7 +204,8 @@ def test_load_workflow_state_uses_control_plane_loader(monkeypatch) -> None:
         workspace="/tmp/workspace",
         tabs=["Dashboard", "Config"],
         config_state=ConfigState(True, True, False, False, "preview", "", [], 1, False, "dedicated_inbound", True),
-        artifact_state=ArtifactState(True, False, False, False, None, None, [], None, None, None),
+        config_form_state=ConfigFormState(fields=[], dirty=False, valid=True, validation_errors=[], redacted_diff=""),
+        artifact_state=ArtifactState(True, False, False, False, None, None, [], None, None, None, 0, None, None),
         selection_state=SelectionState([], None, None, None, None, None, None),
         workflow_state=WorkflowModelState([], None, "next action"),
         command_state=CommandState(
@@ -218,7 +220,7 @@ def test_load_workflow_state_uses_control_plane_loader(monkeypatch) -> None:
             "pool",
             [OperationSpec("fetch", "Fetch", ["cmd"], True, True, False, True, ["out"])],
         ),
-        operation_availability=OperationAvailability(True, False, False, False, False, False, False, True),
+        operation_availability=OperationAvailability(True, False, False, False, False, False, False, True, False, False, True, False),
         sidecar_state=SidecarState("unknown", "unknown", "unknown", "unknown", "warn", True, "/usr/local/bin/xray"),
         pool_state=PoolState(False, [], "warn"),
         warnings=["live warning"],

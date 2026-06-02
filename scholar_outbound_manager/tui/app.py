@@ -12,14 +12,21 @@ from scholar_outbound_manager.selection import build_selected_candidate_artifact
 from scholar_outbound_manager.selection import load_candidate_payload
 from scholar_outbound_manager.selection import select_candidate_by_index
 from scholar_outbound_manager.selection import write_selected_candidate_artifact
+from scholar_outbound_manager.tui.artifact_rollback import create_artifact_snapshot
+from scholar_outbound_manager.tui.artifact_rollback import list_artifact_snapshots
+from scholar_outbound_manager.tui.artifact_rollback import rollback_artifact_snapshot
 from scholar_outbound_manager.tui.action_runner import ActionResult
 from scholar_outbound_manager.tui.action_runner import ActionRunOptions
 from scholar_outbound_manager.tui.action_runner import ActionRunner
 from scholar_outbound_manager.tui.action_runner import FakeActionRunner
 from scholar_outbound_manager.tui.action_runner import SubprocessActionRunner
 from scholar_outbound_manager.tui.action_runner import append_action_journal
+from scholar_outbound_manager.tui.config_editor import undo_last_config_save
+from scholar_outbound_manager.tui.config_form import apply_config_form_patch
+from scholar_outbound_manager.tui.config_form import build_config_patch_from_field_update
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ACTION_JOURNAL_PATH
+from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT
 from scholar_outbound_manager.tui.control_plane import ControlPlaneState
 from scholar_outbound_manager.tui.control_plane import control_plane_state_to_dict
 from scholar_outbound_manager.tui.control_plane import load_control_plane_state
@@ -32,6 +39,8 @@ from scholar_outbound_manager.tui.workflow import MAIN_TABS
 TUI_KEY_BINDINGS: tuple[tuple[str, str, str], ...] = (
     ("q", "quit", "Quit"),
     ("r", "reload_state", "Reload State"),
+    ("e", "edit_config_field", "Edit Config Field"),
+    ("d", "show_config_diff", "Show Config Diff"),
     ("s", "save_draft", "Save Draft"),
     ("u", "undo_save", "Undo Save"),
     ("f", "run_fetch", "Run Fetch"),
@@ -40,6 +49,8 @@ TUI_KEY_BINDINGS: tuple[tuple[str, str, str], ...] = (
     ("c", "run_select", "Run Select"),
     ("g", "run_stage_sidecar", "Run Stage Sidecar"),
     ("v", "run_validate_sidecar", "Run Validate"),
+    ("x", "create_snapshot", "Create Snapshot"),
+    ("z", "rollback_latest_snapshot", "Rollback Latest Snapshot"),
     ("?", "show_help", "Help"),
 )
 
@@ -60,10 +71,12 @@ class WorkflowController:
         loader_kwargs: dict[str, object],
         runner: ActionRunner | None = None,
         action_journal_path: str = DEFAULT_TUI_ACTION_JOURNAL_PATH,
+        snapshot_root: str = DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT,
     ) -> None:
         self._loader_kwargs = dict(loader_kwargs)
         self._runner = SubprocessActionRunner() if runner is None else runner
         self._action_journal_path = action_journal_path
+        self._snapshot_root = snapshot_root
         self.workflow_state = load_workflow_state(**self._loader_kwargs)
         self.action_state = WorkflowActionState(pending_confirmation=None, last_result=None, status_message=None)
 
@@ -89,6 +102,51 @@ class WorkflowController:
         self.action_state.status_message = self._summarize_result(result)
         return str(self.action_state.status_message)
 
+    def update_config_field(self, field_key: str, value: object) -> str:
+        patch = build_config_patch_from_field_update(field_key, value)
+        config_path = str(self.workflow_state["paths"]["config"])
+        apply_config_form_patch(config_path, patch)
+        self.workflow_state = load_workflow_state(**self._loader_kwargs)
+        self.action_state.status_message = f"Updated config field {field_key} through the structured form."
+        return str(self.action_state.status_message)
+
+    def undo_config_save(self) -> str:
+        config_path = str(self.workflow_state["paths"]["config"])
+        result = undo_last_config_save(config_path=config_path)
+        self.workflow_state = load_workflow_state(**self._loader_kwargs)
+        self.action_state.status_message = result.message
+        return result.message
+
+    def create_snapshot(self, reason: str = "manual_tui_snapshot") -> str:
+        snapshot = create_artifact_snapshot(
+            reason=reason,
+            snapshot_root=self._snapshot_root,
+            candidates_path=str(self.workflow_state["paths"]["candidates"]),
+            probe_summary_path=str(self.workflow_state["paths"]["probe_summary"]),
+            passed_candidates_path=str(self.workflow_state["paths"]["passed_candidates"]),
+            selected_candidate_path=str(self.workflow_state["paths"]["selected_candidate"]),
+            pool_plan_path=str(self.workflow_state["paths"]["pool_plan"]),
+        )
+        self.workflow_state = load_workflow_state(**self._loader_kwargs)
+        self.action_state.status_message = f"Created artifact snapshot {snapshot.snapshot_id}."
+        return str(self.action_state.status_message)
+
+    def rollback_latest_snapshot(self) -> str:
+        snapshots = list_artifact_snapshots(self._snapshot_root)
+        if not snapshots:
+            self.action_state.status_message = "No artifact snapshot is available for rollback."
+            return str(self.action_state.status_message)
+        pending_key = "artifact_rollback"
+        if self.action_state.pending_confirmation != pending_key:
+            self.action_state.pending_confirmation = pending_key
+            self.action_state.status_message = "Pending confirmation: press rollback again to restore the latest local artifact snapshot."
+            return str(self.action_state.status_message)
+        self.action_state.pending_confirmation = None
+        result = rollback_artifact_snapshot(snapshots[0].snapshot_id, snapshot_root=self._snapshot_root)
+        self.workflow_state = load_workflow_state(**self._loader_kwargs)
+        self.action_state.status_message = result.message
+        return result.message
+
     def _find_operation(self, operation_key: str):
         operations = self.workflow_state["control_plane"]["command_state"]["operations"]
         for operation in operations:
@@ -97,12 +155,21 @@ class WorkflowController:
         return None
 
     def _build_run_options(self, spec) -> ActionRunOptions:
+        paths = self.workflow_state.get("paths", {})
         return ActionRunOptions(
             cwd=None,
             timeout_seconds=30.0,
             allow_network=spec.network_access,
             allow_systemd=spec.systemd_access,
             allow_sensitive_artifact_write=spec.sensitive_outputs,
+            snapshot_root=self._snapshot_root,
+            artifact_paths={
+                "candidates": str(paths.get("candidates", "candidates.json")),
+                "probe_summary": str(paths.get("probe_summary", "state_data/probe_summary.json")),
+                "passed_candidates": str(paths.get("passed_candidates", "state_data/passed_candidates.json")),
+                "selected_candidate": str(paths.get("selected_candidate", "state_data/selected_candidate.json")),
+                "pool_plan": str(paths.get("pool_plan", "state_data/sidecar_pool_plan.json")),
+            },
         )
 
     def _summarize_result(self, result: ActionResult) -> str:
@@ -225,6 +292,7 @@ def load_workflow_state(
     pool_plan_path: str = "state_data/sidecar_pool_plan.json",
     session_path: str = DEFAULT_TUI_SESSION_PATH,
     action_journal_path: str = DEFAULT_TUI_ACTION_JOURNAL_PATH,
+    snapshot_root: str = DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT,
     output_path: str = "state_data/selected_candidate.json",
     strategy: str = "auto",
     geo_cache_path: str = "state_data/geo/candidate_geo_cache.json",
@@ -242,6 +310,7 @@ def load_workflow_state(
         pool_plan_path=pool_plan_path,
         session_path=session_path,
         action_journal_path=action_journal_path,
+        snapshot_root=snapshot_root,
         output_path=output_path,
         strategy=strategy,
         geo_cache_path=geo_cache_path,
@@ -277,6 +346,8 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
             "current_sidecar_port": payload["current_sidecar_port"],
             "next_recommended_action": payload["workflow_state"]["next_recommended_action"],
             "last_action": payload["last_action"],
+            "snapshot_count": payload["artifact_state"]["snapshot_count"],
+            "latest_snapshot_id": payload["artifact_state"]["latest_snapshot_id"],
         },
         "wizard_steps": payload["workflow_state"]["steps"],
         "paths": payload["session"]["paths"],
@@ -292,6 +363,9 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
             "passed_candidates_hash": payload["artifact_state"]["passed_candidates_hash"],
             "artifact_check": payload["artifact_state"]["artifact_check"],
             "warnings": payload["artifact_state"]["warnings"],
+            "snapshot_count": payload["artifact_state"]["snapshot_count"],
+            "latest_snapshot_id": payload["artifact_state"]["latest_snapshot_id"],
+            "latest_snapshot_reason": payload["artifact_state"]["latest_snapshot_reason"],
         },
         "preflight": {
             "config_exists": payload["config_state"]["exists"],
@@ -314,6 +388,7 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
             "undo_available": payload["config_state"]["undo_available"],
             "last_saved_at": None,
         },
+        "config_form": payload["config_form_state"],
         "selection": {
             "rows": payload["selection_state"]["rows"],
             "selected_candidate_id": payload["selection_state"]["selected_candidate_id"],
@@ -361,10 +436,13 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"selected_candidate_label: {dashboard['selected_candidate_label']}",
                 f"next_recommended_action: {dashboard['next_recommended_action']}",
                 f"last_action: {dashboard['last_action']}",
+                f"snapshot_count: {dashboard['snapshot_count']}",
+                f"latest_snapshot_id: {dashboard['latest_snapshot_id']}",
             ]
         )
     if tab == "Config":
         editor = workflow_state["config_editor"]
+        form = workflow_state["config_form"]
         return "\n".join(
             [
                 "Step 1: Config",
@@ -372,9 +450,12 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"config valid: {workflow_state['preflight']['config_valid']}",
                 f"validation errors: {workflow_state['preflight']['config_validation_errors']}",
                 f"undo_available: {editor['undo_available']}",
+                f"config_save_available: {workflow_state['operation_availability']['config_save_available']}",
+                f"config_undo_available: {workflow_state['operation_availability']['config_undo_available']}",
+                f"fields: {form['fields']}",
                 "Preview:",
-                editor["redacted_diff"] or editor["redacted_preview"],
-                "Hints: q quit | r reload | f fetch | p probe | a artifact-check | c select | g stage | v validate | s save | u undo | ? help",
+                form["redacted_diff"] or editor["redacted_diff"] or editor["redacted_preview"],
+                "Hints: q quit | r reload | e edit field | d show diff | s save | u undo | x snapshot | z rollback | ? help",
             ]
         )
     if tab == "Fetch & Probe":
@@ -393,10 +474,16 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"artifact check: {workflow_state['commands']['artifact_check']}",
                 f"artifact result: {workflow_state['artifacts']['artifact_check']}",
                 f"artifact_check_available: {workflow_state['operation_availability']['artifact_check_available']}",
+                f"snapshot_count: {workflow_state['artifacts']['snapshot_count']}",
+                f"latest_snapshot_id: {workflow_state['artifacts']['latest_snapshot_id']}",
+                f"latest_snapshot_reason: {workflow_state['artifacts']['latest_snapshot_reason']}",
+                f"artifact_snapshot_available: {workflow_state['operation_availability']['artifact_snapshot_available']}",
+                f"artifact_rollback_available: {workflow_state['operation_availability']['artifact_rollback_available']}",
                 f"candidates_hash: {workflow_state['artifacts']['candidates_hash']}",
                 f"probe_summary_hash: {workflow_state['artifacts']['probe_summary_hash']}",
                 f"passed_candidates_hash: {workflow_state['artifacts']['passed_candidates_hash']}",
                 f"warnings: {workflow_state['artifacts']['warnings']}",
+                "rollback_warning: rollback restores local artifacts only and does not undo network or systemd side effects.",
             ]
         )
     if tab == "Selection":
@@ -505,6 +592,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "pool_plan_path": args.pool_plan,
             "session_path": args.session,
             "action_journal_path": DEFAULT_TUI_ACTION_JOURNAL_PATH,
+            "snapshot_root": DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT,
             "output_path": args.output,
             "strategy": args.strategy,
             "geo_cache_path": args.geo_cache,
@@ -545,10 +633,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.notify(str(controller.action_state.status_message))
 
         def action_save_draft(self) -> None:
-            self.notify("Config save remains an explicit future action in this phase.")
+            self.notify("Structured config saves are available through the controller field update path in this phase.")
 
         def action_undo_save(self) -> None:
-            self.notify("Undo remains an explicit future action in this phase.")
+            self.notify(controller.undo_config_save())
+
+        def action_edit_config_field(self) -> None:
+            form_fields = controller.workflow_state["config_form"]["fields"]
+            if not form_fields:
+                self.notify("No editable structured config fields are available.")
+                return
+            first_field = form_fields[0]
+            self.notify(f"Structured config field available: {first_field['key']} current={first_field['current_value']}")
+
+        def action_show_config_diff(self) -> None:
+            diff = controller.workflow_state["config_form"]["redacted_diff"] or controller.workflow_state["config_editor"]["redacted_diff"]
+            self.notify(diff or "No pending redacted config diff is available.")
 
         def action_run_fetch(self) -> None:
             self.notify(controller.handle_operation("fetch"))
@@ -568,8 +668,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         def action_run_validate_sidecar(self) -> None:
             self.notify(controller.handle_operation("service_validate"))
 
+        def action_create_snapshot(self) -> None:
+            self.notify(controller.create_snapshot())
+
+        def action_rollback_latest_snapshot(self) -> None:
+            self.notify(controller.rollback_latest_snapshot())
+
         def action_show_help(self) -> None:
-            self.notify("Keys: q quit | r reload | f fetch | p probe | a artifact-check | c select | g stage | v validate | s save | u undo | ? help")
+            self.notify("Keys: q quit | r reload | e edit field | d show diff | s save | u undo | f fetch | p probe | a artifact-check | c select | g stage | v validate | x snapshot | z rollback | ? help")
 
     ScholarOutboundWorkflowApp().run()
     return 0

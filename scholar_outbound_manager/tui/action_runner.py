@@ -11,8 +11,10 @@ from datetime import timezone
 from pathlib import Path
 from typing import Protocol
 
+from scholar_outbound_manager.tui.artifact_rollback import create_artifact_snapshot
 from scholar_outbound_manager.tui.commands import OperationSpec
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ACTION_JOURNAL_PATH
+from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT
 from scholar_outbound_manager.tui.view_model import redact_text
 
 
@@ -36,6 +38,8 @@ class ActionResult:
     summary: str
     expected_artifacts: list[str]
     warnings: list[str]
+    snapshot_id: str | None = None
+    rollback_hint: str | None = None
 
 
 @dataclass(slots=True)
@@ -46,6 +50,8 @@ class ActionRunOptions:
     allow_network: bool = False
     allow_systemd: bool = False
     allow_sensitive_artifact_write: bool = False
+    snapshot_root: str | None = DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT
+    artifact_paths: dict[str, str] | None = None
 
 
 class ActionRunner(Protocol):
@@ -61,6 +67,7 @@ class SubprocessActionRunner:
         gate_error = _gate_operation(spec, options)
         if gate_error is not None:
             return _failed_result(spec, started_at=started_at, exit_code=SAFE_FAILURE_EXIT_CODE, stderr=gate_error)
+        snapshot_id = _maybe_snapshot(spec, options)
         env = None if options.env is None else {**os.environ, **options.env}
         try:
             completed = subprocess.run(
@@ -84,6 +91,7 @@ class SubprocessActionRunner:
                 stdout=stdout,
                 stderr=stderr,
                 warnings=["Operation timed out before completion."],
+                snapshot_id=snapshot_id,
             )
         return _build_result(
             spec,
@@ -93,6 +101,7 @@ class SubprocessActionRunner:
             stdout=completed.stdout or "",
             stderr=completed.stderr or "",
             warnings=[],
+            snapshot_id=snapshot_id,
         )
 
 
@@ -144,6 +153,8 @@ def append_action_journal(
         "redacted_stderr": result.redacted_stderr,
         "expected_artifacts": list(result.expected_artifacts),
         "warnings": list(result.warnings),
+        "snapshot_id": result.snapshot_id,
+        "rollback_hint": result.rollback_hint,
     }
     rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -180,6 +191,8 @@ def load_last_action(
         "redacted_stdout_tail": _tail(str(last_payload.get("redacted_stdout") or "")),
         "redacted_stderr_tail": _tail(str(last_payload.get("redacted_stderr") or "")),
         "warnings": list(last_payload.get("warnings") or []),
+        "snapshot_id": last_payload.get("snapshot_id"),
+        "rollback_hint": last_payload.get("rollback_hint"),
     }
 
 
@@ -202,10 +215,12 @@ def _build_result(
     stdout: str,
     stderr: str,
     warnings: list[str],
+    snapshot_id: str | None = None,
 ) -> ActionResult:
     redacted_stdout = redact_action_output(stdout)
     redacted_stderr = redact_action_output(stderr)
     succeeded = exit_code in spec.success_exit_codes
+    rollback_hint = None if succeeded or snapshot_id is None else "Use artifact rollback to restore previous local artifacts. This does not undo network or systemd side effects."
     return ActionResult(
         key=spec.key,
         title=spec.title,
@@ -221,6 +236,8 @@ def _build_result(
         summary=_summarize(title=spec.title, exit_code=exit_code, success=succeeded),
         expected_artifacts=list(spec.expected_artifacts),
         warnings=list(warnings),
+        snapshot_id=snapshot_id,
+        rollback_hint=rollback_hint,
     )
 
 
@@ -241,6 +258,23 @@ def _failed_result(
         stderr=stderr,
         warnings=[stderr],
     )
+
+
+def _maybe_snapshot(spec: OperationSpec, options: ActionRunOptions) -> str | None:
+    if spec.key not in {"fetch", "probe", "select", "pool_stage"}:
+        return None
+    if options.snapshot_root is None:
+        return None
+    snapshot = create_artifact_snapshot(
+        reason=f"pre_{spec.key}",
+        snapshot_root=options.snapshot_root,
+        candidates_path=(options.artifact_paths or {}).get("candidates", "candidates.json"),
+        probe_summary_path=(options.artifact_paths or {}).get("probe_summary", "state_data/probe_summary.json"),
+        passed_candidates_path=(options.artifact_paths or {}).get("passed_candidates", "state_data/passed_candidates.json"),
+        selected_candidate_path=(options.artifact_paths or {}).get("selected_candidate", "state_data/selected_candidate.json"),
+        pool_plan_path=(options.artifact_paths or {}).get("pool_plan", "state_data/sidecar_pool_plan.json"),
+    )
+    return snapshot.snapshot_id
 
 
 def _summarize(*, title: str, exit_code: object, success: bool) -> str:

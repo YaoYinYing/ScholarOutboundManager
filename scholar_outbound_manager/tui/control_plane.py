@@ -9,6 +9,7 @@ from pathlib import Path
 
 from scholar_outbound_manager.config import ConfigError
 from scholar_outbound_manager.config import load_config
+from scholar_outbound_manager.tui.artifact_rollback import list_artifact_snapshots
 from scholar_outbound_manager.selection import build_candidate_catalog
 from scholar_outbound_manager.selection import load_candidate_payload
 from scholar_outbound_manager.selection import load_selected_candidate_artifact
@@ -29,7 +30,10 @@ from scholar_outbound_manager.tui.commands import build_service_stage_command
 from scholar_outbound_manager.tui.commands import build_service_validate_command
 from scholar_outbound_manager.tui.commands import build_snippet_warning
 from scholar_outbound_manager.tui.commands import preview_command
+from scholar_outbound_manager.tui.config_form import ConfigFormState
+from scholar_outbound_manager.tui.config_form import build_config_form_state
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ACTION_JOURNAL_PATH
+from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT
 from scholar_outbound_manager.tui.config_editor import has_undo_journal_entry
 from scholar_outbound_manager.tui.config_editor import load_config_draft
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
@@ -74,6 +78,9 @@ class ArtifactState:
     candidates_hash: str | None
     probe_summary_hash: str | None
     passed_candidates_hash: str | None
+    snapshot_count: int
+    latest_snapshot_id: str | None
+    latest_snapshot_reason: str | None
 
 
 @dataclass(slots=True)
@@ -118,6 +125,10 @@ class OperationAvailability:
     service_restart_available: bool
     service_validate_available: bool
     snippet_available: bool
+    config_save_available: bool
+    config_undo_available: bool
+    artifact_snapshot_available: bool
+    artifact_rollback_available: bool
 
 
 @dataclass(slots=True)
@@ -143,6 +154,7 @@ class ControlPlaneState:
     workspace: str
     tabs: list[str]
     config_state: ConfigState
+    config_form_state: ConfigFormState
     artifact_state: ArtifactState
     selection_state: SelectionState
     workflow_state: WorkflowModelState
@@ -170,6 +182,7 @@ def load_control_plane_state(
     pool_plan_path: str = "state_data/sidecar_pool_plan.json",
     session_path: str = DEFAULT_TUI_SESSION_PATH,
     action_journal_path: str = DEFAULT_TUI_ACTION_JOURNAL_PATH,
+    snapshot_root: str = DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT,
     output_path: str = "state_data/selected_candidate.json",
     strategy: str = "auto",
     geo_cache_path: str = "state_data/geo/candidate_geo_cache.json",
@@ -186,6 +199,10 @@ def load_control_plane_state(
             config_draft = load_config_draft(config_path)
         except Exception:
             config_draft = None
+    try:
+        config_form_state = build_config_form_state(config_path)
+    except Exception:
+        config_form_state = ConfigFormState(fields=[], dirty=False, valid=False, validation_errors=[], redacted_diff="")
     undo_available = has_undo_journal_entry(config_path=config_path, undo_journal_path=DEFAULT_TUI_UNDO_JOURNAL_PATH)
 
     parsed_config = None
@@ -246,6 +263,8 @@ def load_control_plane_state(
         )
     overall_consistent = None if artifact_check is None else artifact_check.get("overall_consistent")
     warnings = [] if artifact_check is None else list(artifact_check.get("warnings") or [])
+    snapshots = list_artifact_snapshots(snapshot_root)
+    latest_snapshot = snapshots[0] if snapshots else None
 
     config_state = ConfigState(
         exists=config_exists,
@@ -271,6 +290,9 @@ def load_control_plane_state(
         candidates_hash=_try_compute_artifact_hash(candidates_path),
         probe_summary_hash=_try_compute_artifact_hash(probe_summary_path),
         passed_candidates_hash=_try_compute_artifact_hash(passed_candidates_path),
+        snapshot_count=len(snapshots),
+        latest_snapshot_id=None if latest_snapshot is None else latest_snapshot.snapshot_id,
+        latest_snapshot_reason=None if latest_snapshot is None else latest_snapshot.reason,
     )
     selection_state = SelectionState(
         rows=rows,
@@ -383,6 +405,18 @@ def load_control_plane_state(
                 risk_note="Writes local runtime artifacts.",
             ),
             OperationSpec(
+                key="pool_stage",
+                title="Stage Sidecar Pool",
+                command=pool_stage_command,
+                requires_confirmation=True,
+                network_access=False,
+                systemd_access=False,
+                sensitive_outputs=True,
+                expected_artifacts=[pool_plan_path],
+                description="Prepare the managed multi-port sidecar pool plan and runtime files.",
+                risk_note="Writes local pool plan artifacts.",
+            ),
+            OperationSpec(
                 key="service_restart",
                 title="Restart Sidecar Service",
                 command=service_restart_command,
@@ -437,6 +471,7 @@ def load_control_plane_state(
         blocking_reason=blocking_reason,
         next_recommended_action=_next_recommended_action(
             config_state=config_state,
+            config_form_state=config_form_state,
             artifact_state=artifact_state,
             selection_state=selection_state,
             selected_candidate_exists=Path(selected_candidate_path).exists(),
@@ -483,6 +518,10 @@ def load_control_plane_state(
         service_restart_available=Path(selected_candidate_path).exists(),
         service_validate_available=Path(selected_candidate_path).exists(),
         snippet_available=True,
+        config_save_available=config_form_state.valid and config_state.exists,
+        config_undo_available=undo_available,
+        artifact_snapshot_available=True,
+        artifact_rollback_available=latest_snapshot is not None,
     )
     last_action = load_last_action(action_journal_path)
 
@@ -490,6 +529,7 @@ def load_control_plane_state(
         workspace=os.getcwd(),
         tabs=list(MAIN_TABS),
         config_state=config_state,
+        config_form_state=config_form_state,
         artifact_state=artifact_state,
         selection_state=selection_state,
         workflow_state=workflow_state,
@@ -500,6 +540,7 @@ def load_control_plane_state(
         warnings=[
             "Fetch and probe previews correspond to live network operations when executed.",
             build_snippet_warning(),
+            "Artifact snapshots and rollback restore local files only; they do not undo network or systemd side effects.",
         ],
         last_action=last_action,
         session=asdict(session_state),
@@ -519,6 +560,7 @@ def control_plane_state_to_dict(state: ControlPlaneState) -> dict[str, object]:
 def _next_recommended_action(
     *,
     config_state: ConfigState,
+    config_form_state: ConfigFormState,
     artifact_state: ArtifactState,
     selection_state: SelectionState,
     selected_candidate_exists: bool,
@@ -528,6 +570,8 @@ def _next_recommended_action(
         return "Create or point the TUI at a local config.yaml before proceeding."
     if not config_state.valid:
         return "Fix redacted config validation errors before any live fetch, probe, or sidecar step."
+    if config_form_state.dirty:
+        return "Review the structured config form diff and save config changes before continuing."
     if not artifact_state.candidates_exists:
         return "Review the fetch preview, then run fetch explicitly to create candidates.json."
     if artifact_state.passed_candidates_exists and not selected_candidate_exists:

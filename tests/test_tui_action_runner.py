@@ -164,6 +164,72 @@ def test_subprocess_action_runner_blocks_network_without_explicit_allow() -> Non
     assert result.exit_code == 126
 
 
+def test_snapshot_is_created_before_overwrite_operations(tmp_path: Path) -> None:
+    """Fetch, probe, and select should create a local artifact snapshot before execution."""
+    candidates_path = tmp_path / "candidates.json"
+    candidates_path.write_text('{"before":"secret"}', encoding="utf-8")
+    runner = SubprocessActionRunner()
+    options = ActionRunOptions(
+        allow_network=True,
+        allow_sensitive_artifact_write=True,
+        snapshot_root=str(tmp_path / "state_data" / "tui" / "artifact_snapshots"),
+        artifact_paths={
+            "candidates": str(candidates_path),
+            "probe_summary": str(tmp_path / "state_data" / "probe_summary.json"),
+            "passed_candidates": str(tmp_path / "state_data" / "passed_candidates.json"),
+            "selected_candidate": str(tmp_path / "state_data" / "selected_candidate.json"),
+            "pool_plan": str(tmp_path / "state_data" / "sidecar_pool_plan.json"),
+        },
+    )
+
+    fetch_result = runner.run(_local_spec("fetch"), options)
+    probe_result = runner.run(_local_spec("probe"), options)
+    select_result = runner.run(_local_spec("select", network_access=False), ActionRunOptions(
+        allow_sensitive_artifact_write=True,
+        snapshot_root=str(tmp_path / "state_data" / "tui" / "artifact_snapshots"),
+        artifact_paths=options.artifact_paths,
+    ))
+
+    assert fetch_result.snapshot_id is not None
+    assert probe_result.snapshot_id is not None
+    assert select_result.snapshot_id is not None
+
+
+def test_read_only_artifact_check_does_not_create_snapshot(tmp_path: Path) -> None:
+    """Read-only checks should not create artifact snapshots."""
+    result = SubprocessActionRunner().run(
+        _local_spec("artifact_check", network_access=False),
+        ActionRunOptions(snapshot_root=str(tmp_path / "state_data" / "tui" / "artifact_snapshots")),
+    )
+
+    assert result.snapshot_id is None
+
+
+def test_failed_action_exposes_rollback_hint_when_snapshot_exists(tmp_path: Path) -> None:
+    """Failing overwrite actions should tell the user rollback is available."""
+    result = SubprocessActionRunner().run(
+        OperationSpec(
+            key="probe",
+            title="Probe",
+            command=[sys.executable, "-c", "raise SystemExit(2)"],
+            requires_confirmation=True,
+            network_access=True,
+            systemd_access=False,
+            sensitive_outputs=True,
+            expected_artifacts=[],
+        ),
+        ActionRunOptions(
+            allow_network=True,
+            allow_sensitive_artifact_write=True,
+            snapshot_root=str(tmp_path / "state_data" / "tui" / "artifact_snapshots"),
+            artifact_paths={"candidates": str(tmp_path / "candidates.json")},
+        ),
+    )
+
+    assert result.succeeded is False
+    assert result.rollback_hint is not None
+
+
 def _spec(key: str) -> OperationSpec:
     return OperationSpec(
         key=key,
@@ -173,5 +239,18 @@ def _spec(key: str) -> OperationSpec:
         network_access=(key == "fetch"),
         systemd_access=False,
         sensitive_outputs=False,
+        expected_artifacts=[],
+    )
+
+
+def _local_spec(key: str, *, network_access: bool = True) -> OperationSpec:
+    return OperationSpec(
+        key=key,
+        title=key.title(),
+        command=[sys.executable, "-c", "print('ok')"],
+        requires_confirmation=True,
+        network_access=network_access,
+        systemd_access=False,
+        sensitive_outputs=True if key in {"fetch", "probe", "select"} else False,
         expected_artifacts=[],
     )

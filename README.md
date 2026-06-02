@@ -671,6 +671,18 @@ Action output is redacted before display and before journaling. The TUI writes a
 
 Undo currently applies to config saves only. Artifact rollback is not implemented in TUI-3, service restart undo is not guaranteed, and sidecar runtime rollback remains future work. Production Xray, XrayR, and `x-ui` configuration remain manual and out of scope.
 
+## Structured config editing
+
+The TUI edits only a safe allowlist of config fields such as probe concurrency, probe timeout, routing mode, fail-closed routing, and local Xray runtime bind settings. Subscription URLs, proxy credentials, raw URIs, UUIDs, public keys, tokens, passwords, and related transport secrets are neither edited nor displayed in the structured form.
+
+Structured config changes are validated before atomic save and still flow through the transactional config draft layer. Saves create the sensitive undo journal under `state_data/tui/`, and undo restores `config.yaml` content only.
+
+## Artifact snapshots and rollback
+
+The TUI snapshots local artifacts before overwrite-prone workflow steps such as `fetch`, `probe`, `select`, and pool staging. Snapshots are sensitive and are stored under the ignored `state_data/tui/artifact_snapshots/` directory.
+
+Artifact rollback restores local artifact files only. It does not undo network effects, does not restart the sidecar, and does not modify production Xray, XrayR, or `x-ui`.
+
 ## Web panel security model
 
 The web panel is optional and is a secure operations console for ScholarOutboundManager. It is not a proxy airport backend, not an XrayR manager, not a remote shell, and not a production Xray/XrayR/`x-ui` editor.
