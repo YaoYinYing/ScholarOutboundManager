@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 MAIN_TABS: tuple[str, ...] = (
     "Dashboard",
-    "Preflight",
+    "Config",
     "Fetch & Probe",
     "Artifacts",
     "Selection",
@@ -79,4 +79,3 @@ def evaluate_artifact_check_step(result: dict[str, object] | None) -> WorkflowSt
         allow_continue=False,
         blocking_reason="Artifact mismatch detected; rerun fetch and probe before continuing.",
     )
-

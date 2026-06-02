@@ -25,6 +25,20 @@ class CommandExecutionResult:
 RunnerCallable = Callable[..., subprocess.CompletedProcess[str]]
 
 
+@dataclass(slots=True)
+class OperationSpec:
+    """Describe one future executable TUI workflow operation."""
+
+    key: str
+    title: str
+    command: list[str]
+    requires_confirmation: bool
+    network_access: bool
+    systemd_access: bool
+    sensitive_outputs: bool
+    expected_artifacts: list[str]
+
+
 def run_command(
     argv: list[str],
     *,
@@ -145,6 +159,25 @@ def build_artifact_check_command(
         probe_summary_path,
         "--passed-candidates",
         passed_candidates_path,
+    ]
+
+
+def build_select_command(
+    *,
+    candidates_path: str = "state_data/passed_candidates.json",
+    candidate_index: int = 0,
+    output_path: str = "state_data/selected_candidate.json",
+) -> list[str]:
+    return [
+        "scholar-outbound-manager",
+        "select",
+        "choose",
+        "--candidates",
+        candidates_path,
+        "--candidate-index",
+        str(candidate_index),
+        "--output",
+        output_path,
     ]
 
 

@@ -649,11 +649,19 @@ The optional TUI shows the same redacted label and heuristic region columns with
 
 ## TUI workflow control plane
 
-The optional TUI currently provides a transactional config-editing foundation plus workflow previews for config, artifacts, selection, and sidecar operations. Config edits are transactional: `config.yaml` is changed only after validation and save, with a redacted preview and redacted diff shown before writeback.
+The optional TUI provides a transactional config-editing foundation plus workflow previews, and it is a workflow control plane layered over the existing CLI and helper operations. It does not reimplement fetch, probe, selection, or sidecar business rules; it assembles redacted state, transactional config editing, and explicit operation previews around those existing commands.
+
+Config edits are transactional: `config.yaml` is changed only after validation and save, with a redacted preview and redacted diff shown before writeback.
 
 Undo is backed by a sensitive journal at `state_data/tui/config_undo_journal.jsonl`. That journal applies to config file writes only; it does not roll back arbitrary external side effects.
 
+The primary tabs are `Dashboard | Config | Fetch & Probe | Artifacts | Selection | Sidecar | Pool | Troubleshooting | Snippets`. `Dashboard` summarizes config, artifacts, selection, and the next recommended action. `Config` is the transactional editor surface with redacted validation errors, preview, diff, and undo availability.
+
+Every save writes the undo journal under `state_data/tui/`. Undo restores config file content only; it does not roll back network operations, systemd side effects, or external Xray processes.
+
 Network fetch/probe and systemd actions remain explicit operations. This phase keeps command previews and state inspection inside the TUI without automatically mutating production Xray/XrayR/`x-ui` and without claiming full interactive config editing yet.
+
+Hysteria2 remains experimental and disabled by default in the TUI because it follows the same production-safety boundary as the CLI. The TUI never modifies production Xray, XrayR, or `x-ui` directly.
 
 ## Web panel security model
 

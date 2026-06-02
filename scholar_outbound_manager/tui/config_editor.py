@@ -45,6 +45,7 @@ class ConfigSaveResult:
     created_at: str | None
     previous_sha256: str | None
     next_sha256: str | None
+    message: str
 
 
 @dataclass(slots=True)
@@ -56,7 +57,9 @@ class ConfigUndoResult:
     undo_journal_path: str
     restored_from_sha256: str | None
     restored_to_sha256: str | None
+    restored_sha256: str | None
     created_at: str | None
+    message: str
 
 
 def load_config_draft(path: str | Path) -> ConfigDraft:
@@ -112,6 +115,15 @@ def validate_config_draft(draft: ConfigDraft) -> ConfigDraft:
     )
 
 
+def validate_config_text(text: str) -> tuple[bool, list[str]]:
+    """Validate one config text blob and return redacted error messages."""
+    try:
+        _validate_config_text(text)
+        return True, []
+    except (ConfigError, ValueError) as exc:
+        return False, [redact_validation_error(str(exc))]
+
+
 def build_config_diff(original_text: str, current_text: str) -> str:
     """Build one redacted unified diff preview."""
     original_preview = build_redacted_config_preview(original_text)
@@ -126,6 +138,11 @@ def build_config_diff(original_text: str, current_text: str) -> str:
         )
     )
     return "\n".join(diff_lines)
+
+
+def build_redacted_config_diff(original_text: str, current_text: str) -> str:
+    """Build one redacted diff preview using the transactional editor redaction rules."""
+    return build_config_diff(original_text, current_text)
 
 
 def build_redacted_config_preview(text: str) -> str:
@@ -170,6 +187,7 @@ def save_config_draft(
             created_at=None,
             previous_sha256=_sha256_text(validated.original_text),
             next_sha256=_sha256_text(validated.current_text),
+            message="Config draft was already clean; nothing was written.",
         )
 
     created_at = _utc_now_iso8601()
@@ -178,6 +196,7 @@ def save_config_draft(
     entry = {
         "schema_version": 1,
         "created_at": created_at,
+        "operation": "config_save",
         "config_path": validated.path,
         "previous_sha256": previous_sha256,
         "next_sha256": next_sha256,
@@ -196,6 +215,7 @@ def save_config_draft(
         created_at=created_at,
         previous_sha256=previous_sha256,
         next_sha256=next_sha256,
+        message="Config draft saved transactionally and undo journal updated.",
     )
 
 
@@ -224,7 +244,10 @@ def undo_last_config_save(
     undo_entry = {
         "schema_version": 1,
         "created_at": created_at,
+        "operation": "config_undo",
         "config_path": normalized_path,
+        "restored_sha256": _sha256_text(previous_text),
+        "source_entry_sha256": _coerce_optional_str(target_entry.get("next_sha256")),
         "previous_sha256": _sha256_text(current_text),
         "next_sha256": _sha256_text(previous_text),
         "previous_text": current_text,
@@ -238,7 +261,9 @@ def undo_last_config_save(
         undo_journal_path=str(undo_journal_path),
         restored_from_sha256=_coerce_optional_str(target_entry.get("next_sha256")),
         restored_to_sha256=_sha256_text(previous_text),
+        restored_sha256=_sha256_text(previous_text),
         created_at=created_at,
+        message="Config undo restored the previous saved config state.",
     )
 
 

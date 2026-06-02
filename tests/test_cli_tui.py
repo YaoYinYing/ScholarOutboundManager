@@ -8,6 +8,15 @@ from pathlib import Path
 
 from scholar_outbound_manager import cli
 from scholar_outbound_manager.tui import app as tui_app
+from scholar_outbound_manager.tui.control_plane import CommandState
+from scholar_outbound_manager.tui.control_plane import ConfigState
+from scholar_outbound_manager.tui.control_plane import ControlPlaneState
+from scholar_outbound_manager.tui.control_plane import ArtifactState
+from scholar_outbound_manager.tui.control_plane import PoolState
+from scholar_outbound_manager.tui.control_plane import SelectionState
+from scholar_outbound_manager.tui.control_plane import SidecarState
+from scholar_outbound_manager.tui.control_plane import WorkflowModelState
+from scholar_outbound_manager.tui.commands import OperationSpec
 
 
 def test_cli_tui_missing_textual_gives_install_hint(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -75,6 +84,7 @@ def test_tui_load_workflow_state_contains_tabs_and_wizard(tmp_path: Path) -> Non
     )
 
     assert state["tabs"][0] == "Dashboard"
+    assert state["tabs"][1] == "Config"
     assert state["wizard_steps"][0]["key"] == "preflight"
     assert state["selection"]["sensitive_notice"].startswith("selected_candidate.json is sensitive")
     assert state["config_editor"]["config_path"] == str(config_path)
@@ -88,8 +98,10 @@ def test_tui_load_workflow_state_contains_tabs_and_wizard(tmp_path: Path) -> Non
     assert state["commands"]["service_restart"].startswith("scholar-outbound-manager sidecar service-restart")
     assert state["commands"]["service_validate"].startswith("scholar-outbound-manager sidecar service-validate")
     assert state["commands"]["service_snippet"].startswith("scholar-outbound-manager sidecar service-snippet")
+    assert state["commands"]["select"].startswith("scholar-outbound-manager select choose")
     assert state["selection"]["selection_method"] is not None
     assert state["selection"]["selection_reason"]
+    assert state["dashboard"]["next_recommended_action"]
 
 
 def test_tui_workflow_state_redacts_config_validation_errors(tmp_path: Path, monkeypatch) -> None:
@@ -131,6 +143,32 @@ def test_tui_workflow_state_redacts_config_validation_errors(tmp_path: Path, mon
     assert state["config_editor"]["validation_errors"]
 
 
+def test_tui_render_tab_text_for_config_hides_secret_like_validation_errors(tmp_path: Path, monkeypatch) -> None:
+    """Config tab rendering must not surface raw validation secrets."""
+    candidates_path = _write_passed_candidates(tmp_path)
+    config_path = _write_config(tmp_path)
+    config_path.write_text("subscriptions: [\n", encoding="utf-8")
+    secret_message = 'invalid https://example.invalid/subscription-token token="TOKEN_VALUE"'
+
+    def fake_validate(text: str) -> None:
+        raise ValueError(secret_message)
+
+    monkeypatch.setattr("scholar_outbound_manager.tui.config_editor._validate_config_text", fake_validate)
+    workflow_state = tui_app.load_workflow_state(
+        config_path=str(config_path),
+        candidates_path=str(candidates_path),
+        passed_candidates_path=str(candidates_path),
+        probe_summary_path=str(tmp_path / "probe_summary.json"),
+        selected_candidate_path=str(tmp_path / "selected_candidate.json"),
+        session_path=str(tmp_path / "tui_session.json"),
+    )
+
+    rendered = tui_app.render_tab_text("Config", workflow_state)
+    assert "https://example.invalid/subscription-token" not in rendered
+    assert "TOKEN_VALUE" not in rendered
+    assert "validation errors:" in rendered
+
+
 def test_tui_session_state_does_not_store_sensitive_fields(tmp_path: Path) -> None:
     """Persist only non-sensitive TUI session state."""
     from scholar_outbound_manager.tui.state import build_session_state
@@ -156,6 +194,53 @@ def test_tui_session_state_does_not_store_sensitive_fields(tmp_path: Path) -> No
     rendered = session_path.read_text(encoding="utf-8")
     assert "vless://" not in rendered
     assert "PASSWORD_PLACEHOLDER" not in rendered
+
+
+def test_load_workflow_state_uses_control_plane_loader(monkeypatch) -> None:
+    """Keep app-level workflow loading as a projection over control-plane state."""
+    fake_state = ControlPlaneState(
+        workspace="/tmp/workspace",
+        tabs=["Dashboard", "Config"],
+        config_state=ConfigState(True, True, False, False, "preview", "", [], 1, False, "dedicated_inbound", True),
+        artifact_state=ArtifactState(True, False, False, False, None, None, [], None, None, None),
+        selection_state=SelectionState([], None, None, None, None, None, None),
+        workflow_state=WorkflowModelState([], None, "next action"),
+        command_state=CommandState(
+            "fetch",
+            "probe",
+            "artifact",
+            "select",
+            "stage",
+            "restart",
+            "validate",
+            "snippet",
+            "pool",
+            [OperationSpec("fetch", "Fetch", ["cmd"], True, True, False, True, ["out"])],
+        ),
+        sidecar_state=SidecarState("unknown", "unknown", "unknown", "unknown", "warn", True, "/usr/local/bin/xray"),
+        pool_state=PoolState(False, [], "warn"),
+        warnings=["live warning"],
+        last_operation=None,
+        session={
+            "schema_version": 1,
+            "updated_at": "2026-06-02T00:00:00Z",
+            "workspace": "/tmp/workspace",
+            "last_step": None,
+            "paths": {"config": "config.yaml"},
+            "last_results": {},
+        },
+        snippets={"warning": "snippet warning", "rendered": "[]"},
+        repo_status="clean",
+        current_git_commit="abc1234",
+        venv_detected=True,
+        current_sidecar_port=19080,
+    )
+
+    monkeypatch.setattr(tui_app, "load_control_plane_state", lambda **kwargs: fake_state)
+    state = tui_app.load_workflow_state()
+
+    assert state["dashboard"]["next_recommended_action"] == "next action"
+    assert state["commands"]["fetch"] == "fetch"
 
 
 def _write_passed_candidates(tmp_path: Path) -> Path:

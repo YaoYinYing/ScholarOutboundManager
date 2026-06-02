@@ -6,6 +6,7 @@ import subprocess
 
 from scholar_outbound_manager.tui.commands import build_fetch_command
 from scholar_outbound_manager.tui.commands import build_probe_command
+from scholar_outbound_manager.tui.commands import build_select_command
 from scholar_outbound_manager.tui.commands import build_service_restart_command
 from scholar_outbound_manager.tui.commands import build_service_snippet_command
 from scholar_outbound_manager.tui.commands import build_service_stage_command
@@ -81,6 +82,14 @@ def test_service_stage_command_includes_skip_binary_copy_by_default() -> None:
     """Default sidecar staging preview should be safe for restaging."""
     argv = build_service_stage_command()
     assert "--skip-xray-binary-copy" in argv
+
+
+def test_select_command_preview_is_available_for_control_plane() -> None:
+    """Build a copy-friendly preview for the explicit selection step."""
+    preview = preview_command(build_select_command())
+
+    assert "scholar-outbound-manager select choose" in preview
+    assert "--candidate-index 0" in preview
 
 
 def test_sidecar_service_previews_cover_restart_validate_and_snippet() -> None:

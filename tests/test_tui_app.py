@@ -1,4 +1,4 @@
-"""Tests for Textual-safe TUI tab identifier helpers."""
+"""Tests for Textual-safe TUI tab identifiers and presentation helpers."""
 
 from __future__ import annotations
 
@@ -56,3 +56,20 @@ def test_build_tab_specs_do_not_use_raw_tab_label_as_id() -> None:
 
     assert specs[0] == {"title": "Dashboard", "id": "dashboard"}
     assert specs[1] == {"title": "Fetch & Probe", "id": "fetch-probe"}
+
+
+def test_workflow_tabs_include_config_tab() -> None:
+    """Expose the plan-aligned config tab in the primary workflow."""
+    assert MAIN_TABS[1] == "Config"
+
+
+def test_tui_key_bindings_cover_expected_controls() -> None:
+    """Keep the minimal workflow key bindings available."""
+    bindings = {key: action for key, action, _description in tui_app.TUI_KEY_BINDINGS}
+
+    assert bindings["q"] == "quit"
+    assert bindings["r"] == "reload_state"
+    assert bindings["d"] == "toggle_diff"
+    assert bindings["s"] == "save_draft"
+    assert bindings["u"] == "undo_save"
+    assert bindings["?"] == "show_help"

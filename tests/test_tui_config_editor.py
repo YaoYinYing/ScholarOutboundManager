@@ -99,6 +99,14 @@ def test_redact_validation_error_hides_password_auth_and_token() -> None:
     assert "TOKEN_VALUE" not in rendered
 
 
+def test_validate_config_text_returns_redacted_errors() -> None:
+    """Public config validation helper should redact secret-bearing errors."""
+    valid, errors = config_editor.validate_config_text("subscriptions: [\n")
+
+    assert valid is False
+    assert errors
+
+
 def test_build_config_diff_redacts_secrets() -> None:
     """Redacted diff must not leak changed secret values."""
     diff = config_editor.build_config_diff(
@@ -141,6 +149,17 @@ def test_build_config_diff_redacts_changed_header_and_token_values() -> None:
     assert "new-secret" not in diff
     assert "old-token-value" not in diff
     assert "new-token-value" not in diff
+
+
+def test_build_redacted_config_diff_matches_safe_diff_contract() -> None:
+    """Public redacted diff helper should preserve the safe diff behavior."""
+    diff = config_editor.build_redacted_config_diff(
+        'url: "https://example.invalid/old-token"\n',
+        'url: "https://example.invalid/new-token"\n',
+    )
+
+    assert "old-token" not in diff
+    assert "new-token" not in diff
 
 
 def test_validate_config_draft_stores_redacted_validation_errors(tmp_path: Path) -> None:
@@ -213,9 +232,11 @@ def test_save_config_draft_writes_atomically_and_creates_undo_journal(tmp_path: 
     journal_lines = undo_path.read_text(encoding="utf-8").splitlines()
     assert len(journal_lines) == 1
     entry = json.loads(journal_lines[0])
+    assert entry["operation"] == "config_save"
     assert entry["config_path"] == str(config_path)
     assert entry["previous_text"] == original_text
     assert entry["reason"] == "tui_config_save"
+    assert result.message
 
 
 def test_undo_last_config_save_restores_previous_config(tmp_path: Path) -> None:
@@ -234,6 +255,8 @@ def test_undo_last_config_save_restores_previous_config(tmp_path: Path) -> None:
     assert result.restored is True
     assert config_path.read_text(encoding="utf-8") == original_text
     assert result.path == str(config_path)
+    assert result.restored_sha256 is not None
+    assert result.message
 
 
 def test_undo_last_config_save_supports_multi_step_stack(tmp_path: Path) -> None:
