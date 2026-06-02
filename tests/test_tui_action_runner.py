@@ -156,6 +156,33 @@ def test_action_journal_writes_only_redacted_output(tmp_path: Path) -> None:
     assert "<REDACTED_URL>" in rendered
 
 
+def test_action_journal_redacts_command_preview_too(tmp_path: Path) -> None:
+    """Command previews written to the journal must remain review-safe."""
+    result = ActionResult(
+        key="fetch",
+        title="Fetch Candidates",
+        command=["scholar-outbound-manager", "fetch", "--source", "https://example.invalid/subscription-token"],
+        started_at="2026-06-02T00:00:00Z",
+        finished_at="2026-06-02T00:00:01Z",
+        exit_code=0,
+        succeeded=True,
+        stdout="",
+        stderr="",
+        redacted_stdout="",
+        redacted_stderr="",
+        summary="ok",
+        expected_artifacts=[],
+        warnings=[],
+    )
+
+    journal_path = tmp_path / "state_data" / "tui" / "action_journal.jsonl"
+    append_action_journal(result, journal_path=journal_path)
+
+    rendered = journal_path.read_text(encoding="utf-8")
+    assert "subscription-token" not in rendered
+    assert "<REDACTED>" in rendered
+
+
 def test_subprocess_action_runner_blocks_network_without_explicit_allow() -> None:
     """Network actions should fail closed unless the caller explicitly allows them."""
     result = SubprocessActionRunner().run(_spec("fetch"), ActionRunOptions())

@@ -655,11 +655,11 @@ Config edits are transactional: `config.yaml` is changed only after validation a
 
 Undo is backed by a sensitive journal at `state_data/tui/config_undo_journal.jsonl`. That journal applies to config file writes only; it does not roll back arbitrary external side effects.
 
-The primary tabs are `Dashboard | Config | Fetch & Probe | Artifacts | Selection | Sidecar | Pool | Troubleshooting | Snippets`. `Dashboard` summarizes config, artifacts, selection, and the next recommended action. `Config` is the transactional editor surface with redacted validation errors, preview, diff, and undo availability.
+The primary tabs are `Dashboard | Config | Fetch & Probe | Artifacts | Selection | Sidecar | Pool | Troubleshooting | Snippets`. `Dashboard` summarizes config, artifacts, selection, the current blocking reason, and the next recommended action. `Config` is the transactional editor surface with redacted validation errors, preview, diff, undo availability, and restart-required markers for safe editable fields.
 
 Every save writes the undo journal under `state_data/tui/`. Undo restores config file content only; it does not roll back network operations, systemd side effects, or external Xray processes.
 
-Network fetch/probe and systemd actions remain explicit operations. This phase keeps command previews and state inspection inside the TUI without automatically mutating production Xray/XrayR/`x-ui` and without claiming full interactive config editing yet.
+Network fetch/probe and systemd actions remain explicit operations. This phase keeps command previews and state inspection inside the TUI without automatically mutating production Xray/XrayR/`x-ui` and without claiming full interactive config editing yet. Overlong command previews are truncated safely in the TUI surface, while action state remains review-safe.
 
 Hysteria2 remains experimental and disabled by default in the TUI because it follows the same production-safety boundary as the CLI. The TUI never modifies production Xray, XrayR, or `x-ui` directly.
 
@@ -675,7 +675,7 @@ Undo currently applies to config saves only. Artifact rollback is not implemente
 
 The TUI edits only a safe allowlist of config fields such as probe concurrency, probe timeout, routing mode, fail-closed routing, and local Xray runtime bind settings. Subscription URLs, proxy credentials, raw URIs, UUIDs, public keys, tokens, passwords, and related transport secrets are neither edited nor displayed in the structured form.
 
-Structured config changes are validated before atomic save and still flow through the transactional config draft layer. Saves create the sensitive undo journal under `state_data/tui/`, and undo restores `config.yaml` content only.
+Structured config changes are validated before atomic save and still flow through the transactional config draft layer. Saves create the sensitive undo journal under `state_data/tui/`, and undo restores `config.yaml` content only. The structured form explicitly excludes sensitive fields such as subscription URLs, raw proxy URIs, UUIDs, passwords, auth values, tokens, public keys, and server names.
 
 ## Artifact snapshots and rollback
 

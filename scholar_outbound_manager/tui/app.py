@@ -198,6 +198,61 @@ class WorkflowController:
         )
 
 
+def _format_last_action(last_action: dict[str, object] | None) -> str:
+    if not isinstance(last_action, dict) or not last_action:
+        return "none"
+    title = str(last_action.get("title") or last_action.get("key") or "unknown")
+    exit_code = last_action.get("exit_code")
+    succeeded = last_action.get("succeeded")
+    summary = str(last_action.get("summary") or "")
+    stderr_tail = str(last_action.get("redacted_stderr_tail") or "")
+    parts = [f"title={title}", f"succeeded={succeeded}", f"exit_code={exit_code}"]
+    if summary:
+        parts.append(f"summary={summary}")
+    if stderr_tail:
+        parts.append(f"stderr_tail={stderr_tail}")
+    rollback_hint = str(last_action.get("rollback_hint") or "")
+    if rollback_hint:
+        parts.append(f"rollback_hint={rollback_hint}")
+    return "; ".join(parts)
+
+
+def _render_config_field_lines(form: dict[str, object]) -> list[str]:
+    rendered = [
+        "sensitive fields excluded: subscription URLs, proxy URIs, UUIDs, passwords, auth, tokens, public keys, server names, and obfs passwords.",
+    ]
+    for field in form.get("fields", []):
+        if not isinstance(field, dict):
+            continue
+        rendered.append(
+            " - {key} | type={value_type} | editable={editable} | restart_required={requires_restart}".format(
+                key=field.get("key"),
+                value_type=field.get("value_type"),
+                editable=field.get("editable"),
+                requires_restart=field.get("requires_restart"),
+            )
+        )
+    return rendered
+
+
+def _render_operation_status_line(control_plane: dict[str, object], operation_key: str) -> str:
+    operations = (
+        control_plane.get("command_state", {}).get("operations", [])
+        if isinstance(control_plane, dict)
+        else []
+    )
+    for operation in operations:
+        if not isinstance(operation, dict) or operation.get("key") != operation_key:
+            continue
+        return (
+            f"{operation_key}: confirm_required={operation.get('requires_confirmation')} "
+            f"network={operation.get('network_access')} "
+            f"systemd={operation.get('systemd_access')} "
+            f"risk={operation.get('risk_note')}"
+        )
+    return f"{operation_key}: operation metadata unavailable"
+
+
 def _textual_safe_id(value: str) -> str:
     """Return one Textual-compatible widget id."""
     lowered = value.strip().lower()
@@ -422,6 +477,7 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
     """Render one tab body from the redacted workflow state."""
     if tab == "Dashboard":
         dashboard = workflow_state["dashboard"]
+        blocking_reason = workflow_state["control_plane"]["workflow_state"]["blocking_reason"]
         return "\n".join(
             [
                 "Workflow-oriented TUI",
@@ -434,8 +490,9 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"candidate_count: {dashboard['candidate_count']}",
                 f"passed_count: {dashboard['passed_count']}",
                 f"selected_candidate_label: {dashboard['selected_candidate_label']}",
+                f"blocking_reason: {blocking_reason}",
                 f"next_recommended_action: {dashboard['next_recommended_action']}",
-                f"last_action: {dashboard['last_action']}",
+                f"last_action: {_format_last_action(dashboard['last_action'])}",
                 f"snapshot_count: {dashboard['snapshot_count']}",
                 f"latest_snapshot_id: {dashboard['latest_snapshot_id']}",
             ]
@@ -443,27 +500,29 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
     if tab == "Config":
         editor = workflow_state["config_editor"]
         form = workflow_state["config_form"]
-        return "\n".join(
-            [
-                "Step 1: Config",
-                f"config exists: {workflow_state['preflight']['config_exists']}",
-                f"config valid: {workflow_state['preflight']['config_valid']}",
-                f"validation errors: {workflow_state['preflight']['config_validation_errors']}",
-                f"undo_available: {editor['undo_available']}",
-                f"config_save_available: {workflow_state['operation_availability']['config_save_available']}",
-                f"config_undo_available: {workflow_state['operation_availability']['config_undo_available']}",
-                f"fields: {form['fields']}",
-                "Preview:",
-                form["redacted_diff"] or editor["redacted_diff"] or editor["redacted_preview"],
-                "Hints: q quit | r reload | e edit field | d show diff | s save | u undo | x snapshot | z rollback | ? help",
-            ]
-        )
+        lines = [
+            "Step 1: Config",
+            f"config exists: {workflow_state['preflight']['config_exists']}",
+            f"config valid: {workflow_state['preflight']['config_valid']}",
+            f"validation errors: {workflow_state['preflight']['config_validation_errors']}",
+            f"undo_available: {editor['undo_available']}",
+            f"config_save_available: {workflow_state['operation_availability']['config_save_available']}",
+            f"config_undo_available: {workflow_state['operation_availability']['config_undo_available']}",
+            "fields:",
+            *_render_config_field_lines(form),
+            "Preview:",
+            form["redacted_diff"] or editor["redacted_diff"] or editor["redacted_preview"],
+            "Hints: q quit | r reload | e edit field | d show diff | s save | u undo | x snapshot | z rollback | ? help",
+        ]
+        return "\n".join(lines)
     if tab == "Fetch & Probe":
         return "\n".join(
             [
                 workflow_state["warnings"][0],
                 f"fetch: {workflow_state['commands']['fetch']}",
                 f"probe: {workflow_state['commands']['probe']}",
+                _render_operation_status_line(workflow_state["control_plane"], "fetch"),
+                _render_operation_status_line(workflow_state["control_plane"], "probe"),
                 f"fetch_available: {workflow_state['operation_availability']['fetch_available']}",
                 f"probe_available: {workflow_state['operation_availability']['probe_available']}",
             ]
@@ -507,6 +566,9 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 workflow_state["commands"]["sidecar_stage"],
                 workflow_state["commands"]["service_restart"],
                 workflow_state["commands"]["service_validate"],
+                _render_operation_status_line(control_plane, "sidecar_stage"),
+                _render_operation_status_line(control_plane, "service_restart"),
+                _render_operation_status_line(control_plane, "service_validate"),
                 f"sidecar_stage_available: {workflow_state['operation_availability']['sidecar_stage_available']}",
                 f"service_validate_available: {workflow_state['operation_availability']['service_validate_available']}",
                 f"service_active: {control_plane['sidecar_state']['service_active']}",

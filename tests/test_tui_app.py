@@ -256,3 +256,134 @@ def test_workflow_controller_can_update_state_via_config_field_patch(tmp_path, m
 
     assert "probe.concurrency" in message
     assert len(load_calls) >= 2
+
+
+def test_render_dashboard_and_config_tabs_show_reason_and_field_safety() -> None:
+    """Rendered tabs should show blocking reason, structured field hints, and exclusion notice."""
+    workflow_state = {
+        "tab_strip": "tabs",
+        "dashboard": {
+            "repo_status": "clean",
+            "current_git_commit": "abc1234",
+            "config_dirty": False,
+            "config_valid": True,
+            "undo_available": False,
+            "candidate_count": 1,
+            "passed_count": 1,
+            "selected_candidate_label": "United States relay",
+            "next_recommended_action": "Review probe preview. Why: candidates are missing.",
+            "last_action": {
+                "title": "Probe Candidates",
+                "succeeded": False,
+                "exit_code": 1,
+                "summary": "Probe Candidates failed with exit code 1.",
+                "redacted_stderr_tail": "timeout",
+            },
+            "snapshot_count": 1,
+            "latest_snapshot_id": "snap-1",
+        },
+        "preflight": {
+            "config_exists": True,
+            "config_valid": True,
+            "config_validation_errors": [],
+        },
+        "config_editor": {
+            "undo_available": False,
+            "redacted_diff": "",
+            "redacted_preview": "preview",
+        },
+        "config_form": {
+            "fields": [
+                {
+                    "key": "probe.concurrency",
+                    "value_type": "int",
+                    "editable": True,
+                    "requires_restart": False,
+                },
+                {
+                    "key": "xray.local_socks_port",
+                    "value_type": "int",
+                    "editable": True,
+                    "requires_restart": True,
+                },
+            ],
+            "redacted_diff": "",
+        },
+        "operation_availability": {
+            "config_save_available": True,
+            "config_undo_available": False,
+            "fetch_available": True,
+            "probe_available": False,
+            "artifact_check_available": True,
+            "artifact_snapshot_available": True,
+            "artifact_rollback_available": False,
+            "select_available": False,
+            "sidecar_stage_available": False,
+            "service_validate_available": False,
+            "snippet_available": True,
+        },
+        "warnings": ["network warning"],
+        "commands": {
+            "fetch": "fetch ...",
+            "probe": "probe ...",
+            "artifact_check": "artifact ...",
+            "select": "select ...",
+            "sidecar_stage": "stage ...",
+            "service_restart": "restart ...",
+            "service_validate": "validate ...",
+            "pool_stage": "pool ...",
+            "service_snippet": "snippet ...",
+        },
+        "artifacts": {
+            "artifact_check": {"overall_consistent": False},
+            "snapshot_count": 1,
+            "latest_snapshot_id": "snap-1",
+            "latest_snapshot_reason": "pre_probe",
+            "candidates_hash": "a",
+            "probe_summary_hash": "b",
+            "passed_candidates_hash": "c",
+            "warnings": ["mismatch"],
+        },
+        "selection": {
+            "sensitive_notice": "selected_candidate.json is sensitive",
+            "selected_candidate_id": "candidate-1",
+            "selected_candidate_label": "United States relay",
+            "selected_region_hint": "US",
+            "preferred_region_hint": None,
+            "selection_method": "auto",
+            "selection_reason": "closest",
+        },
+        "snippets": {"warning": "warning"},
+        "tabs": ["Dashboard", "Config"],
+        "control_plane": {
+            "workflow_state": {"blocking_reason": "Artifact mismatch detected."},
+            "command_state": {
+                "operations": [
+                    {
+                        "key": "fetch",
+                        "requires_confirmation": True,
+                        "network_access": True,
+                        "systemd_access": False,
+                        "risk_note": "Live network operation.",
+                    }
+                ]
+            },
+            "sidecar_state": {
+                "service_active": "unknown",
+                "service_enabled": "unknown",
+                "socks_tcp_connect": "unknown",
+                "last_validation": "unknown",
+                "warning": "warn",
+            },
+            "pool_state": {"plan_exists": False, "port_warning": "warn", "rows": []},
+        },
+    }
+
+    dashboard_rendered = tui_app.render_tab_text("Dashboard", workflow_state)
+    config_rendered = tui_app.render_tab_text("Config", workflow_state)
+
+    assert "blocking_reason: Artifact mismatch detected." in dashboard_rendered
+    assert "last_action: title=Probe Candidates" in dashboard_rendered
+    assert "sensitive fields excluded:" in config_rendered
+    assert "probe.concurrency | type=int | editable=True | restart_required=False" in config_rendered
+    assert "xray.local_socks_port | type=int | editable=True | restart_required=True" in config_rendered

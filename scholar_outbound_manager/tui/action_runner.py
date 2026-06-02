@@ -13,6 +13,7 @@ from typing import Protocol
 
 from scholar_outbound_manager.tui.artifact_rollback import create_artifact_snapshot
 from scholar_outbound_manager.tui.commands import OperationSpec
+from scholar_outbound_manager.tui.commands import preview_command
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ACTION_JOURNAL_PATH
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT
 from scholar_outbound_manager.tui.view_model import redact_text
@@ -146,7 +147,7 @@ def append_action_journal(
         "created_at": result.finished_at or result.started_at,
         "operation_key": result.key,
         "title": result.title,
-        "command_preview": " ".join(result.command),
+        "command_preview": preview_command(result.command, max_length=None),
         "exit_code": result.exit_code,
         "succeeded": result.succeeded,
         "redacted_stdout": result.redacted_stdout,

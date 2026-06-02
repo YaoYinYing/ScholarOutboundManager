@@ -55,6 +55,7 @@ def test_control_plane_state_contains_expected_sections_and_command_previews(tmp
     assert state.command_state.fetch_command_preview.startswith("scholar-outbound-manager fetch")
     assert state.command_state.select_command_preview.startswith("scholar-outbound-manager select choose")
     assert state.workflow_state.next_recommended_action
+    assert "Why:" in state.workflow_state.next_recommended_action
     assert state.operation_availability.fetch_available is True
     assert state.operation_availability.config_save_available is True
 
@@ -170,6 +171,7 @@ def test_control_plane_next_recommended_action_tracks_artifact_progression(tmp_p
         session_path=str(tmp_path / "tui_session.json"),
     )
     assert "run fetch explicitly" in fetch_state.workflow_state.next_recommended_action.lower()
+    assert "why:" in fetch_state.workflow_state.next_recommended_action.lower()
 
     candidates_path = _write_candidates_only(tmp_path)
     probe_state = load_control_plane_state(
@@ -181,6 +183,7 @@ def test_control_plane_next_recommended_action_tracks_artifact_progression(tmp_p
         session_path=str(tmp_path / "tui_session.json"),
     )
     assert "run probe explicitly" in probe_state.workflow_state.next_recommended_action.lower()
+    assert "why:" in probe_state.workflow_state.next_recommended_action.lower()
 
     passed_candidates_path = _write_passed_candidates(tmp_path)
     select_state = load_control_plane_state(
@@ -192,6 +195,7 @@ def test_control_plane_next_recommended_action_tracks_artifact_progression(tmp_p
         session_path=str(tmp_path / "tui_session.json"),
     )
     assert "choose one passed candidate" in select_state.workflow_state.next_recommended_action.lower()
+    assert "why:" in select_state.workflow_state.next_recommended_action.lower()
     assert select_state.operation_availability.select_available is True
 
 
@@ -208,6 +212,7 @@ def test_control_plane_next_recommended_action_prefers_fix_or_save_config(tmp_pa
         session_path=str(tmp_path / "tui_session.json"),
     )
     assert "create or point the tui" in invalid_state.workflow_state.next_recommended_action.lower()
+    assert "config file is missing" in invalid_state.workflow_state.next_recommended_action.lower()
 
     config_path = _write_config(tmp_path)
     with patch(
@@ -223,6 +228,7 @@ def test_control_plane_next_recommended_action_prefers_fix_or_save_config(tmp_pa
             session_path=str(tmp_path / "tui_session.json"),
         )
     assert "save config changes" in dirty_state.workflow_state.next_recommended_action.lower()
+    assert "structured config changes are pending" in dirty_state.workflow_state.next_recommended_action.lower()
 
 
 def _write_passed_candidates(tmp_path: Path) -> Path:

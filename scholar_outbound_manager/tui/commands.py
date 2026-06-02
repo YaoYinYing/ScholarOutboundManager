@@ -4,10 +4,37 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import re
 from dataclasses import dataclass
 from typing import Callable
 
 from scholar_outbound_manager.tui.view_model import redact_text
+
+DEFAULT_PREVIEW_MAX_LENGTH = 200
+_SECRETISH_FLAGS = {
+    "--url",
+    "--source",
+    "--proxy-url",
+    "--password",
+    "--auth",
+    "--token",
+    "--public-key",
+    "--private-key",
+    "--server-name",
+    "--servername",
+    "--sni",
+    "--server",
+    "--obfs-password",
+    "--authorization",
+    "--cookie",
+    "--set-cookie",
+    "--api-key",
+    "--x-api-key",
+    "--x-auth-token",
+    "--access-token",
+    "--refresh-token",
+    "--client-secret",
+}
 
 
 @dataclass(slots=True)
@@ -77,9 +104,45 @@ def run_command(
     )
 
 
-def preview_command(argv: list[str]) -> str:
-    """Render one copy-friendly command preview."""
-    return " ".join(shlex.quote(part) for part in argv)
+def preview_command(argv: list[str], *, max_length: int | None = DEFAULT_PREVIEW_MAX_LENGTH) -> str:
+    """Render one review-safe command preview, truncating overlong output."""
+    redacted_parts: list[str] = []
+    previous_flag: str | None = None
+    for part in argv:
+        if previous_flag in _SECRETISH_FLAGS:
+            redacted_parts.append("<REDACTED>")
+            previous_flag = None
+            continue
+        redacted = _redact_command_part(part)
+        redacted_parts.append(shlex.quote(redacted))
+        previous_flag = part if part.startswith("--") else None
+    preview = " ".join(redacted_parts)
+    if max_length is None or len(preview) <= max_length:
+        return preview
+    if max_length <= 3:
+        return preview[:max_length]
+    return preview[: max_length - 3] + "..."
+
+
+def _redact_command_part(part: str) -> str:
+    for flag in _SECRETISH_FLAGS:
+        if part.startswith(flag + "="):
+            return flag + "=<REDACTED>"
+    redacted = part
+    patterns = [
+        (r"(?i)\bhttps?://[^\s\"']+", "<REDACTED_URL>"),
+        (r"(?i)\b(?:vless|vmess|trojan|ss|hysteria2)://[^\s\"']+", "<REDACTED_URI>"),
+        (r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", "<UUID>"),
+        (
+            r"(?i)\b(public[_ -]?key|password|token|auth|obfs-password|server_name|servername|sni|authorization|cookie|set-cookie|api[_ -]?key|x[_ -]?api[_ -]?key|x[_ -]?auth[_ -]?token|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret)\b\s*[:=]\s*\S+",
+            r"\1=<REDACTED>",
+        ),
+    ]
+    for pattern, replacement in patterns:
+        redacted = re.sub(pattern, replacement, redacted)
+    if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", redacted) and redacted not in {"127.0.0.1"}:
+        return "<IP>"
+    return redacted
 
 
 def build_fetch_command(

@@ -567,27 +567,73 @@ def _next_recommended_action(
     last_action: dict[str, object] | None,
 ) -> str:
     if not config_state.exists:
-        return "Create or point the TUI at a local config.yaml before proceeding."
+        return _with_reason(
+            "Create or point the TUI at a local config.yaml before proceeding.",
+            reason="Config file is missing.",
+        )
     if not config_state.valid:
-        return "Fix redacted config validation errors before any live fetch, probe, or sidecar step."
+        return _with_reason(
+            "Fix redacted config validation errors before any live fetch, probe, or sidecar step.",
+            reason=_first_reason(config_state.validation_errors, fallback="Config validation is failing."),
+        )
     if config_form_state.dirty:
-        return "Review the structured config form diff and save config changes before continuing."
+        return _with_reason(
+            "Review the structured config form diff and save config changes before continuing.",
+            reason="Structured config changes are pending.",
+        )
     if not artifact_state.candidates_exists:
-        return "Review the fetch preview, then run fetch explicitly to create candidates.json."
+        return _with_reason(
+            "Review the fetch preview, then run fetch explicitly to create candidates.json.",
+            reason="No local candidates artifact is present yet.",
+        )
     if artifact_state.passed_candidates_exists and not selected_candidate_exists:
-        return "Review the selection preview and choose one passed candidate before staging the sidecar."
+        return _with_reason(
+            "Review the selection preview and choose one passed candidate before staging the sidecar.",
+            reason="Passed candidates exist, but no selected candidate artifact has been written.",
+        )
     if not artifact_state.probe_summary_exists or not artifact_state.passed_candidates_exists:
-        return "Review the probe preview, then run probe explicitly to create passed candidates."
+        return _with_reason(
+            "Review the probe preview, then run probe explicitly to create passed candidates.",
+            reason="Probe summary or passed-candidates artifacts are missing.",
+        )
     if artifact_state.overall_consistent is False:
-        return "Review artifact check output and rerun fetch or probe until lineage is consistent."
+        return _with_reason(
+            "Review artifact check output and rerun fetch or probe until lineage is consistent.",
+            reason=_first_reason(artifact_state.warnings, fallback="Artifact lineage is inconsistent."),
+        )
     if not selected_candidate_exists:
-        return "Review sidecar stage and confirm runtime preparation before touching the managed service."
+        return _with_reason(
+            "Review sidecar stage and confirm runtime preparation before touching the managed service.",
+            reason="The managed runtime has not been staged from a selected candidate yet.",
+        )
     last_action_key = "" if last_action is None else str(last_action.get("key") or "")
     if last_action_key != "sidecar_stage" and last_action_key != "service_validate":
-        return "Review sidecar stage and confirm runtime preparation before touching the managed service."
+        return _with_reason(
+            "Review sidecar stage and confirm runtime preparation before touching the managed service.",
+            reason="No successful sidecar stage action has been recorded in the current workflow.",
+        )
     if last_action_key != "service_validate" or last_action.get("succeeded") is not True:
-        return "Review sidecar validate and confirm the managed service before exporting the snippet."
-    return "Review the snippet preview for manual production integration; production Xray and XrayR remain out of scope."
+        return _with_reason(
+            "Review sidecar validate and confirm the managed service before exporting the snippet.",
+            reason="The managed sidecar service has not been validated successfully yet.",
+        )
+    return _with_reason(
+        "Review the snippet preview for manual production integration; production Xray and XrayR remain out of scope.",
+        reason="Managed workflow prerequisites are satisfied.",
+    )
+
+
+def _with_reason(message: str, *, reason: str | None) -> str:
+    if reason is None:
+        return message
+    return f"{message} Why: {reason}"
+
+
+def _first_reason(values: list[str], *, fallback: str) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback
 
 
 def _load_pool_rows(path: str | Path) -> list[dict[str, object]]:

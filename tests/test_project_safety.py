@@ -33,6 +33,7 @@ def test_gitignore_contains_required_sensitive_entries() -> None:
         "candidates.json",
         "passed_candidates.json",
         "probe_summary.json",
+        "/plans/",
     ):
         assert entry in gitignore_text
 
@@ -134,6 +135,8 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "`config.yaml` is changed only after validation and save" in readme_text.lower()
     assert "undo is backed by a sensitive journal at `state_data/tui/config_undo_journal.jsonl`" in readme_text.lower()
     assert "network fetch/probe and systemd actions remain explicit operations" in readme_text.lower()
+    assert "dashboard" in readme_text.lower() and "blocking reason" in readme_text.lower() and "next recommended action" in readme_text.lower()
+    assert "restart-required markers for safe editable fields" in readme_text.lower()
     assert "without claiming full interactive config editing yet" in readme_text.lower()
     assert "tabs are for operations" in readme_text.lower()
     assert "wizard is for first deployment or full refresh" in readme_text.lower()
@@ -155,6 +158,7 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "the tui edits only a safe allowlist of config fields" in readme_text.lower()
     assert "subscription urls, proxy credentials, raw uris, uuids, public keys, tokens, passwords" in readme_text.lower()
     assert "structured config changes are validated before atomic save" in readme_text.lower()
+    assert "structured form explicitly excludes sensitive fields such as subscription urls, raw proxy uris, uuids, passwords, auth values, tokens, public keys, and server names" in readme_text.lower()
     assert "artifact snapshots and rollback" in readme_text.lower()
     assert "state_data/tui/artifact_snapshots/" in readme_text.lower()
     assert "artifact rollback restores local artifact files only" in readme_text.lower()

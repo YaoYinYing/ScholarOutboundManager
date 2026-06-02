@@ -53,14 +53,18 @@ def test_command_adapter_redacts_stdout_and_stderr() -> None:
 
 def test_fetch_and_probe_command_preview_is_correct() -> None:
     """Build workflow previews for fetch and probe."""
-    fetch_preview = preview_command(build_fetch_command(config_path="config.yaml", output_path="candidates.json"))
+    fetch_preview = preview_command(
+        build_fetch_command(config_path="config.yaml", output_path="candidates.json"),
+        max_length=None,
+    )
     probe_preview = preview_command(
         build_probe_command(
             config_path="config.yaml",
             candidates_path="candidates.json",
             summary_output="state_data/probe_summary.json",
             passed_candidates_output="state_data/passed_candidates.json",
-        )
+        ),
+        max_length=None,
     )
 
     assert "scholar-outbound-manager fetch --config config.yaml --output candidates.json --allow-network-fetch" in fetch_preview
@@ -76,6 +80,23 @@ def test_fetch_and_probe_command_preview_is_correct() -> None:
     assert "--transport-retry-count 2" in probe_preview
     assert "--hysteria2-warmup-attempts 1" in probe_preview
     assert "--parallel --keep-all-passed 2" not in probe_preview
+
+
+def test_command_preview_truncates_and_redacts_overlong_values() -> None:
+    """Overlong previews should stay review-safe and layout-friendly."""
+    preview = preview_command(
+        [
+            "scholar-outbound-manager",
+            "fetch",
+            "--config",
+            "config.yaml",
+            "--note",
+            "x" * 260,
+        ]
+    )
+
+    assert preview.endswith("...")
+    assert len(preview) <= 200
 
 
 def test_service_stage_command_includes_skip_binary_copy_by_default() -> None:
@@ -131,9 +152,9 @@ def test_select_command_preview_is_available_for_control_plane() -> None:
 
 def test_sidecar_service_previews_cover_restart_validate_and_snippet() -> None:
     """Build preview commands for the remaining sidecar workflow steps."""
-    restart_preview = preview_command(build_service_restart_command())
-    validate_preview = preview_command(build_service_validate_command())
-    snippet_preview = preview_command(build_service_snippet_command())
+    restart_preview = preview_command(build_service_restart_command(), max_length=None)
+    validate_preview = preview_command(build_service_validate_command(), max_length=None)
+    snippet_preview = preview_command(build_service_snippet_command(), max_length=None)
 
     assert "sidecar service-restart --unit-name scholar-outbound-sidecar.service" in restart_preview
     assert "sidecar service-validate --unit-name scholar-outbound-sidecar.service" in validate_preview
