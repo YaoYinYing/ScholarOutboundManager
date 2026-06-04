@@ -48,6 +48,7 @@ from scholar_outbound_manager.tui.view_model import build_logs_summary
 from scholar_outbound_manager.tui.view_model import RouteSummary
 from scholar_outbound_manager.tui.view_model import SettingsFieldView
 from scholar_outbound_manager.tui.view_model import build_activate_steps
+from scholar_outbound_manager.tui.view_model import build_route_candidate_display
 from scholar_outbound_manager.tui.view_model import build_operation_impact
 from scholar_outbound_manager.tui.view_model import build_route_detail
 from scholar_outbound_manager.tui.view_model import build_route_table_model
@@ -167,6 +168,89 @@ def redact_exception_message(message: str) -> str:
     if len(redacted) <= 240:
         return redacted
     return redacted[:237] + "..."
+
+
+def _build_refresh_error_body(safe_message: str) -> str:
+    """Build one redacted refresh failure panel body."""
+    return "\n".join(
+        [
+            "A UI refresh error occurred. Sensitive details were hidden.",
+            "",
+            f"Reason: {safe_message}",
+            "",
+            "Suggested recovery:",
+            "- Press r to reload.",
+            "- Check artifact consistency in Logs.",
+            "- Run Test Nodes if testing artifacts are stale.",
+            "- Quit and reopen if the error persists.",
+        ]
+    )
+
+
+def _run_safe_refresh(
+    *,
+    reason: str,
+    refresh_func: Callable[[], None],
+    render_error: Callable[[str, str], None],
+    journal_path: Path | None = None,
+) -> tuple[bool, str | None]:
+    """Run one refresh path without leaking raw traceback locals into the TUI."""
+    try:
+        refresh_func()
+    except Exception as exc:
+        safe_message = redact_exception_message(str(exc))
+        if journal_path is not None:
+            append_action_journal(
+                ActionResult(
+                    key="tui_refresh_error",
+                    title=f"TUI refresh failed during {reason}",
+                    command=["internal", "tui_refresh_error"],
+                    started_at="",
+                    finished_at="",
+                    exit_code=126,
+                    succeeded=False,
+                    stdout="",
+                    stderr=safe_message,
+                    redacted_stdout="",
+                    redacted_stderr=safe_message,
+                    summary=safe_message,
+                    expected_artifacts=[],
+                    warnings=["UI refresh failed before backend execution completed."],
+                ),
+                journal_path=journal_path,
+            )
+        render_error("TUI refresh failed", _build_refresh_error_body(safe_message))
+        return False, safe_message
+    return True, None
+
+
+def _build_route_select_options(route_state: dict[str, object]) -> list[tuple[str, str]]:
+    """Build passed-candidate Select options for the Route editor."""
+    options: list[tuple[str, str]] = []
+    for option in route_state.get("passed_candidates", []) if isinstance(route_state.get("passed_candidates"), list) else []:
+        if not isinstance(option, dict):
+            continue
+        options.append(
+            (
+                f"{option['label']} · {option['region_hint'] or '-'} · {option['protocol']} · {option['stage']}",
+                str(option["candidate_id"]),
+            )
+        )
+    return options
+
+
+def _resolve_route_select_value(
+    route_entry: dict[str, object],
+    options: Sequence[tuple[str, str]],
+) -> str | None:
+    """Resolve the current Route selector value without stringifying blank sentinels."""
+    candidate_id = route_entry.get("candidate_id")
+    if not isinstance(candidate_id, str) or not candidate_id:
+        return None
+    option_values = {value for _, value in options}
+    if candidate_id not in option_values:
+        return None
+    return candidate_id
 
 
 def _refresh_tab_bodies(
@@ -930,6 +1014,9 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
     if tab == "Route":
         route = workflow_state.get("route", {})
         table = build_route_table_model(workflow_state)
+        entries = route.get("entries", [])
+        selected_index = int(route.get("selected_index", 0) or 0)
+        current_entry = entries[selected_index] if isinstance(entries, list) and entries and 0 <= selected_index < len(entries) else {}
         lines = [
             "Route",
             "",
@@ -944,16 +1031,19 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
             [
                 "",
                 "Editor",
-                f"  Candidate: {route.get('entries', [{}])[route.get('selected_index', 0)].get('candidate_label') if route.get('entries') else 'none'}",
-                f"  Listen host: {route.get('entries', [{}])[route.get('selected_index', 0)].get('listen_host') if route.get('entries') else '127.0.0.1'}",
-                f"  Listen port: {route.get('entries', [{}])[route.get('selected_index', 0)].get('listen_port') if route.get('entries') else '19080'}",
-                f"  Enabled: {'yes' if (route.get('entries', [{}])[route.get('selected_index', 0)].get('enabled', True) if route.get('entries') else True) else 'no'}",
+                f"  Candidate: {build_route_candidate_display(current_entry if isinstance(current_entry, dict) else {}, limit=60)}",
+                f"  Listen host: {current_entry.get('listen_host') if isinstance(current_entry, dict) else '127.0.0.1'}",
+                f"  Listen port: {current_entry.get('listen_port') if isinstance(current_entry, dict) else '19080'}",
+                f"  Enabled: {'yes' if (current_entry.get('enabled', True) if isinstance(current_entry, dict) else True) else 'no'}",
                 f"  Managed service: {route.get('service_name')}",
                 "  Actions: [Choose Passed Node] [Test Port] [Apply] [Start] [Stop] [Restart] [Validate]",
+                f"  Candidate selector: {'enabled' if route.get('candidate_selector_enabled') else 'disabled'}",
                 f"  Apply available: {'yes' if route.get('can_apply') else 'no'}",
                 f"  Boundary: {route.get('production_boundary')}",
             ]
         )
+        if route.get("candidate_selector_message"):
+            lines.extend(["", f"  {route.get('candidate_selector_message')}"])
         if route.get("stale_warning"):
             lines.extend(["", f"  {route.get('stale_warning')}"])
         validation_errors = route.get("validation_errors")
@@ -1305,13 +1395,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 with Horizontal(id="confirmation-actions"):
                     yield Button("Confirm", id="pending-confirm")
                     yield Button("Cancel", id="pending-cancel")
+            with Vertical(id="error-panel"):
+                yield Static("TUI refresh failed", id="error-title")
+                yield Static("", id="error-body")
             yield Static("", id="shortcut-bar")
             yield Footer()
 
         def on_mount(self) -> None:
             self._init_tables()
             self._set_page("Home")
-            self._refresh_ui()
+            self._safe_refresh_ui("startup")
 
         def _build_home_page(self):
             with Vertical(id="page-home"):
@@ -1426,7 +1519,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _shortcuts_for_tab(page, pending_confirmation=bool(controller.pending_action))
             )
 
-        def _refresh_ui(self) -> None:
+        def _refresh_ui_impl(self) -> None:
+            self._clear_safe_error_state()
             self.query_one("#home-summary", Static).update(render_tab_text("Home", controller.workflow_state))
             self.query_one("#settings-diff-panel", Static).update(
                 controller.workflow_state.get("settings", {}).get("redacted_diff") or "No pending redacted diff."
@@ -1489,13 +1583,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.query_one("#route-listen-port", Input).value = str(route_entry.get("listen_port") or "19080")
             self.query_one("#route-enabled", Switch).value = bool(route_entry.get("enabled", True))
             route_select = self.query_one("#route-candidate-select", Select)
-            options = [
-                (f"{option['label']} · {option['region_hint'] or '-'} · {option['protocol']} · {option['stage']}", str(option["candidate_id"]))
-                for option in controller.workflow_state.get("route", {}).get("passed_candidates", [])
-                if isinstance(option, dict)
-            ]
+            route_state_dict = controller.workflow_state.get("route", {})
+            options = _build_route_select_options(route_state_dict if isinstance(route_state_dict, dict) else {})
             route_select.set_options(options)
-            route_select.value = str(route_entry.get("candidate_id") or Select.BLANK)
+            route_select.clear()
+            route_select_value = _resolve_route_select_value(route_entry if isinstance(route_entry, dict) else {}, options)
+            if route_select_value is not None:
+                route_select.value = route_select_value
             route_select.disabled = not bool(controller.workflow_state.get("route", {}).get("candidate_selector_enabled"))
             self.route_form_syncing = False
             self.query_one("#route-select", Button).disabled = route_select.disabled
@@ -1532,6 +1626,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.query_one("#shortcut-bar", Static).update(
                 _shortcuts_for_tab(self.current_page, pending_confirmation=bool(controller.pending_action))
             )
+
+        def _safe_refresh_ui(self, reason: str = "refresh") -> None:
+            succeeded, safe_message = _run_safe_refresh(
+                reason=reason,
+                refresh_func=self._refresh_ui_impl,
+                render_error=self._render_safe_error_state,
+                journal_path=controller._action_journal_path,  # type: ignore[attr-defined]
+            )
+            if not succeeded and safe_message:
+                self.notify(f"TUI refresh failed: {safe_message}", severity="error")
+
+        def _clear_safe_error_state(self) -> None:
+            error_panel = self.query_one("#error-panel", Vertical)
+            error_panel.display = False
+            self.query_one("#error-title", Static).update("TUI refresh failed")
+            self.query_one("#error-body", Static).update("")
+
+        def _render_safe_error_state(self, title: str, message: str) -> None:
+            error_panel = self.query_one("#error-panel", Vertical)
+            error_panel.display = True
+            self.query_one("#error-title", Static).update(title)
+            self.query_one("#error-body", Static).update(message)
 
         def _refresh_confirmation_panel(self) -> None:
             panel = self.query_one("#confirmation-panel", Vertical)
@@ -1581,7 +1697,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         def _run_tui_action(self, description: str, func: Callable[[], str | None]) -> None:
             message, succeeded = _run_safe_tui_action(controller, description, func)
-            self._refresh_ui()
+            self._safe_refresh_ui("after action")
             if message:
                 self.notify(message)
             elif succeeded and controller.action_state.status_message:
@@ -1643,14 +1759,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     self._update_route_field("listen_port", int(event.value))
                 except ValueError:
                     self._update_route_field("listen_port", 0)
-            self._refresh_ui()
+            self._safe_refresh_ui("route field edit")
 
         def on_switch_changed(self, event: Switch.Changed) -> None:
             if self.current_page != "Route" or self.route_form_syncing:
                 return
             if event.switch.id == "route-enabled":
                 self._update_route_field("enabled", bool(event.value))
-                self._refresh_ui()
+                self._safe_refresh_ui("route toggle")
 
         def on_select_changed(self, event) -> None:
             if self.current_page != "Route" or self.route_form_syncing:

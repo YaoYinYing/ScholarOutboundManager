@@ -131,6 +131,19 @@ class LogsSummary:
     rollback_warning: list[str]
 
 
+def build_route_candidate_display(entry: dict[str, object], *, limit: int = 24) -> str:
+    """Build one route candidate label that stays aligned with route draft state."""
+    candidate_id = _coerce_optional_str(entry.get("candidate_id"))
+    candidate_label = redact_text(str(entry.get("candidate_label") or "")).strip()
+    error = _coerce_optional_str(entry.get("error"))
+    if not candidate_id:
+        return "(not selected)"
+    if error == "stale candidate":
+        stale_label = candidate_label or candidate_id
+        return truncate_display_value(f"stale: {stale_label}", limit=limit)
+    return truncate_display_value(candidate_label or candidate_id, limit=limit)
+
+
 def build_candidate_table_rows(entries: list[CandidateCatalogEntry]) -> list[dict[str, object]]:
     """Build secret-safe table rows for TUI rendering."""
     return [
@@ -449,7 +462,7 @@ def build_route_table_model(workflow_state: dict[str, object]) -> TableModel:
             [
                 "ON" if entry.get("enabled") else "OFF",
                 str(entry.get("name") or "Route"),
-                truncate_display_value(str(entry.get("candidate_label") or route.get("selected_candidate_label") or "Unassigned"), limit=24),
+                build_route_candidate_display(entry, limit=24),
                 str(entry.get("region_hint") or "-"),
                 str(entry.get("protocol") or "-"),
                 str(entry.get("listen_host") or "127.0.0.1"),

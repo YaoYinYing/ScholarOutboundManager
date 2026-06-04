@@ -266,6 +266,13 @@ def test_security_doc_exists_and_warns_about_sensitive_material() -> None:
     assert "generated xray fragments are legacy offline exports" in security_text.lower()
 
 
+def test_tui_source_does_not_assign_string_select_blank() -> None:
+    app_source = (PROJECT_ROOT / "scholar_outbound_manager" / "tui" / "app.py").read_text(encoding="utf-8")
+
+    assert '"Select.BLANK"' not in app_source
+    assert "str(Select.BLANK)" not in app_source
+
+
 def test_config_example_keeps_network_probe_disabled_by_default() -> None:
     """Require the example config to keep live probing disabled by default."""
     example_text = (PROJECT_ROOT / "config.example.yaml").read_text(encoding="utf-8")

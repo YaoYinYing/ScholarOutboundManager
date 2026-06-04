@@ -68,6 +68,8 @@ def test_existing_route_entries_are_loaded_and_stale_candidates_are_marked(tmp_p
 
     assert state.entries[0].candidate_id == "candidate-stale"
     assert state.entries[0].error == "stale candidate"
+    assert state.can_apply is False
+    assert state.candidate_selector_enabled is True
 
 
 def test_delete_last_route_is_refused(tmp_path: Path) -> None:
@@ -90,6 +92,19 @@ def test_artifact_lineage_mismatch_disables_apply(tmp_path: Path) -> None:
 
     assert state.can_apply is False
     assert state.stale_warning is not None
+    assert state.candidate_selector_enabled is False
+    assert state.candidate_selector_message == "Testing artifacts are stale. Run Test Nodes before changing routes."
+
+
+def test_missing_passed_candidates_disables_selector(tmp_path: Path) -> None:
+    paths = _write_config_and_artifacts(tmp_path)
+    paths.passed_candidates.unlink()
+
+    state = build_route_workbench_state(config_path=str(paths.config_path), user_data_paths=paths)
+
+    assert state.candidate_selector_enabled is False
+    assert state.candidate_selector_message == "No passed candidates available. Run Test Nodes first."
+    assert state.can_apply is False
 
 
 def test_choosing_passed_candidate_updates_route_draft(tmp_path: Path) -> None:

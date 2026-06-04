@@ -70,6 +70,7 @@ class RouteWorkbenchState:
     validation_errors: list[str]
     production_boundary: str
     candidate_selector_enabled: bool
+    candidate_selector_message: str | None
     stale_warning: str | None
     current_port_result: PortCheckResult | None
 
@@ -118,6 +119,12 @@ def build_route_workbench_state(
     config_summary = summarize_config_centered_state(config_path)
     artifact_warning = _load_artifact_warning(user_data_paths)
     options = build_passed_candidate_options(user_data_paths.passed_candidates) if artifact_warning is None else []
+    if artifact_warning is not None:
+        candidate_selector_message = artifact_warning
+    elif not options:
+        candidate_selector_message = "No passed candidates available. Run Test Nodes first."
+    else:
+        candidate_selector_message = None
     option_by_id = {option.candidate_id: option for option in options}
     raw_entries = (
         [dict(entry) for entry in route_entries]
@@ -162,6 +169,7 @@ def build_route_workbench_state(
         validation_errors=validation_errors,
         production_boundary="Only ScholarOutboundManager sidecar is managed. Production Xray/XrayR/x-ui is never modified.",
         candidate_selector_enabled=artifact_warning is None and bool(options),
+        candidate_selector_message=candidate_selector_message,
         stale_warning=artifact_warning,
         current_port_result=port_results.get(entries[selected_index].route_id),
     )
@@ -271,6 +279,7 @@ def update_route_entry_candidate(
         validation_errors=validation_errors,
         production_boundary=state.production_boundary,
         candidate_selector_enabled=state.candidate_selector_enabled,
+        candidate_selector_message=state.candidate_selector_message,
         stale_warning=state.stale_warning,
         current_port_result=state.current_port_result,
     )
@@ -304,6 +313,7 @@ def add_route_entry(state: RouteWorkbenchState) -> RouteWorkbenchState:
         validation_errors=validation_errors,
         production_boundary=state.production_boundary,
         candidate_selector_enabled=state.candidate_selector_enabled,
+        candidate_selector_message=state.candidate_selector_message,
         stale_warning=state.stale_warning,
         current_port_result=None,
     )
@@ -325,6 +335,7 @@ def delete_route_entry(state: RouteWorkbenchState) -> tuple[RouteWorkbenchState,
             validation_errors=validation_errors,
             production_boundary=state.production_boundary,
             candidate_selector_enabled=state.candidate_selector_enabled,
+            candidate_selector_message=state.candidate_selector_message,
             stale_warning=state.stale_warning,
             current_port_result=None,
         ),
@@ -369,6 +380,7 @@ def check_selected_route_port(
         validation_errors=validation_errors,
         production_boundary=state.production_boundary,
         candidate_selector_enabled=state.candidate_selector_enabled,
+        candidate_selector_message=state.candidate_selector_message,
         stale_warning=state.stale_warning,
         current_port_result=result,
     )
@@ -383,6 +395,7 @@ def route_workbench_state_to_dict(state: RouteWorkbenchState) -> dict[str, objec
         "validation_errors": list(state.validation_errors),
         "production_boundary": state.production_boundary,
         "candidate_selector_enabled": state.candidate_selector_enabled,
+        "candidate_selector_message": state.candidate_selector_message,
         "stale_warning": state.stale_warning,
         "current_port_result": None if state.current_port_result is None else asdict(state.current_port_result),
     }

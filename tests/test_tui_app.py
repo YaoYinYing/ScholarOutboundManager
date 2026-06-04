@@ -229,6 +229,54 @@ def test_confirmation_body_explains_destructive_boundary() -> None:
     assert "Press Enter to confirm or Esc to cancel." in body
 
 
+def test_route_select_value_is_blank_for_missing_candidate_or_empty_options() -> None:
+    assert tui_app._resolve_route_select_value({"candidate_id": None}, []) is None
+    assert tui_app._resolve_route_select_value({"candidate_id": "candidate-001"}, []) is None
+    assert tui_app._resolve_route_select_value({"candidate_id": "candidate-001"}, [("US relay", "candidate-001")]) == "candidate-001"
+
+
+def test_route_select_options_do_not_use_blank_string_sentinel() -> None:
+    source = (Path(tui_app.__file__)).read_text(encoding="utf-8")
+
+    assert '"Select.BLANK"' not in source
+    assert "str(Select.BLANK)" not in source
+
+
+def test_safe_refresh_redacts_exception_details_without_reraising(tmp_path: Path) -> None:
+    captured: list[tuple[str, str]] = []
+    journal_path = tmp_path / "action_journal.jsonl"
+
+    def refresh() -> None:
+        raise RuntimeError(
+            "bad vless://uuid-raw@example.invalid:443?path=/secret "
+            "11111111-2222-3333-4444-555555555555 "
+            "server_name=example.invalid host=example.invalid path=/secret"
+        )
+
+    succeeded, safe_message = tui_app._run_safe_refresh(
+        reason="startup",
+        refresh_func=refresh,
+        render_error=lambda title, message: captured.append((title, message)),
+        journal_path=journal_path,
+    )
+
+    assert succeeded is False
+    assert safe_message is not None
+    assert captured
+    assert captured[0][0] == "TUI refresh failed"
+    assert "Sensitive details were hidden." in captured[0][1]
+    assert "vless://" not in captured[0][1]
+    assert "11111111-2222-3333-4444-555555555555" not in captured[0][1]
+    assert "example.invalid" not in captured[0][1]
+    assert journal_path.exists()
+
+
+def test_on_mount_uses_safe_refresh_wrapper() -> None:
+    source = (Path(tui_app.__file__)).read_text(encoding="utf-8")
+
+    assert 'self._safe_refresh_ui("startup")' in source
+
+
 def test_probe_command_preview_uses_user_data_dir_paths(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
