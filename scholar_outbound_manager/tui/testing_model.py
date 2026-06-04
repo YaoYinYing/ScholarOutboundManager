@@ -11,6 +11,7 @@ from scholar_outbound_manager.selection import CandidateCatalogEntry
 from scholar_outbound_manager.selection import build_candidate_catalog
 from scholar_outbound_manager.selection import infer_probe_passed
 from scholar_outbound_manager.selection import load_candidate_payload
+from scholar_outbound_manager.state.artifact_lineage import compute_artifact_hash
 from scholar_outbound_manager.tui.config_centered import summarize_config_centered_state
 from scholar_outbound_manager.tui.path_resolver import UserDataPaths
 from scholar_outbound_manager.tui.testing_jobs import TestingJobState
@@ -450,9 +451,13 @@ def _load_artifact_warning(user_data_paths: UserDataPaths) -> str | None:
     if not probe_payload or not candidates_payload:
         return None
     probe_hash = str(probe_payload.get("source_candidates_hash") or "")
-    candidate_hash = str(candidates_payload.get("hash") or "")
+    candidate_hash = compute_artifact_hash(candidates_payload)
     if probe_hash and candidate_hash and probe_hash != candidate_hash:
-        return "Artifact mismatch detected; rerun fetch and probe before continuing."
+        return (
+            "Artifact lineage mismatch.\n"
+            "The current probe summary does not match the current candidates artifact.\n"
+            "Run Test Nodes to rebuild probe_summary and passed_candidates."
+        )
     return None
 
 

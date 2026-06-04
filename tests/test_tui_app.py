@@ -182,10 +182,11 @@ def test_render_logs_shows_local_only_rollback_warning() -> None:
 
 def test_shortcuts_are_contextual_by_page() -> None:
     assert tui_app._shortcuts_for_tab("Home", pending_confirmation=False) != tui_app._shortcuts_for_tab("Route", pending_confirmation=False)
-    assert "1-5 pages" in tui_app._shortcuts_for_tab("Home", pending_confirmation=False)
+    assert "1 Home" in tui_app._shortcuts_for_tab("Home", pending_confirmation=False)
+    assert "Apply" in tui_app._shortcuts_for_tab("Route", pending_confirmation=False)
 
 
-def test_testing_confirmation_message_mentions_network_write_boundary() -> None:
+def test_testing_action_notice_mentions_network_write_boundary() -> None:
     message = tui_app._build_testing_confirmation_message(
         {
             "settings": {"user_data_dir": "state_data"},
@@ -210,6 +211,22 @@ def test_testing_confirmation_message_mentions_network_write_boundary() -> None:
     assert "use network" in message
     assert "write artifacts under state_data" in message
     assert "will not modify production Xray/XrayR/x-ui" in message
+    assert "Pending confirmation" not in message
+
+
+def test_confirmation_body_explains_destructive_boundary() -> None:
+    pending = tui_app.PendingAction(
+        key="service_restart",
+        title="Restart Managed Sidecar Service",
+        requires_confirmation=True,
+        risk_note="Restart only the managed service.",
+    )
+
+    body = tui_app._build_confirmation_body(pending)
+
+    assert "Touches systemd: yes" in body
+    assert "Does not modify production Xray/XrayR/x-ui." in body
+    assert "Press Enter to confirm or Esc to cancel." in body
 
 
 def test_safe_wrapper_redacts_exception_and_journals(tmp_path: Path, monkeypatch) -> None:

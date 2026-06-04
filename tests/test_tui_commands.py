@@ -110,16 +110,23 @@ def test_operation_specs_capture_expected_risk_flags() -> None:
     fetch_spec = _spec(
         key="fetch",
         command=build_fetch_command(),
-        requires_confirmation=True,
+        requires_confirmation=False,
         network_access=True,
         systemd_access=False,
     )
     probe_spec = _spec(
         key="probe",
         command=build_probe_command(),
-        requires_confirmation=True,
+        requires_confirmation=False,
         network_access=True,
         systemd_access=False,
+    )
+    validate_spec = _spec(
+        key="service_validate",
+        command=build_service_validate_command(),
+        requires_confirmation=False,
+        network_access=True,
+        systemd_access=True,
     )
     restart_spec = _spec(
         key="service_restart",
@@ -127,6 +134,13 @@ def test_operation_specs_capture_expected_risk_flags() -> None:
         requires_confirmation=True,
         network_access=False,
         systemd_access=True,
+    )
+    stage_spec = _spec(
+        key="sidecar_stage",
+        command=build_service_stage_command(),
+        requires_confirmation=True,
+        network_access=False,
+        systemd_access=False,
     )
     artifact_spec = _spec(
         key="artifact_check",
@@ -136,9 +150,11 @@ def test_operation_specs_capture_expected_risk_flags() -> None:
         systemd_access=False,
     )
 
-    assert fetch_spec.network_access is True and fetch_spec.requires_confirmation is True
-    assert probe_spec.network_access is True and probe_spec.requires_confirmation is True
+    assert fetch_spec.network_access is True and fetch_spec.requires_confirmation is False
+    assert probe_spec.network_access is True and probe_spec.requires_confirmation is False
+    assert validate_spec.systemd_access is True and validate_spec.requires_confirmation is False
     assert restart_spec.systemd_access is True and restart_spec.requires_confirmation is True
+    assert stage_spec.requires_confirmation is True
     assert artifact_spec.network_access is False and artifact_spec.systemd_access is False and artifact_spec.requires_confirmation is False
 
 

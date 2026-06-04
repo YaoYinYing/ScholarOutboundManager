@@ -16,6 +16,7 @@ from scholar_outbound_manager.tui.action_runner import ActionRunner
 from scholar_outbound_manager.tui.action_runner import FakeActionRunner
 from scholar_outbound_manager.tui.action_runner import SubprocessActionRunner
 from scholar_outbound_manager.tui.action_runner import append_action_journal
+from scholar_outbound_manager.tui.action_policy import get_action_policy
 from scholar_outbound_manager.tui.artifact_rollback import ArtifactRollbackResult
 from scholar_outbound_manager.tui.artifact_rollback import ArtifactSnapshot
 from scholar_outbound_manager.tui.artifact_rollback import create_artifact_snapshot
@@ -478,19 +479,13 @@ class WorkbenchController:
         return str(resolve_user_data_paths(self._paths()["config"]).undo_journal)
 
     def _pending_from_action_key(self, action_key: str) -> PendingAction:
-        if action_key == "choose_selected_candidate":
+        if action_key in {"choose_selected_candidate", "rollback_snapshot"}:
+            policy = get_action_policy(action_key)
             return PendingAction(
                 key=action_key,
-                title="Choose Selected Candidate",
-                requires_confirmation=True,
-                risk_note="Writes selected_candidate.json and snapshots current local artifacts first.",
-            )
-        if action_key == "rollback_snapshot":
-            return PendingAction(
-                key=action_key,
-                title="Rollback Snapshot",
-                requires_confirmation=True,
-                risk_note="Restores local artifacts only and does not undo network or systemd side effects.",
+                title="Choose Selected Candidate" if action_key == "choose_selected_candidate" else "Rollback Snapshot",
+                requires_confirmation=policy.requires_confirmation,
+                risk_note=policy.user_facing_risk,
             )
         spec = self._operation_spec(action_key)
         return PendingAction(

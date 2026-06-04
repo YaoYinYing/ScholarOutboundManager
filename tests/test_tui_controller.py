@@ -131,35 +131,56 @@ def test_safe_config_field_update_uses_transaction(tmp_path: Path) -> None:
     assert (tmp_path / "state_data" / "tui" / "config_undo_journal.jsonl").exists()
 
 
-def test_pending_action_requires_confirmation(tmp_path: Path) -> None:
+def test_fetch_action_is_routine_and_does_not_require_confirmation(tmp_path: Path) -> None:
     controller = _build_controller(tmp_path, runner=_CountingRunner())
 
     pending = controller.prepare_action("fetch")
 
-    assert pending.requires_confirmation is True
-    assert controller.action_state.pending_confirmation == "fetch"
+    assert pending.requires_confirmation is False
+    assert controller.action_state.pending_confirmation is None
 
 
-def test_confirmed_action_runs_through_fake_runner(tmp_path: Path) -> None:
+def test_routine_action_runs_through_fake_runner_immediately(tmp_path: Path) -> None:
     runner = _CountingRunner()
     controller = _build_controller(tmp_path, runner=runner)
 
-    controller.prepare_action("fetch")
-    result = controller.confirm_action("fetch")
+    result = controller.handle_operation("fetch")
 
-    assert result.succeeded is True
+    assert "completed successfully" in result
     assert runner.calls == ["fetch"]
+
+
+def test_probe_action_runs_through_fake_runner_immediately(tmp_path: Path) -> None:
+    runner = _CountingRunner()
+    controller = _build_controller(tmp_path, runner=runner)
+
+    result = controller.handle_operation("probe")
+
+    assert "completed successfully" in result
+    assert runner.calls == ["probe"]
+
+
+def test_destructive_action_requires_prepare_and_confirm(tmp_path: Path) -> None:
+    runner = _CountingRunner()
+    controller = _build_controller(tmp_path, runner=runner)
+
+    pending = controller.prepare_action("service_restart")
+    result = controller.confirm_action("service_restart")
+
+    assert pending.requires_confirmation is True
+    assert result.succeeded is True
+    assert runner.calls == ["service_restart"]
 
 
 def test_clear_pending_action_prevents_execution(tmp_path: Path) -> None:
     runner = _CountingRunner()
     controller = _build_controller(tmp_path, runner=runner)
 
-    controller.prepare_action("fetch")
+    controller.prepare_action("service_restart")
     controller.clear_pending_action()
 
     with pytest.raises(ValueError):
-        controller.confirm_action("fetch")
+        controller.confirm_action("service_restart")
     assert runner.calls == []
 
 

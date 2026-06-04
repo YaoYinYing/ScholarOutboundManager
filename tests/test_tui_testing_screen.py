@@ -79,6 +79,7 @@ def test_render_testing_page_uses_workbench_language_not_command_dump() -> None:
                     "markers": (),
                     "selected_for_route": False,
                     "explanation": "Home and query both passed without failure markers.",
+                    "artifact_warning": "Artifact lineage mismatch.\nThe current probe summary does not match the current candidates artifact.\nRun Test Nodes to rebuild probe_summary and passed_candidates.",
                 },
                 "log_lines": ["Probe Candidates completed successfully."],
             }
@@ -90,4 +91,5 @@ def test_render_testing_page_uses_workbench_language_not_command_dump() -> None:
     assert "Retest Failed" in rendered
     assert "Selected candidate" in rendered
     assert "Recent events" in rendered
+    assert "Artifact lineage mismatch." in rendered
     assert "scholar-outbound-manager probe" not in rendered

@@ -17,6 +17,7 @@ from scholar_outbound_manager.tui.action_runner import ActionResult
 from scholar_outbound_manager.tui.artifact_rollback import ArtifactSnapshot
 from scholar_outbound_manager.tui.action_runner import FakeActionRunner
 from scholar_outbound_manager.tui.action_runner import append_action_journal
+from scholar_outbound_manager.tui.action_policy import get_action_policy
 from scholar_outbound_manager.tui.config_centered import build_first_run_wizard_state
 from scholar_outbound_manager.tui.config_centered import summarize_config_centered_state
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
@@ -27,6 +28,7 @@ from scholar_outbound_manager.tui.control_plane import control_plane_state_to_di
 from scholar_outbound_manager.tui.control_plane import load_control_plane_state
 from scholar_outbound_manager.tui.controller import WorkbenchMessage
 from scholar_outbound_manager.tui.controller import WorkbenchController as BaseWorkbenchController
+from scholar_outbound_manager.tui.controller import PendingAction
 from scholar_outbound_manager.tui.path_resolver import resolve_user_data_paths
 from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
 from scholar_outbound_manager.tui.state import build_session_state
@@ -69,12 +71,16 @@ TUI_KEY_BINDINGS: tuple[tuple[str, str, str], ...] = (
     ("s", "save_draft", "Save Draft"),
     ("u", "undo_save", "Undo Save"),
     ("f", "run_fetch", "Run Fetch"),
-    ("p", "run_probe", "Run Probe"),
-    ("a", "run_artifact_check", "Run Artifact Check"),
-    ("c", "run_select", "Run Select"),
-    ("g", "run_stage_sidecar", "Run Stage Sidecar"),
+    ("t", "run_probe", "Run Probe"),
+    ("shift+f", "run_retest_failed", "Retest Failed"),
+    ("c", "run_artifact_check", "Run Artifact Check"),
+    ("a", "run_select", "Run Select"),
+    ("shift+a", "run_stage_sidecar", "Run Stage Sidecar"),
+    ("shift+r", "run_restart_sidecar", "Restart Sidecar"),
+    ("shift+s", "route_start_placeholder", "Start Sidecar"),
+    ("shift+x", "route_stop_placeholder", "Stop Sidecar"),
     ("v", "run_validate_sidecar", "Run Validate"),
-    ("x", "create_snapshot", "Create Snapshot"),
+    ("x", "contextual_x", "Contextual X"),
     ("z", "rollback_latest_snapshot", "Rollback Latest Snapshot"),
     ("?", "show_help", "Help"),
 )
@@ -270,14 +276,50 @@ def _build_testing_confirmation_message(
     impact = build_operation_impact(operation, action_label=action_label)
     user_data_dir = str(workflow_state.get("settings", {}).get("user_data_dir") or "user_data_dir")
     lines = [
-        f"Pending confirmation: {action_label}.",
+        f"{action_label} is a live Testing action.",
         f"This will {'use network' if impact.uses_network else 'stay local'}, write artifacts under {user_data_dir}, and will not modify production Xray/XrayR/x-ui.",
     ]
     if impact.touches_system:
         lines.append("This action can touch a managed system service.")
-    if impact.confirmation_required:
-        lines.append("Press Enter or trigger the same action again to continue, or press Escape to cancel.")
     return " ".join(lines)
+
+
+def _testing_banner_text(artifact_warning: str | None) -> str:
+    lines = [
+        "Fetch/Test are live network operations.",
+        "They write local artifacts under user_data_dir.",
+        "They do not modify production Xray/XrayR/x-ui.",
+    ]
+    if artifact_warning:
+        lines.extend(["", artifact_warning])
+    return "\n".join(lines)
+
+
+def _pending_title_for_action(action_key: str) -> str:
+    titles = {
+        "sidecar_stage": "Apply Route",
+        "service_start": "Start Managed Sidecar Service",
+        "service_stop": "Stop Managed Sidecar Service",
+        "service_restart": "Restart Managed Sidecar Service",
+        "rollback_snapshot": "Rollback Artifact Snapshot",
+    }
+    return titles.get(action_key, action_key.replace("_", " ").title())
+
+
+def _build_confirmation_body(pending: PendingAction) -> str:
+    policy = get_action_policy(pending.key)
+    lines = [
+        pending.title,
+        "",
+        f"Risk: {policy.user_facing_risk}",
+        f"Changes local artifacts: {'yes' if policy.writes_artifact else 'no'}",
+        f"Touches managed service: {'yes' if policy.mutates_service else 'no'}",
+        f"Touches systemd: {'yes' if policy.systemd_access else 'no'}",
+        "Does not modify production Xray/XrayR/x-ui.",
+        "",
+        "Press Enter to confirm or Esc to cancel.",
+    ]
+    return "\n".join(lines)
 
 
 def _selected_cursor_candidate_id(workbench: dict[str, object]) -> str | None:
@@ -297,13 +339,13 @@ def _selected_cursor_candidate_id(workbench: dict[str, object]) -> str | None:
 
 def _shortcuts_for_tab(tab: str, *, pending_confirmation: bool) -> str:
     if pending_confirmation:
-        return "Keys: 1-5 pages | Enter confirm | Esc cancel | q quit"
+        return "Keys: Enter confirm | Esc cancel | q quit"
     shortcuts = {
-        "Home": "Keys: 1-5 pages | f fetch | p test nodes | x snapshot | q quit",
-        "Settings": "Keys: 1-5 pages | s save | u undo | d diff | f test fetch | q quit",
-        "Testing": "Keys: 1-5 pages | f fetch | p test nodes | j/k move | Esc cancel | q quit",
-        "Route": "Keys: 1-5 pages | c choose node | g stage | v validate | q quit",
-        "Logs": "Keys: 1-5 pages | a artifact check | x snapshot | z rollback | q quit",
+        "Home": "Keys: 1 Home | 2 Settings | 3 Testing | 4 Route | 5 Logs | r Refresh | q Quit",
+        "Settings": "Keys: s Save | u Undo | d Diff | f Test Fetch | q Quit",
+        "Testing": "Keys: f Fetch | t Test Nodes | F Retest Failed | x Stop | j/k Move | Enter Inspect | q Quit",
+        "Route": "Keys: a Add Route | d Delete Route | e Edit | p Test Port | A Apply | S Start | X Stop | R Restart | v Validate | q Quit",
+        "Logs": "Keys: c Artifact Check | x Snapshot | z Rollback | q Quit",
     }
     return shortcuts.get(tab, "Keys: 1-5 pages | r refresh | q quit")
 
@@ -581,7 +623,11 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
             "entries": config_summary.route_entries,
             "selected_candidate_label": payload["selection_state"]["selected_candidate_label"],
             "selected_candidate_id": payload["selection_state"]["selected_candidate_id"],
+            "listen_host": config_summary.route_entries[0].get("listen_host") if config_summary.route_entries else "127.0.0.1",
+            "listen_port": config_summary.route_entries[0].get("listen_port") if config_summary.route_entries else 19080,
+            "route_enabled": config_summary.route_entries[0].get("enabled", True) if config_summary.route_entries else True,
             "service_name": config_summary.service_name,
+            "candidate_select_ready": False,
             "production_boundary": "Only manages the ScholarOutboundManager sidecar. It does not modify production Xray/XrayR/x-ui.",
             "actions": ["Add Route", "Remove Route", "Apply", "Start", "Stop", "Restart", "Validate"],
         },
@@ -825,6 +871,10 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
         lines = [
             "Testing",
             "",
+            "Fetch/Test are live network operations.",
+            "They write local artifacts under user_data_dir.",
+            "They do not modify production Xray/XrayR/x-ui.",
+            "",
             "Toolbar: [Fetch Subscription] [Test Nodes] [Retest Failed] [Stop]",
             f"Progress: {testing.get('job_state') or 'idle'} {testing.get('progress_current') or 0}/{testing.get('progress_total') or max(int(summary.get('supported_count') or 0), 0)}",
             "",
@@ -861,6 +911,9 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 f"  Explanation: {inspector.get('explanation') or '-'}",
             ]
         )
+        warning = inspector.get("artifact_warning")
+        if isinstance(warning, str) and warning:
+            lines.extend(["", warning])
         if log_lines:
             lines.extend(["", "Recent events"])
             for line in log_lines[:4]:
@@ -884,8 +937,12 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
                 "",
                 "Editor",
                 f"  Candidate: {route.get('selected_candidate_label') or 'none'}",
+                f"  Listen host: {route.get('listen_host') or '127.0.0.1'}",
+                f"  Listen port: {route.get('listen_port') or '19080'}",
+                f"  Enabled: {'yes' if route.get('route_enabled', True) else 'no'}",
                 f"  Managed service: {route.get('service_name')}",
-                "  Actions: [Add Route] [Remove Route] [Apply] [Start] [Stop] [Restart] [Validate]",
+                "  Actions: [Choose Passed Node] [Test Port] [Apply] [Start] [Stop] [Restart] [Validate]",
+                "  Candidate selector not implemented yet." if not route.get("candidate_select_ready", False) else "  Candidate selector is ready.",
                 f"  Boundary: {route.get('production_boundary')}",
             ]
         )
@@ -1205,6 +1262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         BINDINGS = list(TUI_KEY_BINDINGS)
         current_page = "Home"
         testing_selected_index: int | None = None
+        pending_action_handler: Callable[[], str] | None = None
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -1222,6 +1280,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 with Vertical(id="inspector-column"):
                     yield Static("Inspector", id="inspector-title")
                     yield Static("", id="inspector-body")
+            with Vertical(id="confirmation-panel"):
+                yield Static("Confirm Action", id="confirmation-title")
+                yield Static("", id="confirmation-body")
+                with Horizontal(id="confirmation-actions"):
+                    yield Button("Confirm", id="pending-confirm")
+                    yield Button("Cancel", id="pending-cancel")
             yield Static("", id="shortcut-bar")
             yield Footer()
 
@@ -1241,13 +1305,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         def _build_settings_page(self):
             with Vertical(id="page-settings"):
                 yield Static("Settings", classes="page-title")
+                yield Static("Config path", classes="field-label")
                 yield Input("", id="settings-config-path", disabled=True)
+                yield Static("User data dir", classes="field-label")
                 yield Input("", id="settings-user-data-dir")
+                yield Static("Subscription URL", classes="field-label")
                 yield Input("", id="settings-subscription-url", password=True)
+                yield Static("User-Agent", classes="field-label")
                 yield Input("", id="settings-user-agent")
+                yield Static("Xray binary path", classes="field-label")
                 yield Input("", id="settings-xray-path")
+                yield Static("Managed service name", classes="field-label")
                 yield Input("", id="settings-service-name")
+                yield Static("Fail closed", classes="field-label")
                 yield Switch(value=True, id="settings-fail-closed")
+                yield Static("Experimental Hysteria2", classes="field-label")
                 yield Switch(value=False, id="settings-hysteria2")
                 with Horizontal(id="settings-actions"):
                     yield Button("Save", id="settings-save")
@@ -1258,6 +1330,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         def _build_testing_page(self):
             with Vertical(id="page-testing"):
+                yield Static(
+                    "Fetch/Test are live network operations.\n"
+                    "They write local artifacts under user_data_dir.\n"
+                    "They do not modify production Xray/XrayR/x-ui.",
+                    id="testing-banner",
+                )
                 with Horizontal(id="testing-actions"):
                     yield Button("Fetch Subscription", id="testing-fetch")
                     yield Button("Test Nodes", id="testing-probe")
@@ -1274,14 +1352,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             with Vertical(id="page-route"):
                 with Horizontal(id="route-actions"):
                     yield Button("Choose Passed Node", id="route-select")
+                    yield Button("Test Port", id="route-test-port")
                     yield Button("Apply", id="route-apply")
                     yield Button("Start", id="route-start")
                     yield Button("Stop", id="route-stop")
                     yield Button("Restart", id="route-restart")
                     yield Button("Validate", id="route-validate")
                 yield DataTable(id="route-table")
+                yield Static("Candidate", classes="field-label")
+                yield Static("Candidate selector not implemented yet.", id="route-candidate-note")
+                yield Static("Listen host", classes="field-label")
                 yield Input("", id="route-listen-host")
+                yield Static("Listen port", classes="field-label")
                 yield Input("", id="route-listen-port")
+                yield Static("Enabled", classes="field-label")
                 yield Switch(value=True, id="route-enabled")
                 yield Static("", id="route-boundary")
 
@@ -1342,6 +1426,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             progress_total = testing_state.progress_total or max(testing_state.summary.supported_count, 1)
             progress.update(total=progress_total, progress=testing_state.progress_current)
             self.query_one("#testing-summary", Static).update("\n".join(_render_testing_summary_lines(testing)))
+            self.query_one("#testing-banner", Static).update(
+                _testing_banner_text(testing_state.inspector.artifact_warning)
+            )
             testing_table = self.query_one("#testing-table", DataTable)
             testing_table.clear()
             testing_model = build_testing_table_model(controller.workflow_state)
@@ -1385,10 +1472,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             for line in logs.rollback_warning:
                 rich_log.write(line)
 
+            self._refresh_confirmation_panel()
             self._refresh_inspector()
             self.query_one("#shortcut-bar", Static).update(
                 _shortcuts_for_tab(self.current_page, pending_confirmation=bool(controller.pending_action))
             )
+
+        def _refresh_confirmation_panel(self) -> None:
+            panel = self.query_one("#confirmation-panel", Vertical)
+            pending = controller.pending_action
+            panel.display = pending is not None
+            if pending is None:
+                self.query_one("#confirmation-body", Static).update("")
+                return
+            self.query_one("#confirmation-title", Static).update(f"Confirm: {pending.title}")
+            self.query_one("#confirmation-body", Static).update(_build_confirmation_body(pending))
 
         def _refresh_inspector(self) -> None:
             if self.current_page == "Home":
@@ -1404,8 +1502,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ]
             elif self.current_page == "Testing":
                 body = [
-                    "Fetch/Test are explicit live operations.",
-                    "Confirmation is required before network writes.",
+                    "Fetch/Test are live network operations.",
+                    "They write local artifacts under user_data_dir.",
+                    "They do not modify production Xray/XrayR/x-ui.",
                     "Recent events remain redacted.",
                 ]
             elif self.current_page == "Route":
@@ -1454,7 +1553,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "testing-fetch": self.action_run_fetch,
                 "testing-probe": self.action_run_probe,
                 "testing-retest": self.action_run_retest_failed,
+                "testing-stop": self.action_stop_testing_job,
                 "route-select": self.action_run_select,
+                "route-test-port": self.action_route_test_port_placeholder,
                 "route-apply": self.action_run_stage_sidecar,
                 "route-start": self.action_route_start_placeholder,
                 "route-stop": self.action_route_stop_placeholder,
@@ -1463,6 +1564,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "logs-artifact-check": self.action_run_artifact_check,
                 "logs-snapshot": self.action_create_snapshot,
                 "logs-rollback": self.action_rollback_latest_snapshot,
+                "pending-confirm": self.action_confirm_selected,
+                "pending-cancel": self.action_cancel_pending,
             }
             action = button_actions.get(button_id)
             if action is not None:
@@ -1518,24 +1621,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             if controller.pending_action is not None:
                 self._run_tui_action(
                     "Confirm selected action",
-                    lambda: controller.handle_operation(controller.pending_action.key),
+                    self._confirm_pending_action,
                 )
                 return
             self._run_tui_action("Confirm selected action", lambda: controller.handle_operation("choose_selected_candidate"))
 
         def action_cancel_pending(self) -> None:
-            self._run_tui_action("Cancel pending action", lambda: (controller.clear_pending_action(), "Pending action cleared.")[1])
+            self._run_tui_action(
+                "Cancel pending action",
+                lambda: (setattr(self, "pending_action_handler", None), controller.clear_pending_action(), "Pending action cleared.")[2],
+            )
 
         def action_run_fetch(self) -> None:
-            self._run_tui_action("Run fetch", lambda: self._handle_testing_operation("fetch", "Fetch Subscription"))
+            self._run_tui_action("Run fetch", lambda: controller.handle_operation("fetch"))
 
         def action_run_probe(self) -> None:
-            self._run_tui_action("Run probe", lambda: self._handle_testing_operation("probe", "Test Nodes"))
+            self._run_tui_action("Run probe", lambda: controller.handle_operation("probe"))
 
         def action_run_retest_failed(self) -> None:
             self._run_tui_action(
                 "Retest failed candidates",
                 lambda: "Retest Failed is not implemented for the current backend yet.",
+            )
+
+        def action_stop_testing_job(self) -> None:
+            self._run_tui_action(
+                "Stop testing job",
+                lambda: "No running fetch/probe worker is attached in this phase.",
             )
 
         def action_run_artifact_check(self) -> None:
@@ -1545,10 +1657,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             self._run_tui_action("Choose selected candidate", lambda: controller.handle_operation("choose_selected_candidate"))
 
         def action_run_stage_sidecar(self) -> None:
-            self._run_tui_action("Stage sidecar", lambda: controller.handle_operation("sidecar_stage"))
+            self._run_tui_action("Stage sidecar", lambda: self._request_confirmation("sidecar_stage"))
 
         def action_run_restart_sidecar(self) -> None:
-            self._run_tui_action("Restart sidecar", lambda: controller.handle_operation("service_restart"))
+            self._run_tui_action("Restart sidecar", lambda: self._request_confirmation("service_restart"))
 
         def action_run_validate_sidecar(self) -> None:
             self._run_tui_action("Validate sidecar", lambda: controller.handle_operation("service_validate"))
@@ -1556,20 +1668,47 @@ def main(argv: Sequence[str] | None = None) -> int:
         def action_route_start_placeholder(self) -> None:
             self._run_tui_action(
                 "Start sidecar",
-                lambda: "Managed start remains explicit and out of scope in this phase; restart/validate are the safe wired actions.",
+                lambda: self._request_confirmation(
+                    "service_start",
+                    handler=lambda: (
+                        controller.clear_pending_action(),
+                        "Managed start remains explicit and out of scope in this phase; no systemd start was executed.",
+                    )[1],
+                ),
             )
 
         def action_route_stop_placeholder(self) -> None:
             self._run_tui_action(
                 "Stop sidecar",
-                lambda: "Managed stop remains explicit and out of scope in this phase; no external Xray process is touched.",
+                lambda: self._request_confirmation(
+                    "service_stop",
+                    handler=lambda: (
+                        controller.clear_pending_action(),
+                        "Managed stop remains explicit and out of scope in this phase; no systemd stop was executed.",
+                    )[1],
+                ),
+            )
+
+        def action_route_test_port_placeholder(self) -> None:
+            self._run_tui_action(
+                "Test route port",
+                lambda: "Port occupancy testing is not implemented yet.",
             )
 
         def action_create_snapshot(self) -> None:
             self._run_tui_action("Create snapshot", controller.create_snapshot_message)
 
+        def action_contextual_x(self) -> None:
+            if self.current_page == "Testing":
+                self.action_stop_testing_job()
+                return
+            if self.current_page == "Logs":
+                self.action_create_snapshot()
+                return
+            self.action_create_snapshot()
+
         def action_rollback_latest_snapshot(self) -> None:
-            self._run_tui_action("Rollback latest snapshot", controller.rollback_latest_snapshot)
+            self._run_tui_action("Rollback latest snapshot", lambda: self._request_confirmation("rollback_snapshot"))
 
         def action_show_help(self) -> None:
             self._run_tui_action("Show help", lambda: _shortcuts_for_tab(self.current_page, pending_confirmation=bool(controller.pending_action)))
@@ -1591,17 +1730,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.testing_selected_index = max(0, min(len(state.rows) - 1, current + delta))
             return "Selection moved down." if delta > 0 else "Selection moved up."
 
-        def _handle_testing_operation(self, action_key: str, action_label: str) -> str:
-            if controller.pending_action is not None and controller.pending_action.key == action_key:
-                return controller.handle_operation(action_key)
-            controller.prepare_action(action_key)
-            message = _build_testing_confirmation_message(
-                controller.workflow_state,
-                action_key=action_key,
-                action_label=action_label,
+        def _request_confirmation(self, action_key: str, handler: Callable[[], str] | None = None) -> str:
+            policy = get_action_policy(action_key)
+            pending = PendingAction(
+                key=action_key,
+                title=_pending_title_for_action(action_key),
+                requires_confirmation=policy.requires_confirmation,
+                risk_note=policy.user_facing_risk,
             )
-            controller.action_state.status_message = message
-            return message
+            controller.pending_action = pending
+            controller.action_state.pending_confirmation = action_key
+            controller.action_state.status_message = f"Pending: {pending.title}. Press Enter to confirm or Esc to cancel."
+            self.pending_action_handler = handler
+            return str(controller.action_state.status_message)
+
+        def _confirm_pending_action(self) -> str:
+            pending = controller.pending_action
+            if pending is None:
+                return "No pending action to confirm."
+            handler = self.pending_action_handler
+            self.pending_action_handler = None
+            if handler is not None:
+                result = handler()
+                controller.pending_action = None
+                controller.action_state.pending_confirmation = None
+                controller.action_state.status_message = result
+                return result
+            return controller.handle_operation(pending.key)
 
     ScholarOutboundWorkflowApp().run()
     return 0
