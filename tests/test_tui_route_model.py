@@ -12,6 +12,7 @@ from scholar_outbound_manager.tui.route_model import add_route_entry
 from scholar_outbound_manager.tui.route_model import build_passed_candidate_options
 from scholar_outbound_manager.tui.route_model import build_route_workbench_state
 from scholar_outbound_manager.tui.route_model import delete_route_entry
+from scholar_outbound_manager.tui.route_model import save_route_draft_state
 from scholar_outbound_manager.tui.route_model import save_route_entries_to_config_or_selected_routes
 from scholar_outbound_manager.tui.route_model import update_route_entry_candidate
 
@@ -116,6 +117,20 @@ def test_choosing_passed_candidate_updates_route_draft(tmp_path: Path) -> None:
     assert updated.entries[0].candidate_id == "candidate-001"
     assert updated.entries[0].candidate_label is not None
     assert updated.entries[0].protocol == "vless"
+
+
+def test_route_refresh_preserves_selected_candidate_from_draft_store(tmp_path: Path) -> None:
+    paths = _write_config_and_artifacts(tmp_path, candidate_id=None)
+    state = build_route_workbench_state(config_path=str(paths.config_path), user_data_paths=paths)
+    updated = update_route_entry_candidate(state, entry_index=0, candidate_id="candidate-001")
+    save_route_draft_state(user_data_paths=paths, entries=updated.entries)
+
+    refreshed = build_route_workbench_state(config_path=str(paths.config_path), user_data_paths=paths)
+
+    assert refreshed.entries[0].candidate_id == "candidate-001"
+    assert refreshed.entries[0].candidate_label is not None
+    assert "missing a passed candidate" not in refreshed.validation_errors
+    assert refreshed.can_apply is True
 
 
 def test_save_route_entries_writes_config_and_local_route_artifacts(tmp_path: Path) -> None:

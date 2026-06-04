@@ -52,6 +52,36 @@ def test_passed_candidates_render_as_passed_without_probe_summary(tmp_path: Path
     assert state.summary.passed_count == 1
 
 
+def test_full_passed_candidates_artifact_produces_pass_rows(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    paths = resolve_user_data_paths(config_path)
+    _write_candidates(paths.candidates)
+    _write_probe_summary(paths.probe_summary, with_hash=True, candidates_path=paths.candidates)
+    _write_full_passed_candidates(paths.passed_candidates, with_hash=True, candidates_path=paths.candidates)
+
+    state = build_testing_screen_state(config_path=str(config_path), user_data_paths=paths)
+
+    assert state.rows[0].status_icon == "PASS"
+    assert state.summary.attempted_count == 3
+    assert state.summary.passed_count == 1
+    assert state.summary.failed_count == 2
+
+
+def test_lineage_mismatch_marks_rows_stale_not_pending(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    paths = resolve_user_data_paths(config_path)
+    _write_candidates(paths.candidates)
+    _write_probe_summary(paths.probe_summary, with_hash=False, candidates_path=paths.candidates)
+    _write_full_passed_candidates(paths.passed_candidates, with_hash=False, candidates_path=paths.candidates)
+
+    state = build_testing_screen_state(config_path=str(config_path), user_data_paths=paths)
+
+    assert state.artifacts_stale is True
+    assert state.rows[0].status_icon == "STALE"
+    assert state.rows[0].stage == "stale"
+    assert "artifact lineage is still inconsistent" in state.inspector.explanation.lower()
+
+
 def test_query_blocked_and_transport_failures_receive_readable_explanations(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     paths = resolve_user_data_paths(config_path)
@@ -199,7 +229,9 @@ def _write_candidates(path: Path) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def _write_probe_summary(path: Path) -> None:
+def _write_probe_summary(path: Path, *, with_hash: bool = True, candidates_path: Path | None = None) -> None:
+    from scholar_outbound_manager.state.artifact_lineage import compute_artifact_hash
+
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": 1,
@@ -222,12 +254,49 @@ def _write_probe_summary(path: Path) -> None:
             ),
         ],
     }
+    if with_hash and candidates_path is not None:
+        payload["source_candidates_hash"] = compute_artifact_hash(json.loads(candidates_path.read_text(encoding="utf-8")))
+    elif candidates_path is not None:
+        payload["source_candidates_hash"] = "deadbeefdeadbeef"
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 def _write_passed_candidates(path: Path, candidate_ids: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"passed_candidate_ids": candidate_ids}, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_full_passed_candidates(path: Path, *, with_hash: bool, candidates_path: Path) -> None:
+    from scholar_outbound_manager.state.artifact_lineage import compute_artifact_hash
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "candidates": [
+            {
+                "candidate_id": "candidate-001",
+                "candidate": {
+                    "source_name": "fixture-source",
+                    "raw_name": "US relay",
+                    "protocol": "vless",
+                    "address": "198.51.100.10",
+                    "port": 443,
+                    "supported": True,
+                },
+                "probe": {
+                    "candidate_id": "candidate-001",
+                    "home_status": 200,
+                    "query_status": 200,
+                    "latency_ms": 1225,
+                    "failure_markers": [],
+                },
+            }
+        ],
+    }
+    payload["source_candidates_hash"] = (
+        compute_artifact_hash(json.loads(candidates_path.read_text(encoding="utf-8"))) if with_hash else "deadbeefdeadbeef"
+    )
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 def _write_action_journal(path: Path) -> None:

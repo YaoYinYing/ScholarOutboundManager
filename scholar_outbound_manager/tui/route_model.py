@@ -31,6 +31,8 @@ from scholar_outbound_manager.tui.path_resolver import UserDataPaths
 from scholar_outbound_manager.tui.path_resolver import load_raw_config_mapping
 from scholar_outbound_manager.tui.port_check import PortCheckResult
 from scholar_outbound_manager.tui.port_check import check_route_port
+from scholar_outbound_manager.tui.route_draft_store import load_route_draft_entries
+from scholar_outbound_manager.tui.route_draft_store import save_route_draft_entries
 from scholar_outbound_manager.tui.view_model import redact_text
 
 
@@ -182,6 +184,10 @@ def load_route_entries_from_config_or_selected_routes(
 ) -> list[dict[str, object]]:
     """Load route entries from config.yaml and optional selected-routes artifact."""
 
+    draft_entries = load_route_draft_entries(user_data_paths)
+    if draft_entries:
+        return draft_entries
+
     raw = load_raw_config_mapping(config_path)
     route = raw.get("route")
     route_entries = route.get("entries") if isinstance(route, dict) else None
@@ -240,6 +246,16 @@ def save_route_entries_to_config_or_selected_routes(
     _write_selected_candidate_artifact_if_available(user_data_paths.selected_candidate, user_data_paths.passed_candidates, enabled_entries)
     _write_pool_plan_if_available(user_data_paths.pool_plan, enabled_entries)
     return "Route draft saved to config.yaml and local route artifacts were refreshed."
+
+
+def save_route_draft_state(
+    *,
+    user_data_paths: UserDataPaths,
+    entries: list[RouteEntryDraft],
+) -> str:
+    """Persist Route draft entries so refreshes preserve operator edits."""
+    save_route_draft_entries(entries, user_data_paths)
+    return "Route draft saved."
 
 
 def update_route_entry_candidate(

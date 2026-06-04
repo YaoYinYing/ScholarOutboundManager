@@ -35,6 +35,7 @@ from scholar_outbound_manager.tui.route_model import build_route_workbench_state
 from scholar_outbound_manager.tui.route_model import check_selected_route_port
 from scholar_outbound_manager.tui.route_model import delete_route_entry
 from scholar_outbound_manager.tui.route_model import route_workbench_state_to_dict
+from scholar_outbound_manager.tui.route_model import save_route_draft_state
 from scholar_outbound_manager.tui.route_model import save_route_entries_to_config_or_selected_routes
 from scholar_outbound_manager.tui.route_model import update_route_entry_candidate
 from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
@@ -1942,16 +1943,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             return state
 
         def _load_route_state(self):
-            current_route = controller.workflow_state.get("route", {})
             state = build_route_workbench_state(
                 config_path=controller._paths()["config"],
                 user_data_paths=resolve_user_data_paths(controller._paths()["config"]),
                 selected_index=self.route_selected_index,
                 port_results=self.route_port_results,
-                route_entries=current_route.get("entries") if isinstance(current_route.get("entries"), list) else None,
             )
             self.route_selected_index = state.selected_index
             return state
+
+        def _store_route_state(self, state) -> None:
+            paths = resolve_user_data_paths(controller._paths()["config"])
+            save_route_draft_state(user_data_paths=paths, entries=state.entries)
+            controller.workflow_state["route"] = route_workbench_state_to_dict(state) | {
+                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
+                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
+                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
+                "actions": controller.workflow_state.get("route", {}).get("actions", []),
+            }
 
         def _move_testing_selection(self, delta: int) -> str:
             state = self._load_testing_state()
@@ -1999,12 +2008,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 port_results=self.route_port_results,
                 route_entries=entries,
             )
-            controller.workflow_state["route"] = route_workbench_state_to_dict(rebuilt) | {
-                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
-                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
-                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
-                "actions": controller.workflow_state.get("route", {}).get("actions", []),
-            }
+            self._store_route_state(rebuilt)
             return f"Updated {field}."
 
         def _choose_selected_route_candidate(self) -> str:
@@ -2014,34 +2018,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not isinstance(value, str) or not value:
                 return "Choose a passed candidate first."
             updated = update_route_entry_candidate(route_state, entry_index=self.route_selected_index, candidate_id=value)
-            controller.workflow_state["route"] = route_workbench_state_to_dict(updated) | {
-                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
-                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
-                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
-                "actions": controller.workflow_state.get("route", {}).get("actions", []),
-            }
+            self._store_route_state(updated)
             return f"Updated route candidate to {value}."
 
         def _choose_route_candidate_id(self, value: str) -> str:
             route_state = self._load_route_state()
             updated = update_route_entry_candidate(route_state, entry_index=self.route_selected_index, candidate_id=value)
-            controller.workflow_state["route"] = route_workbench_state_to_dict(updated) | {
-                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
-                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
-                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
-                "actions": controller.workflow_state.get("route", {}).get("actions", []),
-            }
+            self._store_route_state(updated)
             return f"Updated route candidate to {value}."
 
         def _add_route_entry(self) -> str:
             state = self._load_route_state()
             updated = add_route_entry(state)
-            controller.workflow_state["route"] = route_workbench_state_to_dict(updated) | {
-                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
-                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
-                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
-                "actions": controller.workflow_state.get("route", {}).get("actions", []),
-            }
+            self._store_route_state(updated)
             self.route_selected_index = updated.selected_index
             return "Added route draft."
 
@@ -2050,12 +2039,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             updated, warning = delete_route_entry(state)
             if warning is not None:
                 return warning
-            controller.workflow_state["route"] = route_workbench_state_to_dict(updated) | {
-                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
-                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
-                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
-                "actions": controller.workflow_state.get("route", {}).get("actions", []),
-            }
+            self._store_route_state(updated)
             self.route_selected_index = updated.selected_index
             return "Deleted selected route draft."
 
@@ -2070,12 +2054,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for entry, result in ((updated.entries[updated.selected_index], updated.current_port_result),)
                 if result is not None
             } | {key: value for key, value in self.route_port_results.items() if key != updated.entries[updated.selected_index].route_id}
-            controller.workflow_state["route"] = route_workbench_state_to_dict(updated) | {
-                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
-                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
-                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
-                "actions": controller.workflow_state.get("route", {}).get("actions", []),
-            }
+            self._store_route_state(updated)
             if updated.current_port_result is None:
                 return "Port check did not return a result."
             return updated.current_port_result.message

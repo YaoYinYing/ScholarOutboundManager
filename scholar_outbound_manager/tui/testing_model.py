@@ -6,14 +6,14 @@ import json
 from dataclasses import asdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from scholar_outbound_manager.selection import CandidateCatalogEntry
-from scholar_outbound_manager.selection import build_candidate_catalog
 from scholar_outbound_manager.selection import infer_probe_passed
-from scholar_outbound_manager.selection import load_candidate_payload
-from scholar_outbound_manager.state.artifact_lineage import compute_artifact_hash
 from scholar_outbound_manager.tui.config_centered import summarize_config_centered_state
 from scholar_outbound_manager.tui.path_resolver import UserDataPaths
+from scholar_outbound_manager.tui.testing_artifacts import TestingArtifacts
+from scholar_outbound_manager.tui.testing_artifacts import load_testing_artifacts
 from scholar_outbound_manager.tui.testing_jobs import TestingJobState
 from scholar_outbound_manager.tui.testing_jobs import idle_testing_job_state
 
@@ -94,7 +94,7 @@ def build_testing_screen_state(
     user_data_paths: UserDataPaths,
     selected_index: int | None = None,
 ) -> TestingScreenState:
-    """Build the full Testing page state from local artifacts."""
+    """Build the full Testing page state from canonical local artifacts."""
 
     config_summary = summarize_config_centered_state(config_path)
     selected_route_ids = {
@@ -102,28 +102,27 @@ def build_testing_screen_state(
         for entry in config_summary.route_entries
         if isinstance(entry, dict) and entry.get("candidate_id")
     }
-    artifact_warning = _load_artifact_warning(user_data_paths)
-    probe_records = _load_probe_records(user_data_paths.probe_summary)
-    passed_ids = _load_passed_candidate_ids(user_data_paths.passed_candidates)
+    artifacts = load_testing_artifacts(user_data_paths)
+    artifact_warning = artifacts.warnings[0] if artifacts.warnings else None
     rows = build_candidate_test_rows(
-        candidates_path=user_data_paths.candidates,
-        probe_records=probe_records,
-        passed_candidate_ids=passed_ids,
+        candidates=artifacts.candidates,
+        probe_records=artifacts.probe_results_by_candidate_id,
+        passed_candidate_ids=artifacts.passed_ids,
         selected_route_ids=selected_route_ids,
         experimental_hysteria2=config_summary.experimental_hysteria2,
+        artifacts_stale=artifacts.probe_summary_exists and not artifacts.lineage_consistent,
     )
     clamped_index = _clamp_selected_index(rows, selected_index)
     selected_row = None if clamped_index is None else rows[clamped_index]
     job = _build_testing_job_state(
-        summary_path=user_data_paths.probe_summary,
+        summary_exists=artifacts.probe_summary_exists,
         rows=rows,
-        candidates_path=user_data_paths.candidates,
+        candidates_exist=artifacts.candidates_exists,
     )
     summary = _build_testing_summary(
         rows=rows,
         subscription_configured=config_summary.subscription_url_configured,
-        candidates_path=user_data_paths.candidates,
-        summary_path=user_data_paths.probe_summary,
+        artifacts=artifacts,
     )
     inspector = build_candidate_inspector(
         selected_row,
@@ -133,6 +132,7 @@ def build_testing_screen_state(
             subscription_configured=config_summary.subscription_url_configured,
             summary=summary,
             rows=rows,
+            artifacts_stale=bool(artifact_warning),
         ),
     )
     return TestingScreenState(
@@ -143,7 +143,7 @@ def build_testing_screen_state(
         job_state=job.status,
         progress_current=job.current,
         progress_total=job.total,
-        log_lines=_build_log_lines(user_data_paths, fallback_message=job.message),
+        log_lines=_build_log_lines(user_data_paths, fallback_message=job.message, artifacts_stale=bool(artifact_warning)),
         actions={
             "fetch": config_summary.subscription_url_configured,
             "probe": summary.candidate_count > 0,
@@ -158,25 +158,21 @@ def build_testing_screen_state(
 
 def build_candidate_test_rows(
     *,
-    candidates_path: str | Path,
+    candidates: list[CandidateCatalogEntry],
     probe_records: dict[str, dict[str, object]] | None = None,
     passed_candidate_ids: set[str] | None = None,
     selected_route_ids: set[str] | None = None,
     experimental_hysteria2: bool = False,
+    artifacts_stale: bool = False,
 ) -> list[CandidateTestRow]:
-    """Build secret-safe candidate test rows from local artifacts."""
+    """Build secret-safe candidate test rows from canonical artifacts."""
 
     probe_records = {} if probe_records is None else dict(probe_records)
     passed_candidate_ids = set() if passed_candidate_ids is None else set(passed_candidate_ids)
     selected_route_ids = set() if selected_route_ids is None else set(selected_route_ids)
-    try:
-        payload = load_candidate_payload(candidates_path)
-        entries = build_candidate_catalog(payload)
-    except (FileNotFoundError, ValueError, OSError):
-        return []
 
     rows: list[CandidateTestRow] = []
-    for entry in entries:
+    for entry in candidates:
         record = probe_records.get(entry.candidate_id, {})
         probe_payload = record.get("probe_payload")
         if not isinstance(probe_payload, dict):
@@ -196,6 +192,7 @@ def build_candidate_test_rows(
             passed=passed,
             experimental_disabled=experimental_disabled,
             skipped=bool(record.get("skipped")),
+            artifacts_stale=artifacts_stale and (attempted or bool(probe_payload)),
         )
         markers = tuple(_resolve_markers(entry=entry, probe_payload=probe_payload, stage=stage))
         rows.append(
@@ -210,6 +207,7 @@ def build_candidate_test_rows(
                     attempted=attempted,
                     passed=passed,
                     experimental_disabled=experimental_disabled,
+                    artifacts_stale=artifacts_stale and (attempted or bool(probe_payload)),
                 ),
                 supported=supported,
                 experimental=experimental_disabled,
@@ -285,10 +283,10 @@ def explain_probe_failure(
 ) -> str:
     """Return a human-readable explanation for the selected candidate."""
 
+    if stage == "stale":
+        return "Probe command succeeded, but artifact lineage is still inconsistent. Check output paths and rerun Test Nodes."
     if experimental and protocol == "hysteria2":
-        return (
-            "Hysteria2 via Xray is experimental and disabled by default after persistent transport EOF failures."
-        )
+        return "Hysteria2 via Xray is experimental and disabled by default after persistent transport EOF failures."
     if not supported:
         return "This candidate is not supported by the current runtime."
     if passed:
@@ -335,8 +333,7 @@ def _build_testing_summary(
     *,
     rows: list[CandidateTestRow],
     subscription_configured: bool,
-    candidates_path: str | Path,
-    summary_path: str | Path,
+    artifacts: TestingArtifacts,
 ) -> TestingSummary:
     candidate_count = len(rows)
     supported_count = sum(1 for row in rows if row.supported)
@@ -361,27 +358,27 @@ def _build_testing_summary(
         full_access_count=full_access_count,
         query_blocked_count=query_blocked_count,
         transport_failed_count=transport_failed_count,
-        last_fetch_status="ready" if Path(candidates_path).exists() else "missing",
-        last_probe_status="ready" if Path(summary_path).exists() else "not_tested",
+        last_fetch_status="ready" if artifacts.candidates_exists else "missing",
+        last_probe_status="stale" if artifacts.probe_summary_exists and not artifacts.lineage_consistent else ("ready" if artifacts.probe_summary_exists else "not_tested"),
     )
 
 
 def _build_testing_job_state(
     *,
-    summary_path: str | Path,
+    summary_exists: bool,
     rows: list[CandidateTestRow],
-    candidates_path: str | Path,
+    candidates_exist: bool,
 ) -> TestingJobState:
-    if Path(summary_path).exists():
+    if summary_exists:
         return idle_testing_job_state(
-            message=f"Completed. Tested {sum(1 for row in rows if row.attempted)} of {sum(1 for row in rows if row.supported)} supported nodes."
+            message=f"Completed. Tested {sum(1 for row in rows if row.attempted or row.stage == 'stale')} of {sum(1 for row in rows if row.supported)} supported nodes."
         )
-    if Path(candidates_path).exists():
+    if candidates_exist:
         return idle_testing_job_state(message="Candidates fetched. Press Test Nodes.")
     return idle_testing_job_state(message="Idle. Fetch Subscription to populate candidates.")
 
 
-def _build_log_lines(user_data_paths: UserDataPaths, *, fallback_message: str) -> list[str]:
+def _build_log_lines(user_data_paths: UserDataPaths, *, fallback_message: str, artifacts_stale: bool) -> list[str]:
     journal_path = user_data_paths.action_journal
     if not journal_path.exists():
         return [fallback_message]
@@ -395,6 +392,8 @@ def _build_log_lines(user_data_paths: UserDataPaths, *, fallback_message: str) -
         stderr_tail = str(payload.get("redacted_stderr") or "")
         stdout_tail = str(payload.get("redacted_stdout") or "")
         lines.append(f"{title}: {summary or 'completed'}")
+        if operation_key == "probe" and payload.get("succeeded") is True and artifacts_stale:
+            lines.append("Probe command succeeded, but artifact lineage is still inconsistent.")
         if stdout_tail:
             lines.append(stdout_tail.splitlines()[-1])
         if stderr_tail:
@@ -443,70 +442,6 @@ def _iter_journal_rows(path: Path) -> list[dict[str, object]]:
     return rows
 
 
-def _load_probe_records(path: str | Path) -> dict[str, dict[str, object]]:
-    payload = _read_json_mapping(path)
-    raw_records = payload.get("records")
-    if not isinstance(raw_records, list):
-        return {}
-    records: dict[str, dict[str, object]] = {}
-    for raw_record in raw_records:
-        if not isinstance(raw_record, dict):
-            continue
-        candidate_id = raw_record.get("candidate_id")
-        if not isinstance(candidate_id, str) or not candidate_id:
-            continue
-        summary = raw_record.get("summary")
-        result_payload = {}
-        if isinstance(summary, dict) and isinstance(summary.get("result"), dict):
-            result_payload = {
-                str(key): value for key, value in summary["result"].items()
-            }
-        records[candidate_id] = {
-            "attempted": bool(raw_record.get("attempted")),
-            "passed": bool(raw_record.get("passed")),
-            "skipped": bool(raw_record.get("skipped")),
-            "skip_reason": raw_record.get("skip_reason"),
-            "probe_payload": result_payload,
-        }
-    return records
-
-
-def _load_passed_candidate_ids(path: str | Path) -> set[str]:
-    payload = _read_json_mapping(path)
-    raw_ids = payload.get("passed_candidate_ids")
-    if isinstance(raw_ids, list):
-        return {str(candidate_id) for candidate_id in raw_ids if isinstance(candidate_id, str) and candidate_id}
-    return set()
-
-
-def _load_artifact_warning(user_data_paths: UserDataPaths) -> str | None:
-    probe_payload = _read_json_mapping(user_data_paths.probe_summary)
-    candidates_payload = _read_json_mapping(user_data_paths.candidates)
-    if not probe_payload or not candidates_payload:
-        return None
-    probe_hash = str(probe_payload.get("source_candidates_hash") or "")
-    candidate_hash = compute_artifact_hash(candidates_payload)
-    if probe_hash and candidate_hash and probe_hash != candidate_hash:
-        return (
-            "Artifact lineage mismatch.\n"
-            "The current probe summary does not match the current candidates artifact.\n"
-            "Run Test Nodes to rebuild probe_summary and passed_candidates."
-        )
-    return None
-
-
-def _read_json_mapping(path: str | Path) -> dict[str, object]:
-    try:
-        raw_text = Path(path).read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError):
-        return {}
-    try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError:
-        return {}
-    return {str(key): value for key, value in payload.items()} if isinstance(payload, dict) else {}
-
-
 def _clamp_selected_index(rows: list[CandidateTestRow], selected_index: int | None) -> int | None:
     if not rows:
         return None
@@ -524,11 +459,14 @@ def _resolve_stage(
     passed: bool,
     experimental_disabled: bool,
     skipped: bool,
+    artifacts_stale: bool,
 ) -> str | None:
     if experimental_disabled:
         return "experimental_disabled"
     if not supported:
         return "unsupported"
+    if artifacts_stale:
+        return "stale"
     if passed:
         return "full_access"
     if skipped:
@@ -563,6 +501,8 @@ def _resolve_markers(
     markers = [str(marker) for marker in probe_payload.get("failure_markers") or [] if isinstance(marker, str)]
     if stage == "experimental_disabled":
         markers.append("disabled")
+    if stage == "stale":
+        markers.append("stale")
     if not markers:
         markers.extend(entry.failure_markers)
     return markers
@@ -574,11 +514,14 @@ def _status_icon(
     attempted: bool,
     passed: bool,
     experimental_disabled: bool,
+    artifacts_stale: bool,
 ) -> str:
     if experimental_disabled:
         return "EXP"
     if not supported:
         return "UNSUP"
+    if artifacts_stale:
+        return "STALE"
     if passed:
         return "PASS"
     if attempted:
@@ -592,6 +535,7 @@ def _resolve_empty_state_message(
     subscription_configured: bool,
     summary: TestingSummary,
     rows: list[CandidateTestRow],
+    artifacts_stale: bool,
 ) -> str:
     if not Path(config_path).exists():
         return "No config.yaml found. Open Settings to create one."
@@ -599,6 +543,8 @@ def _resolve_empty_state_message(
         return "No subscription URL configured. Open Settings."
     if summary.candidate_count == 0:
         return "No candidates fetched yet. Press Fetch Subscription."
+    if artifacts_stale:
+        return "Testing artifacts are stale. Run Test Nodes before changing routes."
     if rows and summary.attempted_count == 0:
         return "Candidates fetched. Press Test Nodes."
     if rows and summary.passed_count == 0:
