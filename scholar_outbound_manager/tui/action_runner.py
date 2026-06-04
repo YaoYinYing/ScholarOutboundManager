@@ -150,6 +150,7 @@ def append_action_journal(
         "command_preview": preview_command(result.command, max_length=None),
         "exit_code": result.exit_code,
         "succeeded": result.succeeded,
+        "summary": result.summary,
         "redacted_stdout": result.redacted_stdout,
         "redacted_stderr": result.redacted_stderr,
         "expected_artifacts": list(result.expected_artifacts),
@@ -184,11 +185,11 @@ def load_last_action(
         "title": last_payload.get("title"),
         "exit_code": last_payload.get("exit_code"),
         "succeeded": last_payload.get("succeeded"),
-        "summary": _summarize(
+        "summary": str(last_payload.get("summary") or _summarize(
             title=str(last_payload.get("title") or ""),
             exit_code=last_payload.get("exit_code"),
             success=bool(last_payload.get("succeeded") is True),
-        ),
+        )),
         "redacted_stdout_tail": _tail(str(last_payload.get("redacted_stdout") or "")),
         "redacted_stderr_tail": _tail(str(last_payload.get("redacted_stderr") or "")),
         "warnings": list(last_payload.get("warnings") or []),

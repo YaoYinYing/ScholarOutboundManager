@@ -99,6 +99,64 @@ def test_render_settings_hides_subscription_url_and_shows_safe_fields() -> None:
     assert "[Save] [Undo] [Show Diff] [Test Fetch]" in rendered
 
 
+def test_render_testing_shows_summary_inspector_and_recent_events() -> None:
+    rendered = tui_app.render_tab_text(
+        "Testing",
+        {
+            "testing": {
+                "job_state": "idle",
+                "progress_current": 2,
+                "progress_total": 4,
+                "summary": {
+                    "subscription_configured": True,
+                    "last_fetch_status": "ready",
+                    "candidate_count": 4,
+                    "supported_count": 3,
+                    "experimental_disabled_count": 1,
+                    "attempted_count": 2,
+                    "passed_count": 1,
+                    "failed_count": 1,
+                },
+                "rows": [
+                    {
+                        "index": 18,
+                        "region_hint": "US",
+                        "label": "US relay",
+                        "protocol": "vless",
+                        "status_icon": "PASS",
+                        "passed": True,
+                        "latency_ms": 1225,
+                        "home_status": 200,
+                        "query_status": 200,
+                        "stage": "full_access",
+                        "markers": (),
+                    }
+                ],
+                "inspector": {
+                    "label": "US relay",
+                    "region_hint": "US",
+                    "protocol": "vless",
+                    "candidate_id": "candidate-018",
+                    "scholar_stage": "full_access",
+                    "home_status": 200,
+                    "query_status": 200,
+                    "latency_ms": 1225,
+                    "markers": (),
+                    "selected_for_route": False,
+                    "explanation": "Home and query both passed without failure markers.",
+                },
+                "log_lines": ["Probe Candidates completed successfully."],
+            }
+        },
+    )
+
+    assert "Summary" in rendered
+    assert "Candidates: 4" in rendered
+    assert "Selected candidate" in rendered
+    assert "Recent events" in rendered
+    assert "Probe Candidates completed successfully." in rendered
+
+
 def test_render_logs_shows_local_only_rollback_warning() -> None:
     rendered = tui_app.render_tab_text(
         "Logs",
@@ -125,6 +183,33 @@ def test_render_logs_shows_local_only_rollback_warning() -> None:
 def test_shortcuts_are_contextual_by_page() -> None:
     assert tui_app._shortcuts_for_tab("Home", pending_confirmation=False) != tui_app._shortcuts_for_tab("Route", pending_confirmation=False)
     assert "1-5 pages" in tui_app._shortcuts_for_tab("Home", pending_confirmation=False)
+
+
+def test_testing_confirmation_message_mentions_network_write_boundary() -> None:
+    message = tui_app._build_testing_confirmation_message(
+        {
+            "settings": {"user_data_dir": "state_data"},
+            "control_plane": {
+                "command_state": {
+                    "operations": [
+                        {
+                            "key": "fetch",
+                            "requires_confirmation": True,
+                            "network_access": True,
+                            "systemd_access": False,
+                            "risk_note": "Live network operation.",
+                        }
+                    ]
+                }
+            },
+        },
+        action_key="fetch",
+        action_label="Fetch Subscription",
+    )
+
+    assert "use network" in message
+    assert "write artifacts under state_data" in message
+    assert "will not modify production Xray/XrayR/x-ui" in message
 
 
 def test_safe_wrapper_redacts_exception_and_journals(tmp_path: Path, monkeypatch) -> None:

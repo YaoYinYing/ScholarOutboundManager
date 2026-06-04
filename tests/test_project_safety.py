@@ -164,6 +164,7 @@ def test_readme_exists_and_documents_current_cli_chain() -> None:
     assert "interactive workflow workbench" in readme_text.lower()
     assert "`home | settings | testing | route | logs`" in readme_text.lower()
     assert "the `testing` page presents redacted candidate testing summaries" in readme_text.lower()
+    assert "the `testing` page is a node-testing workbench" in readme_text.lower()
     assert "`settings` groups allowlisted field editing by purpose" in readme_text.lower()
     assert "`logs` is the troubleshooting surface" in readme_text.lower()
     assert "the bottom shortcut bar is contextual" in readme_text.lower()

@@ -31,6 +31,8 @@ from scholar_outbound_manager.tui.path_resolver import resolve_user_data_paths
 from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
 from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import write_session_state
+from scholar_outbound_manager.tui.testing_model import build_testing_screen_state
+from scholar_outbound_manager.tui.testing_model import testing_screen_state_to_dict
 from scholar_outbound_manager.tui.view_model import ActivateStep
 from scholar_outbound_manager.tui.view_model import build_home_cards
 from scholar_outbound_manager.tui.view_model import build_logs_summary
@@ -218,6 +220,66 @@ def _find_operation(workflow_state: dict[str, object], key: str) -> dict[str, ob
     return None
 
 
+def _render_testing_summary_lines(testing_state: dict[str, object]) -> list[str]:
+    summary = testing_state.get("summary", {}) if isinstance(testing_state.get("summary"), dict) else {}
+    return [
+        f"Subscription: {'configured' if summary.get('subscription_configured') else 'missing'}",
+        f"Fetched: {summary.get('last_fetch_status') or 'missing'}",
+        f"Candidates: {summary.get('candidate_count') or 0}",
+        f"Supported: {summary.get('supported_count') or 0}",
+        f"Experimental-disabled: {summary.get('experimental_disabled_count') or 0}",
+        f"Tested: {summary.get('attempted_count') or 0} / {summary.get('supported_count') or 0}",
+        f"Passed: {summary.get('passed_count') or 0}",
+        f"Failed: {summary.get('failed_count') or 0}",
+    ]
+
+
+def _render_testing_inspector_text(testing_state: dict[str, object]) -> str:
+    inspector = testing_state.get("inspector", {}) if isinstance(testing_state.get("inspector"), dict) else {}
+    markers = inspector.get("markers")
+    marker_text = ", ".join(str(marker) for marker in markers) if isinstance(markers, (list, tuple)) and markers else "none"
+    lines = [
+        "Selected candidate",
+        "",
+        f"Label: {inspector.get('label') or 'none'}",
+        f"Region: {inspector.get('region_hint') or '-'}",
+        f"Protocol: {inspector.get('protocol') or '-'}",
+        f"Candidate ID: {inspector.get('candidate_id') or '-'}",
+        f"Scholar: {inspector.get('scholar_stage') or '-'}",
+        f"Home: {inspector.get('home_status') or '-'}",
+        f"Query: {inspector.get('query_status') or '-'}",
+        f"Latency: {inspector.get('latency_ms') or '-'}",
+        f"Markers: {marker_text}",
+        f"Selected for route: {'yes' if inspector.get('selected_for_route') else 'no'}",
+        "",
+        f"Meaning: {inspector.get('explanation') or '-'}",
+    ]
+    warning = inspector.get("artifact_warning")
+    if isinstance(warning, str) and warning:
+        lines.extend(["", f"Artifact warning: {warning}"])
+    return "\n".join(lines)
+
+
+def _build_testing_confirmation_message(
+    workflow_state: dict[str, object],
+    *,
+    action_key: str,
+    action_label: str,
+) -> str:
+    operation = _find_operation(workflow_state, action_key)
+    impact = build_operation_impact(operation, action_label=action_label)
+    user_data_dir = str(workflow_state.get("settings", {}).get("user_data_dir") or "user_data_dir")
+    lines = [
+        f"Pending confirmation: {action_label}.",
+        f"This will {'use network' if impact.uses_network else 'stay local'}, write artifacts under {user_data_dir}, and will not modify production Xray/XrayR/x-ui.",
+    ]
+    if impact.touches_system:
+        lines.append("This action can touch a managed system service.")
+    if impact.confirmation_required:
+        lines.append("Press Enter or trigger the same action again to continue, or press Escape to cancel.")
+    return " ".join(lines)
+
+
 def _selected_cursor_candidate_id(workbench: dict[str, object]) -> str | None:
     rows = workbench.get("selection_rows", [])
     selection = workbench.get("selection", {})
@@ -239,7 +301,7 @@ def _shortcuts_for_tab(tab: str, *, pending_confirmation: bool) -> str:
     shortcuts = {
         "Home": "Keys: 1-5 pages | f fetch | p test nodes | x snapshot | q quit",
         "Settings": "Keys: 1-5 pages | s save | u undo | d diff | f test fetch | q quit",
-        "Testing": "Keys: 1-5 pages | f fetch | p test nodes | j/k move | q quit",
+        "Testing": "Keys: 1-5 pages | f fetch | p test nodes | j/k move | Esc cancel | q quit",
         "Route": "Keys: 1-5 pages | c choose node | g stage | v validate | q quit",
         "Logs": "Keys: 1-5 pages | a artifact check | x snapshot | z rollback | q quit",
     }
@@ -454,21 +516,13 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
     """Adapt the control-plane dataclass tree to the legacy workflow-state shape."""
     payload = control_plane_state_to_dict(control_plane)
     config_path = str(payload["session"]["paths"]["config"])
+    resolved_paths = resolve_user_data_paths(config_path)
     config_summary = summarize_config_centered_state(config_path)
+    testing_screen = build_testing_screen_state(config_path=config_path, user_data_paths=resolved_paths)
+    testing_summary = testing_screen.summary
     wizard = build_first_run_wizard_state(config_path)
-    rows = list(payload["selection_state"]["rows"])
-    passed_count = sum(1 for row in rows if row.get("passed") is True)
     route_count = len(config_summary.route_entries)
     enabled_route_count = sum(1 for row in config_summary.route_entries if row.get("enabled") is True)
-    markers = {
-        "full_access": 0,
-        "query_blocked": 0,
-        "transport_failed": 0,
-    }
-    for row in rows:
-        stage = str(row.get("stage") or "")
-        if stage in markers:
-            markers[stage] += 1
     latest_action = payload["last_action"]
     return {
         "tabs": payload["tabs"],
@@ -486,17 +540,17 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
             "config_path": config_summary.config_path,
             "user_data_dir": config_summary.user_data_dir,
             "subscription_configured": config_summary.subscription_url_configured,
-            "last_fetch_status": "ready" if payload["artifact_state"]["candidates_exists"] else "not_fetched",
-            "candidate_count": len(rows),
-            "supported_count": len(rows),
-            "experimental_disabled_count": 0 if config_summary.experimental_hysteria2 else 0,
-            "tested_count": len(rows),
-            "passed_count": passed_count,
-            "failed_count": max(0, len(rows) - passed_count),
-            "last_probe_status": "ready" if payload["artifact_state"]["probe_summary_exists"] else "not_tested",
-            "full_access_count": markers["full_access"],
-            "query_blocked_count": markers["query_blocked"],
-            "transport_failed_count": markers["transport_failed"],
+            "last_fetch_status": testing_summary.last_fetch_status,
+            "candidate_count": testing_summary.candidate_count,
+            "supported_count": testing_summary.supported_count,
+            "experimental_disabled_count": testing_summary.experimental_disabled_count,
+            "tested_count": testing_summary.attempted_count,
+            "passed_count": testing_summary.passed_count,
+            "failed_count": testing_summary.failed_count,
+            "last_probe_status": testing_summary.last_probe_status,
+            "full_access_count": testing_summary.full_access_count,
+            "query_blocked_count": testing_summary.query_blocked_count,
+            "transport_failed_count": testing_summary.transport_failed_count,
             "route_count": route_count,
             "enabled_route_count": enabled_route_count,
             "selected_candidate_count": 1 if payload["selection_state"]["selected_candidate_id"] else 0,
@@ -522,16 +576,7 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
             "undo_available": payload["config_state"]["undo_available"],
             "redacted_diff": payload["config_state"]["redacted_diff"],
         },
-        "testing": {
-            "candidate_rows": rows,
-            "tested_count": len(rows),
-            "passed_count": passed_count,
-            "failed_count": max(0, len(rows) - passed_count),
-            "full_access_count": markers["full_access"],
-            "query_blocked_count": markers["query_blocked"],
-            "transport_failed_count": markers["transport_failed"],
-            "toolbar_actions": ["Fetch Subscription", "Test Nodes", "Retest Failed", "Stop"],
-        },
+        "testing": testing_screen_state_to_dict(testing_screen),
         "route": {
             "entries": config_summary.route_entries,
             "selected_candidate_label": payload["selection_state"]["selected_candidate_label"],
@@ -774,11 +819,24 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
     if tab == "Testing":
         testing = workflow_state.get("testing", {})
         table = build_testing_table_model(workflow_state)
+        summary = testing.get("summary", {}) if isinstance(testing.get("summary"), dict) else {}
+        inspector = testing.get("inspector", {}) if isinstance(testing.get("inspector"), dict) else {}
+        log_lines = testing.get("log_lines", []) if isinstance(testing.get("log_lines"), list) else []
         lines = [
             "Testing",
             "",
             "Toolbar: [Fetch Subscription] [Test Nodes] [Retest Failed] [Stop]",
-            f"Progress: {testing.get('passed_count')} passed / {testing.get('tested_count')} tested",
+            f"Progress: {testing.get('job_state') or 'idle'} {testing.get('progress_current') or 0}/{testing.get('progress_total') or max(int(summary.get('supported_count') or 0), 0)}",
+            "",
+            "Summary",
+            f"  Subscription: {'configured' if summary.get('subscription_configured') else 'missing'}",
+            f"  Fetched: {summary.get('last_fetch_status')}",
+            f"  Candidates: {summary.get('candidate_count') or 0}",
+            f"  Supported: {summary.get('supported_count') or 0}",
+            f"  Experimental-disabled: {summary.get('experimental_disabled_count') or 0}",
+            f"  Tested: {summary.get('attempted_count') or 0} / {summary.get('supported_count') or 0}",
+            f"  Passed: {summary.get('passed_count') or 0}",
+            f"  Failed: {summary.get('failed_count') or 0}",
             "",
             "Candidate table",
             "  " + " | ".join(table.columns),
@@ -787,6 +845,26 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
             lines.append("  " + " | ".join(row))
         if not table.rows:
             lines.append(f"  {table.empty_message}")
+        lines.extend(
+            [
+                "",
+                "Selected candidate",
+                f"  Label: {inspector.get('label') or 'none'}",
+                f"  Region: {inspector.get('region_hint') or '-'}",
+                f"  Protocol: {inspector.get('protocol') or '-'}",
+                f"  Candidate ID: {inspector.get('candidate_id') or '-'}",
+                f"  Scholar: {inspector.get('scholar_stage') or '-'}",
+                f"  Home: {inspector.get('home_status') or '-'}",
+                f"  Query: {inspector.get('query_status') or '-'}",
+                f"  Latency: {inspector.get('latency_ms') or '-'}",
+                f"  Markers: {', '.join(inspector.get('markers') or []) or 'none'}",
+                f"  Explanation: {inspector.get('explanation') or '-'}",
+            ]
+        )
+        if log_lines:
+            lines.extend(["", "Recent events"])
+            for line in log_lines[:4]:
+                lines.append(f"  {line}")
         return "\n".join(lines)
     if tab == "Route":
         route = workflow_state.get("route", {})
@@ -1079,6 +1157,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         from textual.widgets import Footer
         from textual.widgets import Header
         from textual.widgets import Input
+        from textual.widgets import ProgressBar
         from textual.widgets import RichLog
         from textual.widgets import Static
         from textual.widgets import Switch
@@ -1125,6 +1204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         BINDINGS = list(TUI_KEY_BINDINGS)
         current_page = "Home"
+        testing_selected_index: int | None = None
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -1184,8 +1264,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     yield Button("Retest Failed", id="testing-retest")
                     yield Button("Stop", id="testing-stop", disabled=True)
                 yield Static("", id="testing-status")
+                yield ProgressBar(total=100, id="testing-progress")
+                yield Static("", id="testing-summary")
                 yield DataTable(id="testing-table")
                 yield Static("", id="testing-detail")
+                yield RichLog(id="testing-log", wrap=True, markup=False)
 
         def _build_route_page(self):
             with Vertical(id="page-route"):
@@ -1249,19 +1332,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.query_one("#settings-fail-closed", Switch).value = settings.fail_closed
             self.query_one("#settings-hysteria2", Switch).value = settings.experimental_hysteria2
 
-            testing = controller.workflow_state.get("testing", {})
+            testing_state = self._load_testing_state()
+            testing = testing_screen_state_to_dict(testing_state)
+            controller.workflow_state["testing"] = testing
             self.query_one("#testing-status", Static).update(
-                f"Testing summary: passed {testing.get('passed_count')} / tested {testing.get('tested_count')}"
+                controller.action_state.status_message or testing_state.job_state.title()
             )
+            progress = self.query_one("#testing-progress", ProgressBar)
+            progress_total = testing_state.progress_total or max(testing_state.summary.supported_count, 1)
+            progress.update(total=progress_total, progress=testing_state.progress_current)
+            self.query_one("#testing-summary", Static).update("\n".join(_render_testing_summary_lines(testing)))
             testing_table = self.query_one("#testing-table", DataTable)
             testing_table.clear()
             testing_model = build_testing_table_model(controller.workflow_state)
             for row in testing_model.rows:
                 testing_table.add_row(*row)
-            selected_detail = controller.build_workbench_state().get("selected_candidate_detail")
-            self.query_one("#testing-detail", Static).update(
-                render_tab_text("Testing", controller.workflow_state) if not isinstance(selected_detail, dict) else str(build_route_detail(selected_detail) or "")
-            )
+            self.query_one("#testing-detail", Static).update(_render_testing_inspector_text(testing))
+            testing_log = self.query_one("#testing-log", RichLog)
+            testing_log.clear()
+            for line in testing_state.log_lines:
+                testing_log.write(line)
+            self.query_one("#testing-fetch", Button).disabled = not testing_state.actions.get("fetch", False)
+            self.query_one("#testing-probe", Button).disabled = not testing_state.actions.get("probe", False)
+            self.query_one("#testing-retest", Button).disabled = not testing_state.actions.get("retest_failed", False)
+            self.query_one("#testing-stop", Button).disabled = not testing_state.actions.get("stop", False)
 
             route_table = self.query_one("#route-table", DataTable)
             route_table.clear()
@@ -1311,8 +1405,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif self.current_page == "Testing":
                 body = [
                     "Fetch/Test are explicit live operations.",
-                    "Table rows remain redacted.",
-                    "No raw probe_summary paths are shown here.",
+                    "Confirmation is required before network writes.",
+                    "Recent events remain redacted.",
                 ]
             elif self.current_page == "Route":
                 body = [
@@ -1359,7 +1453,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "settings-test-fetch": self.action_run_fetch,
                 "testing-fetch": self.action_run_fetch,
                 "testing-probe": self.action_run_probe,
-                "testing-retest": self.action_run_probe,
+                "testing-retest": self.action_run_retest_failed,
                 "route-select": self.action_run_select,
                 "route-apply": self.action_run_stage_sidecar,
                 "route-start": self.action_route_start_placeholder,
@@ -1409,22 +1503,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         def action_cursor_down(self) -> None:
+            if self.current_page == "Testing":
+                self._run_tui_action("Move selection", lambda: self._move_testing_selection(1))
+                return
             self._run_tui_action("Move selection", lambda: (controller.move_candidate(1), "Selection moved down.")[1])
 
         def action_cursor_up(self) -> None:
+            if self.current_page == "Testing":
+                self._run_tui_action("Move selection", lambda: self._move_testing_selection(-1))
+                return
             self._run_tui_action("Move selection", lambda: (controller.move_candidate(-1), "Selection moved up.")[1])
 
         def action_confirm_selected(self) -> None:
+            if controller.pending_action is not None:
+                self._run_tui_action(
+                    "Confirm selected action",
+                    lambda: controller.handle_operation(controller.pending_action.key),
+                )
+                return
             self._run_tui_action("Confirm selected action", lambda: controller.handle_operation("choose_selected_candidate"))
 
         def action_cancel_pending(self) -> None:
             self._run_tui_action("Cancel pending action", lambda: (controller.clear_pending_action(), "Pending action cleared.")[1])
 
         def action_run_fetch(self) -> None:
-            self._run_tui_action("Run fetch", lambda: controller.handle_operation("fetch"))
+            self._run_tui_action("Run fetch", lambda: self._handle_testing_operation("fetch", "Fetch Subscription"))
 
         def action_run_probe(self) -> None:
-            self._run_tui_action("Run probe", lambda: controller.handle_operation("probe"))
+            self._run_tui_action("Run probe", lambda: self._handle_testing_operation("probe", "Test Nodes"))
+
+        def action_run_retest_failed(self) -> None:
+            self._run_tui_action(
+                "Retest failed candidates",
+                lambda: "Retest Failed is not implemented for the current backend yet.",
+            )
 
         def action_run_artifact_check(self) -> None:
             self._run_tui_action("Run artifact check", lambda: controller.handle_operation("artifact_check"))
@@ -1461,6 +1573,35 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         def action_show_help(self) -> None:
             self._run_tui_action("Show help", lambda: _shortcuts_for_tab(self.current_page, pending_confirmation=bool(controller.pending_action)))
+
+        def _load_testing_state(self):
+            state = build_testing_screen_state(
+                config_path=controller._paths()["config"],
+                user_data_paths=resolve_user_data_paths(controller._paths()["config"]),
+                selected_index=self.testing_selected_index,
+            )
+            self.testing_selected_index = state.selected_index
+            return state
+
+        def _move_testing_selection(self, delta: int) -> str:
+            state = self._load_testing_state()
+            if not state.rows:
+                return "No candidate rows are available yet."
+            current = 0 if self.testing_selected_index is None else self.testing_selected_index
+            self.testing_selected_index = max(0, min(len(state.rows) - 1, current + delta))
+            return "Selection moved down." if delta > 0 else "Selection moved up."
+
+        def _handle_testing_operation(self, action_key: str, action_label: str) -> str:
+            if controller.pending_action is not None and controller.pending_action.key == action_key:
+                return controller.handle_operation(action_key)
+            controller.prepare_action(action_key)
+            message = _build_testing_confirmation_message(
+                controller.workflow_state,
+                action_key=action_key,
+                action_label=action_label,
+            )
+            controller.action_state.status_message = message
+            return message
 
     ScholarOutboundWorkflowApp().run()
     return 0

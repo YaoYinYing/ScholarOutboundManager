@@ -154,6 +154,7 @@ def test_action_journal_writes_only_redacted_output(tmp_path: Path) -> None:
     assert "vless://" not in rendered
     assert "PASSWORD" not in rendered
     assert "<REDACTED_URL>" in rendered
+    assert payload["summary"] == "ok"
 
 
 def test_action_journal_redacts_command_preview_too(tmp_path: Path) -> None:
@@ -181,6 +182,32 @@ def test_action_journal_redacts_command_preview_too(tmp_path: Path) -> None:
     rendered = journal_path.read_text(encoding="utf-8")
     assert "subscription-token" not in rendered
     assert "<REDACTED>" in rendered
+
+
+def test_redact_action_output_hides_fake_server_name_and_uuid() -> None:
+    spec = OperationSpec(
+        key="redact",
+        title="Redact Output",
+        command=[
+            sys.executable,
+            "-c",
+            "print('vless://00000000-0000-0000-0000-000000000000@secret.example.invalid:443?host=secret.example.invalid&path=/private'); "
+            "print('server_name=secret.example.invalid password=PASSWORD_PLACEHOLDER')",
+        ],
+        requires_confirmation=False,
+        network_access=False,
+        systemd_access=False,
+        sensitive_outputs=False,
+        expected_artifacts=[],
+    )
+
+    result = SubprocessActionRunner().run(spec, ActionRunOptions())
+    rendered = "\n".join([result.redacted_stdout, result.redacted_stderr])
+
+    assert "vless://" not in rendered
+    assert "00000000-0000-0000-0000-000000000000" not in rendered
+    assert "secret.example.invalid" not in rendered
+    assert "PASSWORD_PLACEHOLDER" not in rendered
 
 
 def test_subprocess_action_runner_blocks_network_without_explicit_allow() -> None:

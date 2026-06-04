@@ -405,23 +405,30 @@ def build_settings_summary(workflow_state: dict[str, object]) -> SettingsSummary
 
 def build_testing_table_model(workflow_state: dict[str, object]) -> TableModel:
     """Build the Testing candidate table model."""
-    rows = workflow_state.get("testing", {}).get("candidate_rows", [])
+    testing = workflow_state.get("testing", {})
+    rows = testing.get("rows", testing.get("candidate_rows", []))
     table_rows: list[list[str]] = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
+        markers = row.get("markers")
+        if isinstance(markers, (list, tuple)):
+            markers_label = ", ".join(str(marker) for marker in markers if str(marker).strip()) or "-"
+        else:
+            marker_count = row.get("failure_marker_count")
+            markers_label = str(marker_count or 0)
         table_rows.append(
             [
-                "PASS" if row.get("passed") else "REVIEW",
+                str(row.get("status_icon") or ("PASS" if row.get("passed") else "REVIEW")),
                 str(row.get("index")),
-                str(row.get("region") or "Unknown"),
+                str(row.get("region_hint", row.get("region")) or "Unknown"),
                 truncate_display_value(str(row.get("label") or ""), limit=24),
                 str(row.get("protocol") or "unknown"),
                 _latency_label(row.get("latency_ms")),
                 str(row.get("home_status") or "-"),
                 str(row.get("query_status") or "-"),
                 str(row.get("stage") or "-"),
-                str(row.get("failure_marker_count") or 0),
+                truncate_display_value(markers_label, limit=20),
             ]
         )
     return TableModel(
