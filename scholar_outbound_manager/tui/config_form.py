@@ -43,6 +43,20 @@ class ConfigFormState:
 
 _SAFE_FIELD_SPECS: tuple[dict[str, object], ...] = (
     {
+        "key": "user_data_dir",
+        "title": "User Data Directory",
+        "description": "Root directory for TUI-managed artifacts and journals.",
+        "value_type": "str",
+        "requires_restart": False,
+    },
+    {
+        "key": "subscription.user_agent",
+        "title": "Subscription User-Agent",
+        "description": "User-Agent header used for subscription fetch requests.",
+        "value_type": "str",
+        "requires_restart": False,
+    },
+    {
         "key": "probe.concurrency",
         "title": "Probe Concurrency",
         "description": "Maximum concurrent probe workers.",
@@ -95,6 +109,20 @@ _SAFE_FIELD_SPECS: tuple[dict[str, object], ...] = (
         "key": "routing.fail_closed",
         "title": "Routing Fail Closed",
         "description": "Whether routing should fail closed when no candidate is available.",
+        "value_type": "bool",
+        "requires_restart": True,
+    },
+    {
+        "key": "sidecar.service_name",
+        "title": "Managed Service Name",
+        "description": "systemd unit name for the managed sidecar service.",
+        "value_type": "str",
+        "requires_restart": True,
+    },
+    {
+        "key": "experimental.enable_hysteria2",
+        "title": "Experimental Hysteria2",
+        "description": "Enable experimental Hysteria2 handling in the TUI workflow.",
         "value_type": "bool",
         "requires_restart": True,
     },

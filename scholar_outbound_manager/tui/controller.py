@@ -31,6 +31,7 @@ from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ACTION_JOURNAL_PA
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT
 from scholar_outbound_manager.tui.control_plane import ControlPlaneState
 from scholar_outbound_manager.tui.control_plane import load_control_plane_state
+from scholar_outbound_manager.tui.path_resolver import resolve_user_data_paths
 from scholar_outbound_manager.tui.view_model import build_candidate_detail
 
 
@@ -474,8 +475,7 @@ class WorkbenchController:
         return snapshots[0].snapshot_id
 
     def _undo_journal_path(self) -> str:
-        config_path = Path(self._paths()["config"])
-        return str(config_path.parent / DEFAULT_TUI_UNDO_JOURNAL_PATH)
+        return str(resolve_user_data_paths(self._paths()["config"]).undo_journal)
 
     def _pending_from_action_key(self, action_key: str) -> PendingAction:
         if action_key == "choose_selected_candidate":

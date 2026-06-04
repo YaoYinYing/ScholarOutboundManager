@@ -102,15 +102,16 @@ def test_choose_selected_candidate_uses_row_source_index_not_visible_position(tm
 
 def test_config_field_selection_moves_within_bounds(tmp_path: Path) -> None:
     controller = _build_controller(tmp_path)
+    keys = [field.key for field in controller.state.config_form_state.fields]
 
     controller.move_config_field(1)
-    assert controller.selection.selected_config_field_key == "probe.timeout_seconds"
+    assert controller.selection.selected_config_field_key == keys[1]
 
     controller.move_config_field(99)
-    assert controller.selection.selected_config_field_key == "routing.fail_closed"
+    assert controller.selection.selected_config_field_key == keys[-1]
 
     controller.move_config_field(-99)
-    assert controller.selection.selected_config_field_key == "probe.concurrency"
+    assert controller.selection.selected_config_field_key == keys[0]
 
 
 def test_invalid_config_field_update_is_rejected(tmp_path: Path) -> None:

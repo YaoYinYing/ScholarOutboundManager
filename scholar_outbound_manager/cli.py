@@ -392,17 +392,17 @@ def build_parser() -> argparse.ArgumentParser:
     sidecar_pool_snippets_parser.set_defaults(handler=_handle_sidecar_pool_snippets)
 
     tui_parser = subparsers.add_parser("tui")
-    tui_parser.add_argument("--config", default="config.yaml")
-    tui_parser.add_argument("--candidates", default="candidates.json")
-    tui_parser.add_argument("--probe-summary", default="state_data/probe_summary.json")
-    tui_parser.add_argument("--passed-candidates", default="state_data/passed_candidates.json")
-    tui_parser.add_argument("--selected-candidate", default="state_data/selected_candidate.json")
-    tui_parser.add_argument("--pool-plan", default="state_data/sidecar_pool_plan.json")
-    tui_parser.add_argument("--session", default="state_data/tui_session.json")
-    tui_parser.add_argument("--output", default="state_data/selected_candidate.json")
+    tui_parser.add_argument("config", nargs="?", default="config.yaml")
+    tui_parser.add_argument("--candidates", help=argparse.SUPPRESS)
+    tui_parser.add_argument("--probe-summary", help=argparse.SUPPRESS)
+    tui_parser.add_argument("--passed-candidates", help=argparse.SUPPRESS)
+    tui_parser.add_argument("--selected-candidate", help=argparse.SUPPRESS)
+    tui_parser.add_argument("--pool-plan", help=argparse.SUPPRESS)
+    tui_parser.add_argument("--session", help=argparse.SUPPRESS)
+    tui_parser.add_argument("--output", help=argparse.SUPPRESS)
     tui_parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "region_hint", "region-hint", "first"))
-    tui_parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
-    tui_parser.add_argument("--host-geo", default="state_data/geo/host_geo.json")
+    tui_parser.add_argument("--geo-cache", help=argparse.SUPPRESS)
+    tui_parser.add_argument("--host-geo", help=argparse.SUPPRESS)
     tui_parser.add_argument("--preferred-region-hint")
     tui_parser.add_argument("--prefer-geo", dest="prefer_geo", action="store_true", default=True)
     tui_parser.add_argument("--no-prefer-geo", dest="prefer_geo", action="store_false")
@@ -1473,31 +1473,21 @@ def _handle_tui(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    tui_argv = [
-        "--config",
-        args.config,
-        "--candidates",
-        args.candidates,
-        "--probe-summary",
-        args.probe_summary,
-        "--passed-candidates",
-        args.passed_candidates,
-        "--selected-candidate",
-        args.selected_candidate,
-        "--pool-plan",
-        args.pool_plan,
-        "--session",
-        args.session,
-        "--output",
-        args.output,
-        "--strategy",
-        args.strategy,
-        "--geo-cache",
-        args.geo_cache,
-        "--host-geo",
-        args.host_geo,
-        "--prefer-geo" if args.prefer_geo else "--no-prefer-geo",
-    ]
+    tui_argv = [args.config, "--strategy", args.strategy, "--prefer-geo" if args.prefer_geo else "--no-prefer-geo"]
+    optional_pairs = (
+        ("--candidates", args.candidates),
+        ("--probe-summary", args.probe_summary),
+        ("--passed-candidates", args.passed_candidates),
+        ("--selected-candidate", args.selected_candidate),
+        ("--pool-plan", args.pool_plan),
+        ("--session", args.session),
+        ("--output", args.output),
+        ("--geo-cache", args.geo_cache),
+        ("--host-geo", args.host_geo),
+    )
+    for flag, value in optional_pairs:
+        if value:
+            tui_argv.extend([flag, value])
     if args.preferred_region_hint:
         tui_argv.extend(["--preferred-region-hint", args.preferred_region_hint])
     return int(tui_main(tui_argv))

@@ -38,6 +38,7 @@ from scholar_outbound_manager.tui.config_editor import has_undo_journal_entry
 from scholar_outbound_manager.tui.config_editor import load_config_draft
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_UNDO_JOURNAL_PATH
+from scholar_outbound_manager.tui.path_resolver import resolve_user_data_paths
 from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import load_session_state
 from scholar_outbound_manager.tui.view_model import build_candidate_table_rows
@@ -205,6 +206,25 @@ def load_control_plane_state(
     preferred_region_hint: str | None = None,
 ) -> ControlPlaneState:
     """Build one review-safe control plane state from the local workspace."""
+    resolved_paths = resolve_user_data_paths(config_path)
+    if candidates_path == "candidates.json":
+        candidates_path = str(resolved_paths.candidates)
+    if probe_summary_path == "state_data/probe_summary.json":
+        probe_summary_path = str(resolved_paths.probe_summary)
+    if passed_candidates_path == "state_data/passed_candidates.json":
+        passed_candidates_path = str(resolved_paths.passed_candidates)
+    if selected_candidate_path == "state_data/selected_candidate.json":
+        selected_candidate_path = str(resolved_paths.selected_candidate)
+    if pool_plan_path == "state_data/sidecar_pool_plan.json":
+        pool_plan_path = str(resolved_paths.pool_plan)
+    if session_path == DEFAULT_TUI_SESSION_PATH:
+        session_path = str(resolved_paths.session)
+    if action_journal_path == DEFAULT_TUI_ACTION_JOURNAL_PATH:
+        action_journal_path = str(resolved_paths.action_journal)
+    if snapshot_root == DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT:
+        snapshot_root = str(resolved_paths.snapshot_root)
+    undo_journal_path = str(resolved_paths.undo_journal)
+
     existing_session = _try_load_session(session_path)
     config_draft = None
     config_exists = Path(config_path).exists()
@@ -217,7 +237,7 @@ def load_control_plane_state(
         config_form_state = build_config_form_state(config_path)
     except Exception:
         config_form_state = ConfigFormState(fields=[], dirty=False, valid=False, validation_errors=[], redacted_diff="")
-    undo_available = has_undo_journal_entry(config_path=config_path, undo_journal_path=DEFAULT_TUI_UNDO_JOURNAL_PATH)
+    undo_available = has_undo_journal_entry(config_path=config_path, undo_journal_path=undo_journal_path)
 
     parsed_config = None
     if config_draft is not None and config_draft.parsed_ok:

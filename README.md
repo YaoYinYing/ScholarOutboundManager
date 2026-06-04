@@ -399,11 +399,13 @@ scholar-outbound-manager geo refresh-plan \
   `pip install "ScholarOutboundManager[tui]"`
 - Run with:
   `scholar-outbound-manager tui`
+  `scholar-outbound-manager tui config.yaml`
+  `scholar-outbound-manager tui /etc/scholar-outbound-manager/config.yaml`
   or
   `scholar-outbound-manager-tui`
-- The TUI follows the documented workflow.
-- Tabs are for operations.
-- Wizard is for first deployment or full refresh.
+- The TUI is config-centered around `config.yaml`.
+- If the config path is missing, the first-run wizard/template flow is used.
+- Artifact paths are derived from `user_data_dir` instead of being the normal primary CLI input.
 - The TUI only displays redacted data.
 - The TUI does not automatically modify production Xray/XrayR.
 - Mutating actions require confirmation.
@@ -411,7 +413,7 @@ scholar-outbound-manager geo refresh-plan \
 
 Layout:
 
-`Overview | Candidates | Activate | Status | Logs | Settings`
+`Home | Settings | Testing | Route | Logs`
 
 ## Production operations
 
@@ -655,13 +657,13 @@ Config edits are transactional: `config.yaml` is changed only after validation a
 
 Undo is backed by a sensitive journal at `state_data/tui/config_undo_journal.jsonl`. That journal applies to config file writes only; it does not roll back arbitrary external side effects.
 
-The primary tabs are `Overview | Candidates | Activate | Status | Logs | Settings`. `Overview` summarizes config health, route readiness, the current selected route, local runtime state, and the next safe action. `Candidates` is the route-selection surface, `Activate` explains local runtime preparation and validation, `Logs` is the only top-level page that shows raw command previews and workflow-file diagnostics, and `Settings` is the transactional editor surface with redacted validation errors, preview, diff, undo availability, and restart-required markers for safe editable fields.
+The primary screens are `Home | Settings | Testing | Route | Logs`. `Home` summarizes config path, `user_data_dir`, subscription readiness, testing results, route summary, sidecar state, and the next recommended action. `Settings` is the transactional editor surface with redacted validation errors, preview, diff, undo availability, and restart-required markers for safe editable fields. `Testing` is the fetch/probe workbench, `Route` is the sidecar route editor surface, and `Logs` is the local troubleshooting and rollback surface.
 
 For non-interactive smoke checks, prefer typed access such as `state.last_action.summary if state.last_action else None` instead of assuming `last_action` is a raw mapping.
 
 Every save writes the undo journal under `state_data/tui/`. Undo restores config file content only; it does not roll back network operations, systemd side effects, or external Xray processes.
 
-Network fetch/probe and systemd actions remain explicit operations. This phase keeps command previews and state inspection inside the TUI without automatically mutating production Xray/XrayR/`x-ui` and without claiming full interactive config editing yet. Overlong command previews are truncated safely in the TUI surface, while action state remains review-safe.
+Network fetch/probe and systemd actions remain explicit operations. This phase keeps command previews and state inspection inside the TUI without automatically mutating production Xray/XrayR/`x-ui`. The config-centered shell derives `candidates.json`, `probe_summary.json`, `passed_candidates.json`, `selected_candidate.json`, and related TUI journals from `user_data_dir` rather than asking the normal operator to type those paths into the UI.
 
 Hysteria2 remains experimental and disabled by default in the TUI because it follows the same production-safety boundary as the CLI. The TUI never modifies production Xray, XrayR, or `x-ui` directly.
 
@@ -675,15 +677,15 @@ Undo currently applies to config saves only. Artifact rollback is not implemente
 
 ## Structured config editing
 
-The TUI edits only a safe allowlist of config fields such as probe concurrency, probe timeout, routing mode, fail-closed routing, and local Xray runtime bind settings. Subscription URLs, proxy credentials, raw URIs, UUIDs, public keys, tokens, passwords, and related transport secrets are neither edited nor displayed in the structured form.
+The TUI edits only a safe allowlist of config fields such as `user_data_dir`, subscription `user_agent`, probe concurrency, probe timeout, routing mode, fail-closed routing, the managed service name, and local Xray runtime bind settings. Subscription URLs, proxy credentials, raw URIs, UUIDs, public keys, tokens, passwords, and related transport secrets are neither edited nor displayed in the structured form.
 
 Structured config changes are validated before atomic save and still flow through the transactional config draft layer. Saves create the sensitive undo journal under `state_data/tui/`, and undo restores `config.yaml` content only. The structured form explicitly excludes sensitive fields such as subscription URLs, raw proxy URIs, UUIDs, passwords, auth values, tokens, public keys, and server names.
 
 ## Interactive workflow workbench
 
-The TUI now acts as an interactive workflow workbench rather than only a static state report. The top-level workflow is organized as `Overview | Candidates | Activate | Status | Logs | Settings`, so the operator sees route readiness, the current selected route, local runtime state, and the next safe action before any lower-level diagnostic details.
+The TUI now acts as an interactive workflow workbench rather than only a static state report. The top-level workflow is organized as `Home | Settings | Testing | Route | Logs`, so the operator sees config path, `user_data_dir`, route readiness, local runtime state, and the next safe action before any lower-level diagnostic details.
 
-The `Candidates` page presents redacted route navigation and choosing while keeping the current selected route separate from the cursor-highlighted route. `Settings` groups allowlisted field editing by purpose and keeps sensitive values hidden. `Logs` is the only top-level page that shows raw command previews, workflow-file consistency, snapshot metadata, hashes, and recent operation history from the redacted action journal. The bottom shortcut bar is contextual, so each page shows only the keys that are relevant to the current workflow step.
+The `Testing` page presents redacted candidate testing summaries, `Settings` groups allowlisted field editing by purpose and keeps sensitive values hidden, `Route` keeps sidecar routing separate from lower-level artifact concepts, and `Logs` is the troubleshooting surface for action history, snapshot metadata, hashes, and recent operation history from the redacted action journal. The bottom shortcut bar is contextual, so each page shows only the keys that are relevant to the current workflow step.
 
 Network and systemd actions still require confirmation before side effects. Artifact rollback restores local artifacts only, and operation history remains redacted. Production Xray, XrayR, and `x-ui` stay manual and out of scope.
 

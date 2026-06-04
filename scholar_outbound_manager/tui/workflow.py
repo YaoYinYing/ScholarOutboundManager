@@ -6,12 +6,11 @@ from dataclasses import dataclass
 
 
 MAIN_TABS: tuple[str, ...] = (
-    "Overview",
-    "Candidates",
-    "Activate",
-    "Status",
-    "Logs",
+    "Home",
     "Settings",
+    "Testing",
+    "Route",
+    "Logs",
 )
 
 WIZARD_STEPS: tuple[str, ...] = (

@@ -35,6 +35,8 @@ def load_config(path: str | Path) -> AppConfig:
     if not isinstance(raw_data, dict):
         raise ConfigError("Configuration root must be a mapping.")
 
+    _normalize_legacy_tui_keys(raw_data)
+
     subscriptions_raw = _require_list(raw_data, "subscriptions")
     filters_raw = _require_mapping(raw_data, "filters")
     probe_raw = _require_mapping(raw_data, "probe")
@@ -111,6 +113,25 @@ def load_config(path: str | Path) -> AppConfig:
             fail_closed=_require_bool(routing_raw, "fail_closed", "routing"),
         ),
     )
+
+
+def _normalize_legacy_tui_keys(raw_data: dict[str, Any]) -> None:
+    """Fill compatibility keys that the older core config loader still expects."""
+    if "subscriptions" not in raw_data and isinstance(raw_data.get("subscription"), dict):
+        subscription = raw_data["subscription"]
+        headers: dict[str, str] = {}
+        user_agent = subscription.get("user_agent")
+        if isinstance(user_agent, str) and user_agent.strip():
+            headers["User-Agent"] = user_agent
+        raw_data["subscriptions"] = [
+            {
+                "name": "primary",
+                "url": subscription.get("url", ""),
+                "format": "auto",
+                "enabled": True,
+                "headers": headers,
+            }
+        ]
 
 
 def _require_mapping(data: dict[str, Any], key: str) -> dict[str, Any]:

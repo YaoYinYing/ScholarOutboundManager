@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -15,6 +16,8 @@ from scholar_outbound_manager.selection import write_selected_candidate_artifact
 from scholar_outbound_manager.tui.action_runner import ActionResult
 from scholar_outbound_manager.tui.artifact_rollback import ArtifactSnapshot
 from scholar_outbound_manager.tui.action_runner import FakeActionRunner
+from scholar_outbound_manager.tui.config_centered import build_first_run_wizard_state
+from scholar_outbound_manager.tui.config_centered import summarize_config_centered_state
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ACTION_JOURNAL_PATH
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT
@@ -23,6 +26,7 @@ from scholar_outbound_manager.tui.control_plane import control_plane_state_to_di
 from scholar_outbound_manager.tui.control_plane import load_control_plane_state
 from scholar_outbound_manager.tui.controller import WorkbenchMessage
 from scholar_outbound_manager.tui.controller import WorkbenchController as BaseWorkbenchController
+from scholar_outbound_manager.tui.path_resolver import resolve_user_data_paths
 from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
 from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import write_session_state
@@ -203,12 +207,11 @@ def _shortcuts_for_tab(tab: str, *, pending_confirmation: bool) -> str:
     if pending_confirmation:
         return "Shortcuts: Enter confirm | Esc cancel | q quit"
     shortcuts = {
-        "Overview": "Shortcuts: Tab change page | Enter next action | r refresh | l logs | q quit",
-        "Candidates": "Shortcuts: j/k move | Enter select route | d details | c choose | r re-test routes | q quit",
-        "Activate": "Shortcuts: Enter run next step | v validate | l logs | Esc back | q quit",
-        "Status": "Shortcuts: v validate | a activate | l logs | r refresh | q quit",
+        "Home": "Keys: f fetch | t test | R route | s settings | l logs | q quit",
+        "Settings": "Keys: s save | u undo | d diff | t test fetch | q quit",
+        "Testing": "Keys: f fetch | t test all | F retest failed | Enter inspect | q quit",
+        "Route": "Keys: a add | d delete | p test port | A apply | v validate | q quit",
         "Logs": "Shortcuts: j/k scroll | c copy command | r refresh | q quit",
-        "Settings": "Shortcuts: j/k move | e edit | s save | u undo | d diff | q quit",
     }
     return shortcuts.get(tab, "Shortcuts: r refresh | q quit")
 
@@ -317,8 +320,8 @@ def _build_tab_specs(tabs: list[str]) -> tuple[list[dict[str, str]], str]:
         counts[base] = count
         safe_id = base if count == 1 else f"{base}-{count}"
         specs.append({"title": tab, "id": safe_id})
-        if (tab == "Overview" and initial_id == "tab") or index == 0:
-            initial_id = safe_id if tab == "Overview" else initial_id
+        if (tab == "Home" and initial_id == "tab") or index == 0:
+            initial_id = safe_id if tab == "Home" else initial_id
     if initial_id == "tab":
         initial_id = specs[0]["id"]
     return specs, initial_id
@@ -327,17 +330,17 @@ def _build_tab_specs(tabs: list[str]) -> tuple[list[dict[str, str]], str]:
 def build_parser() -> argparse.ArgumentParser:
     """Build the TUI-specific parser."""
     parser = argparse.ArgumentParser(prog="scholar-outbound-manager-tui")
-    parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--candidates", default="candidates.json")
-    parser.add_argument("--probe-summary", default="state_data/probe_summary.json")
-    parser.add_argument("--passed-candidates", default="state_data/passed_candidates.json")
-    parser.add_argument("--selected-candidate", default="state_data/selected_candidate.json")
-    parser.add_argument("--pool-plan", default="state_data/sidecar_pool_plan.json")
-    parser.add_argument("--session", default=DEFAULT_TUI_SESSION_PATH)
-    parser.add_argument("--output", default="state_data/selected_candidate.json")
+    parser.add_argument("config", nargs="?", default="config.yaml")
+    parser.add_argument("--candidates", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--probe-summary", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--passed-candidates", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--selected-candidate", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--pool-plan", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--session", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--output", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--strategy", default="auto", choices=("auto", "manual", "geo_nearest", "geo-nearest", "region_hint", "region-hint", "first"))
-    parser.add_argument("--geo-cache", default="state_data/geo/candidate_geo_cache.json")
-    parser.add_argument("--host-geo", default="state_data/geo/host_geo.json")
+    parser.add_argument("--geo-cache", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--host-geo", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--preferred-region-hint")
     parser.add_argument("--prefer-geo", dest="prefer_geo", action="store_true", default=True)
     parser.add_argument("--no-prefer-geo", dest="prefer_geo", action="store_false")
@@ -380,36 +383,37 @@ def load_dashboard_state(
 def load_workflow_state(
     *,
     config_path: str = "config.yaml",
-    candidates_path: str = "candidates.json",
-    probe_summary_path: str = "state_data/probe_summary.json",
-    passed_candidates_path: str = "state_data/passed_candidates.json",
-    selected_candidate_path: str = "state_data/selected_candidate.json",
-    pool_plan_path: str = "state_data/sidecar_pool_plan.json",
-    session_path: str = DEFAULT_TUI_SESSION_PATH,
-    action_journal_path: str = DEFAULT_TUI_ACTION_JOURNAL_PATH,
-    snapshot_root: str = DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT,
-    output_path: str = "state_data/selected_candidate.json",
+    candidates_path: str | None = None,
+    probe_summary_path: str | None = None,
+    passed_candidates_path: str | None = None,
+    selected_candidate_path: str | None = None,
+    pool_plan_path: str | None = None,
+    session_path: str | None = None,
+    action_journal_path: str | None = None,
+    snapshot_root: str | None = None,
+    output_path: str | None = None,
     strategy: str = "auto",
-    geo_cache_path: str = "state_data/geo/candidate_geo_cache.json",
-    host_geo_path: str = "state_data/geo/host_geo.json",
+    geo_cache_path: str | None = None,
+    host_geo_path: str | None = None,
     prefer_geo: bool = True,
     preferred_region_hint: str | None = None,
 ) -> dict[str, object]:
     """Build a workflow-oriented, redacted TUI state model."""
+    resolved_paths = resolve_user_data_paths(config_path)
     control_plane = load_control_plane_state(
         config_path=config_path,
-        candidates_path=candidates_path,
-        probe_summary_path=probe_summary_path,
-        passed_candidates_path=passed_candidates_path,
-        selected_candidate_path=selected_candidate_path,
-        pool_plan_path=pool_plan_path,
-        session_path=session_path,
-        action_journal_path=action_journal_path,
-        snapshot_root=snapshot_root,
-        output_path=output_path,
+        candidates_path=str(resolved_paths.candidates if candidates_path is None else candidates_path),
+        probe_summary_path=str(resolved_paths.probe_summary if probe_summary_path is None else probe_summary_path),
+        passed_candidates_path=str(resolved_paths.passed_candidates if passed_candidates_path is None else passed_candidates_path),
+        selected_candidate_path=str(resolved_paths.selected_candidate if selected_candidate_path is None else selected_candidate_path),
+        pool_plan_path=str(resolved_paths.pool_plan if pool_plan_path is None else pool_plan_path),
+        session_path=str(resolved_paths.session if session_path is None else session_path),
+        action_journal_path=str(resolved_paths.action_journal if action_journal_path is None else action_journal_path),
+        snapshot_root=str(resolved_paths.snapshot_root if snapshot_root is None else snapshot_root),
+        output_path=str(resolved_paths.selected_candidate if output_path is None else output_path),
         strategy=strategy,
-        geo_cache_path=geo_cache_path,
-        host_geo_path=host_geo_path,
+        geo_cache_path=str(resolved_paths.geo_cache if geo_cache_path is None else geo_cache_path),
+        host_geo_path=str(resolved_paths.host_geo if host_geo_path is None else host_geo_path),
         prefer_geo=prefer_geo,
         preferred_region_hint=preferred_region_hint,
     )
@@ -419,9 +423,95 @@ def load_workflow_state(
 def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> dict[str, object]:
     """Adapt the control-plane dataclass tree to the legacy workflow-state shape."""
     payload = control_plane_state_to_dict(control_plane)
+    config_path = str(payload["session"]["paths"]["config"])
+    config_summary = summarize_config_centered_state(config_path)
+    wizard = build_first_run_wizard_state(config_path)
+    rows = list(payload["selection_state"]["rows"])
+    passed_count = sum(1 for row in rows if row.get("passed") is True)
+    route_count = len(config_summary.route_entries)
+    enabled_route_count = sum(1 for row in config_summary.route_entries if row.get("enabled") is True)
+    markers = {
+        "full_access": 0,
+        "query_blocked": 0,
+        "transport_failed": 0,
+    }
+    for row in rows:
+        stage = str(row.get("stage") or "")
+        if stage in markers:
+            markers[stage] += 1
+    latest_action = payload["last_action"]
     return {
         "tabs": payload["tabs"],
         "tab_strip": build_ascii_tab_strip(),
+        "wizard": {
+            "active": wizard.active,
+            "config_path": wizard.config_path,
+            "user_data_dir": wizard.user_data_dir,
+            "xray_binary_path": wizard.xray_binary_path,
+            "subscription_url_configured": wizard.subscription_url_configured,
+            "steps": list(wizard.step_titles),
+            "redacted_preview": wizard.redacted_preview,
+        },
+        "home": {
+            "config_path": config_summary.config_path,
+            "user_data_dir": config_summary.user_data_dir,
+            "subscription_configured": config_summary.subscription_url_configured,
+            "last_fetch_status": "ready" if payload["artifact_state"]["candidates_exists"] else "not_fetched",
+            "candidate_count": len(rows),
+            "supported_count": len(rows),
+            "experimental_disabled_count": 0 if config_summary.experimental_hysteria2 else 0,
+            "tested_count": len(rows),
+            "passed_count": passed_count,
+            "failed_count": max(0, len(rows) - passed_count),
+            "last_probe_status": "ready" if payload["artifact_state"]["probe_summary_exists"] else "not_tested",
+            "full_access_count": markers["full_access"],
+            "query_blocked_count": markers["query_blocked"],
+            "transport_failed_count": markers["transport_failed"],
+            "route_count": route_count,
+            "enabled_route_count": enabled_route_count,
+            "selected_candidate_count": 1 if payload["selection_state"]["selected_candidate_id"] else 0,
+            "selected_candidate_label": payload["selection_state"]["selected_candidate_label"],
+            "active_listen_ports": config_summary.selected_ports,
+            "service_active": payload["sidecar_state"]["service_active"],
+            "service_enabled": payload["sidecar_state"]["service_enabled"],
+            "socks_status": payload["sidecar_state"]["socks_tcp_connect"],
+            "last_validation": payload["sidecar_state"]["last_validation"],
+            "next_recommended_action": payload["workflow_state"]["next_recommended_action"],
+            "latest_action_summary": None if latest_action is None else latest_action.get("summary"),
+        },
+        "settings": {
+            "config_path": config_summary.config_path,
+            "user_data_dir": config_summary.user_data_dir,
+            "subscription_url_configured": config_summary.subscription_url_configured,
+            "subscription_user_agent": config_summary.subscription_user_agent,
+            "xray_binary_path": config_summary.xray_binary_path,
+            "fail_closed": config_summary.fail_closed,
+            "experimental_hysteria2": config_summary.experimental_hysteria2,
+            "service_name": config_summary.service_name,
+            "undo_available": payload["config_state"]["undo_available"],
+            "redacted_diff": payload["config_state"]["redacted_diff"],
+        },
+        "testing": {
+            "candidate_rows": rows,
+            "tested_count": len(rows),
+            "passed_count": passed_count,
+            "failed_count": max(0, len(rows) - passed_count),
+            "full_access_count": markers["full_access"],
+            "query_blocked_count": markers["query_blocked"],
+            "transport_failed_count": markers["transport_failed"],
+        },
+        "route": {
+            "entries": config_summary.route_entries,
+            "selected_candidate_label": payload["selection_state"]["selected_candidate_label"],
+            "selected_candidate_id": payload["selection_state"]["selected_candidate_id"],
+            "service_name": config_summary.service_name,
+        },
+        "logs_screen": {
+            "last_action": latest_action,
+            "snapshot_count": payload["artifact_state"]["snapshot_count"],
+            "latest_snapshot_id": payload["artifact_state"]["latest_snapshot_id"],
+            "latest_snapshot_reason": payload["artifact_state"]["latest_snapshot_reason"],
+        },
         "dashboard": {
             "repo_status": payload["repo_status"],
             "current_git_commit": payload["current_git_commit"],
@@ -588,6 +678,139 @@ def _render_snapshot_rows(workbench: dict[str, object]) -> list[str]:
 
 def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
     """Render one tab body from the redacted workflow state."""
+    if tab == "Home":
+        home = workflow_state.get("home", {})
+        wizard = workflow_state.get("wizard", {})
+        lines = [
+            "Scholar Outbound Manager",
+            "",
+            f"Config: {home.get('config_path')}",
+            f"User data: {home.get('user_data_dir')}",
+            "",
+            "Subscription",
+            f"  Configured: {'yes' if home.get('subscription_configured') else 'no'}",
+            f"  Last fetch: {home.get('last_fetch_status')}",
+            f"  Candidates: {home.get('candidate_count')}",
+            "",
+            "Testing",
+            f"  Passed: {home.get('passed_count')} / {home.get('tested_count')}",
+            f"  Full access: {home.get('full_access_count')}",
+            f"  Query blocked: {home.get('query_blocked_count')}",
+            "",
+            "Route",
+            f"  Routes enabled: {home.get('enabled_route_count')} / {home.get('route_count')}",
+            f"  Ports: {', '.join(str(port) for port in home.get('active_listen_ports', [])) or 'none'}",
+            f"  Selected: {home.get('selected_candidate_label') or 'none'}",
+            "",
+            "Sidecar",
+            f"  Service: {home.get('service_active')}",
+            f"  SOCKS: {home.get('socks_status')}",
+            f"  Validate: {home.get('last_validation')}",
+            "",
+            f"Next: {home.get('next_recommended_action')}",
+        ]
+        if wizard.get("active"):
+            lines.extend(
+                [
+                    "",
+                    "First-run wizard",
+                    f"  Target config: {wizard.get('config_path')}",
+                    f"  Steps: {', '.join(wizard.get('steps', []))}",
+                ]
+            )
+        return "\n".join(lines)
+    if tab == "Settings":
+        settings = workflow_state.get("settings", {})
+        lines = [
+            "Settings",
+            "",
+            f"Config path: {settings.get('config_path')}",
+            f"User data dir: {settings.get('user_data_dir')}",
+            "",
+            "Subscription",
+            f"  URL configured: {'yes' if settings.get('subscription_url_configured') else 'no'}",
+            f"  User-Agent: {settings.get('subscription_user_agent')}",
+            "",
+            "Runtime",
+            f"  Xray: {settings.get('xray_binary_path')}",
+            "",
+            "Safety",
+            f"  fail_closed: {'ON' if settings.get('fail_closed') else 'OFF'}",
+            f"  hysteria2 experimental: {'ON' if settings.get('experimental_hysteria2') else 'OFF'}",
+            f"  service name: {settings.get('service_name')}",
+        ]
+        diff = settings.get("redacted_diff")
+        if isinstance(diff, str) and diff:
+            lines.extend(["", "Redacted diff", diff])
+        return "\n".join(lines)
+    if tab == "Testing":
+        testing = workflow_state.get("testing", {})
+        rows = testing.get("candidate_rows", [])
+        lines = [
+            "Testing",
+            "",
+            "Toolbar: [Fetch Subscription] [Test Nodes] [Retest Failed] [Stop]",
+            f"Progress: {testing.get('passed_count')} passed / {testing.get('tested_count')} tested",
+            "",
+            "Candidates",
+        ]
+        for row in rows[:8] if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            status = "✓" if row.get("passed") else "✗"
+            lines.append(
+                f"  {status} #{row.get('index')} {row.get('region')} {row.get('label')} {row.get('protocol')} "
+                f"{row.get('latency_label')} home={row.get('home_status')} query={row.get('query_status')}"
+            )
+        return "\n".join(lines)
+    if tab == "Route":
+        route = workflow_state.get("route", {})
+        lines = [
+            "Route",
+            "",
+            "Routes",
+        ]
+        for entry in route.get("entries", []) if isinstance(route.get("entries"), list) else []:
+            if not isinstance(entry, dict):
+                continue
+            enabled = "✓" if entry.get("enabled") else " "
+            lines.append(
+                f"  {enabled} {entry.get('name')}  {entry.get('listen_host')}:{entry.get('listen_port')}  "
+                f"{route.get('selected_candidate_label') or 'unassigned'}"
+            )
+        lines.extend(
+            [
+                "",
+                "Editor",
+                f"  Candidate: {route.get('selected_candidate_label') or 'none'}",
+                f"  Managed service: {route.get('service_name')}",
+            ]
+        )
+        return "\n".join(lines)
+    if tab == "Logs":
+        logs = workflow_state.get("logs_screen", {})
+        lines = [
+            "Logs",
+            "",
+            f"Latest snapshot: {logs.get('latest_snapshot_id') or 'none'}",
+            f"Snapshot reason: {logs.get('latest_snapshot_reason') or 'none'}",
+            "",
+            "Warnings",
+            "  Artifact rollback restores local artifacts only.",
+            "  It does not restart sidecar.",
+            "  It does not modify production Xray/XrayR/x-ui.",
+        ]
+        last_action = logs.get("last_action")
+        if isinstance(last_action, dict):
+            lines.extend(
+                [
+                    "",
+                    "Last action",
+                    f"  {last_action.get('title') or last_action.get('key')}: {last_action.get('summary')}",
+                ]
+            )
+        return "\n".join(lines)
+
     workbench = workflow_state.get("workbench", {}) if isinstance(workflow_state.get("workbench"), dict) else {}
     pending_confirmation = bool(workbench.get("pending_action"))
     selected_candidate_id = workflow_state.get("selection", {}).get("selected_candidate_id")
@@ -831,28 +1054,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         print('Textual TUI is not installed. Install with:\npip install "ScholarOutboundManager[tui]"')
         return 1
 
+    resolved_paths = resolve_user_data_paths(args.config)
     controller = WorkflowController(
         loader_kwargs={
             "config_path": args.config,
-            "candidates_path": args.candidates,
-            "probe_summary_path": args.probe_summary,
-            "passed_candidates_path": args.passed_candidates,
-            "selected_candidate_path": args.selected_candidate,
-            "pool_plan_path": args.pool_plan,
-            "session_path": args.session,
-            "action_journal_path": DEFAULT_TUI_ACTION_JOURNAL_PATH,
-            "snapshot_root": DEFAULT_TUI_ARTIFACT_SNAPSHOT_ROOT,
-            "output_path": args.output,
+            "candidates_path": str(resolved_paths.candidates if args.candidates is None else args.candidates),
+            "probe_summary_path": str(resolved_paths.probe_summary if args.probe_summary is None else args.probe_summary),
+            "passed_candidates_path": str(resolved_paths.passed_candidates if args.passed_candidates is None else args.passed_candidates),
+            "selected_candidate_path": str(resolved_paths.selected_candidate if args.selected_candidate is None else args.selected_candidate),
+            "pool_plan_path": str(resolved_paths.pool_plan if args.pool_plan is None else args.pool_plan),
+            "session_path": str(resolved_paths.session if args.session is None else args.session),
+            "action_journal_path": str(resolved_paths.action_journal),
+            "snapshot_root": str(resolved_paths.snapshot_root),
+            "output_path": str(resolved_paths.selected_candidate if args.output is None else args.output),
             "strategy": args.strategy,
-            "geo_cache_path": args.geo_cache,
-            "host_geo_path": args.host_geo,
+            "geo_cache_path": str(resolved_paths.geo_cache if args.geo_cache is None else args.geo_cache),
+            "host_geo_path": str(resolved_paths.host_geo if args.host_geo is None else args.host_geo),
             "prefer_geo": args.prefer_geo,
             "preferred_region_hint": args.preferred_region_hint,
         },
     )
     workflow_state = controller.workflow_state
     write_session_state(
-        args.session,
+        str(resolved_paths.session if args.session is None else args.session),
         build_session_state(
             updated_at=workflow_state["session"]["updated_at"],
             workspace=workflow_state["session"]["workspace"],
@@ -968,11 +1192,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         def action_confirm_selected(self) -> None:
             def _primary_action() -> str:
-                if controller.selection.active_tab == "Candidates":
+                if controller.selection.active_tab == "Testing":
                     return controller.handle_operation("choose_selected_candidate")
-                if controller.selection.active_tab == "Activate":
+                if controller.selection.active_tab == "Route":
                     return controller.handle_operation("sidecar_stage")
-                if controller.selection.active_tab == "Status":
+                if controller.selection.active_tab == "Logs":
                     return controller.handle_operation("service_validate")
                 return str(controller.preview_selected_candidate())
 
