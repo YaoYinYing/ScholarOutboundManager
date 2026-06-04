@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import threading
+import time
 from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
@@ -29,6 +31,8 @@ from scholar_outbound_manager.tui.control_plane import load_control_plane_state
 from scholar_outbound_manager.tui.controller import WorkbenchMessage
 from scholar_outbound_manager.tui.controller import WorkbenchController as BaseWorkbenchController
 from scholar_outbound_manager.tui.controller import PendingAction
+from scholar_outbound_manager.tui.detail_model import build_route_detail_body
+from scholar_outbound_manager.tui.detail_model import build_testing_detail_body
 from scholar_outbound_manager.tui.path_resolver import resolve_user_data_paths
 from scholar_outbound_manager.tui.route_model import add_route_entry
 from scholar_outbound_manager.tui.route_model import build_route_workbench_state
@@ -43,6 +47,11 @@ from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import write_session_state
 from scholar_outbound_manager.tui.testing_model import build_testing_screen_state
 from scholar_outbound_manager.tui.testing_model import testing_screen_state_to_dict
+from scholar_outbound_manager.tui.testing_events import TestingEvent
+from scholar_outbound_manager.tui.testing_events import render_testing_event_line
+from scholar_outbound_manager.tui.testing_jobs import TestingJobState
+from scholar_outbound_manager.tui.testing_jobs import idle_testing_job_state
+from scholar_outbound_manager.tui.testing_jobs import update_testing_job_state
 from scholar_outbound_manager.tui.view_model import ActivateStep
 from scholar_outbound_manager.tui.view_model import build_home_cards
 from scholar_outbound_manager.tui.view_model import build_logs_summary
@@ -74,6 +83,7 @@ TUI_KEY_BINDINGS: tuple[tuple[str, str, str], ...] = (
     ("j", "cursor_down", "Move Down"),
     ("k", "cursor_up", "Move Up"),
     ("enter", "confirm_selected", "Confirm"),
+    ("i", "open_detail", "Detail"),
     ("escape", "cancel_pending", "Cancel Pending"),
     ("e", "edit_config_field", "Edit Config Field"),
     ("d", "show_config_diff", "Show Config Diff"),
@@ -254,6 +264,24 @@ def _resolve_route_select_value(
     return candidate_id
 
 
+def _should_ignore_route_select_change(
+    *,
+    route_form_syncing: bool,
+    event_value: object,
+    current_candidate_id: str | None,
+) -> bool:
+    """Return whether a Route Select change should be ignored as non-user intent."""
+    if route_form_syncing:
+        return True
+    if event_value is None:
+        return True
+    if not isinstance(event_value, str) or not event_value:
+        return True
+    if event_value == current_candidate_id:
+        return True
+    return False
+
+
 def _refresh_tab_bodies(
     tabs: list[str],
     workflow_state: dict[str, object],
@@ -299,6 +327,26 @@ def _run_safe_tui_action(
         return f"{description} failed: {safe_message}", False
     controller.workflow_state = _build_workflow_state(controller)
     return message, True
+
+
+def _apply_testing_event_to_rows(rows: list[dict[str, object]], event: TestingEvent) -> list[dict[str, object]]:
+    """Apply one Testing event to plain row dictionaries."""
+    updated_rows = [dict(row) for row in rows]
+    for row in updated_rows:
+        if event.candidate_id and row.get("candidate_id") == event.candidate_id:
+            if event.status is not None:
+                row["status_icon"] = event.status
+            if event.stage is not None:
+                row["stage"] = event.stage
+            if event.home_status is not None:
+                row["home_status"] = event.home_status
+            if event.query_status is not None:
+                row["query_status"] = event.query_status
+            if event.latency_ms is not None:
+                row["latency_ms"] = event.latency_ms
+            if event.markers:
+                row["markers"] = event.markers
+    return updated_rows
 
 
 def _format_health(state: str) -> str:
@@ -436,7 +484,7 @@ def _shortcuts_for_tab(tab: str, *, pending_confirmation: bool) -> str:
         "Home": "Keys: 1 Home | 2 Settings | 3 Testing | 4 Route | 5 Logs | r Refresh | q Quit",
         "Settings": "Keys: s Save | u Undo | d Diff | f Test Fetch | q Quit",
         "Testing": "Keys: f Fetch | t Test Nodes | F Retest Failed | x Stop | j/k Move | Enter Inspect | q Quit",
-        "Route": "Keys: a Add Route | d Delete Route | e Edit | p Test Port | A Apply | S Start | X Stop | R Restart | v Validate | q Quit",
+        "Route": "Keys: a Add Route | d Delete Route | c Choose | p Test Port | A Apply | S Start | X Stop | R Restart | v Validate | Enter Detail | q Quit",
         "Logs": "Keys: c Artifact Check | x Snapshot | z Rollback | q Quit",
     }
     return shortcuts.get(tab, "Keys: 1-5 pages | r refresh | q quit")
@@ -1373,6 +1421,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         route_port_results: dict[str, object] = {}
         route_form_syncing = False
         pending_action_handler: Callable[[], str] | None = None
+        testing_job_state: TestingJobState = idle_testing_job_state()
+        testing_thread: threading.Thread | None = None
+        testing_live_rows: list[dict[str, object]] | None = None
+        testing_log_lines: list[str] = []
+        detail_open: bool = False
+        last_notice_key: str | None = None
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -1387,15 +1441,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     yield from self._build_testing_page()
                     yield from self._build_route_page()
                     yield from self._build_logs_page()
-                with Vertical(id="inspector-column"):
-                    yield Static("Inspector", id="inspector-title")
-                    yield Static("", id="inspector-body")
             with Vertical(id="confirmation-panel"):
                 yield Static("Confirm Action", id="confirmation-title")
                 yield Static("", id="confirmation-body")
                 with Horizontal(id="confirmation-actions"):
                     yield Button("Confirm", id="pending-confirm")
                     yield Button("Cancel", id="pending-cancel")
+            with Vertical(id="detail-panel"):
+                yield Static("Details", id="detail-title")
+                yield Static("", id="detail-body")
+                yield Button("Close", id="detail-close")
             with Vertical(id="error-panel"):
                 yield Static("TUI refresh failed", id="error-title")
                 yield Static("", id="error-body")
@@ -1405,6 +1460,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         def on_mount(self) -> None:
             self._init_tables()
             self._set_page("Home")
+            self._close_detail_panel()
             self._safe_refresh_ui("startup")
 
         def _build_home_page(self):
@@ -1458,7 +1514,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 yield ProgressBar(total=100, id="testing-progress")
                 yield Static("", id="testing-summary")
                 yield DataTable(id="testing-table")
-                yield Static("", id="testing-detail")
                 yield RichLog(id="testing-log", wrap=True, markup=False)
 
         def _build_route_page(self):
@@ -1537,14 +1592,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.query_one("#settings-hysteria2", Switch).value = settings.experimental_hysteria2
 
             testing_state = self._load_testing_state()
-            testing = testing_screen_state_to_dict(testing_state)
+            testing = self._testing_workflow_state()
             controller.workflow_state["testing"] = testing
             self.query_one("#testing-status", Static).update(
-                controller.action_state.status_message or testing_state.job_state.title()
+                self.testing_job_state.message if self.testing_job_state.status != "idle" else (controller.action_state.status_message or testing_state.job_state.title())
             )
             progress = self.query_one("#testing-progress", ProgressBar)
-            progress_total = testing_state.progress_total or max(testing_state.summary.supported_count, 1)
-            progress.update(total=progress_total, progress=testing_state.progress_current)
+            progress_total = self.testing_job_state.total or testing_state.progress_total or max(testing_state.summary.supported_count, 1)
+            progress_current = self.testing_job_state.current if self.testing_job_state.status != "idle" else testing_state.progress_current
+            progress.update(total=progress_total, progress=progress_current)
             self.query_one("#testing-summary", Static).update("\n".join(_render_testing_summary_lines(testing)))
             self.query_one("#testing-banner", Static).update(
                 _testing_banner_text(testing_state.inspector.artifact_warning)
@@ -1554,15 +1610,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             testing_model = build_testing_table_model(controller.workflow_state)
             for row in testing_model.rows:
                 testing_table.add_row(*row)
-            self.query_one("#testing-detail", Static).update(_render_testing_inspector_text(testing))
             testing_log = self.query_one("#testing-log", RichLog)
             testing_log.clear()
-            for line in testing_state.log_lines:
+            for line in (self.testing_log_lines or testing_state.log_lines):
                 testing_log.write(line)
             self.query_one("#testing-fetch", Button).disabled = not testing_state.actions.get("fetch", False)
             self.query_one("#testing-probe", Button).disabled = not testing_state.actions.get("probe", False)
             self.query_one("#testing-retest", Button).disabled = not testing_state.actions.get("retest_failed", False)
-            self.query_one("#testing-stop", Button).disabled = not testing_state.actions.get("stop", False)
+            self.query_one("#testing-stop", Button).disabled = not (testing_state.actions.get("stop", False) or self.testing_job_state.can_cancel)
 
             route_state = self._load_route_state()
             controller.workflow_state["route"] = route_workbench_state_to_dict(route_state) | {
@@ -1579,20 +1634,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             route_entries = controller.workflow_state.get("route", {}).get("entries", [])
             route_entry = route_entries[self.route_selected_index] if isinstance(route_entries, list) and route_entries else {}
             self.route_form_syncing = True
-            self.query_one("#route-name", Input).value = str(route_entry.get("name") or "Scholar")
-            self.query_one("#route-listen-host", Input).value = str(route_entry.get("listen_host") or "127.0.0.1")
-            self.query_one("#route-listen-port", Input).value = str(route_entry.get("listen_port") or "19080")
-            self.query_one("#route-enabled", Switch).value = bool(route_entry.get("enabled", True))
-            route_select = self.query_one("#route-candidate-select", Select)
-            route_state_dict = controller.workflow_state.get("route", {})
-            options = _build_route_select_options(route_state_dict if isinstance(route_state_dict, dict) else {})
-            route_select.set_options(options)
-            route_select.clear()
-            route_select_value = _resolve_route_select_value(route_entry if isinstance(route_entry, dict) else {}, options)
-            if route_select_value is not None:
-                route_select.value = route_select_value
-            route_select.disabled = not bool(controller.workflow_state.get("route", {}).get("candidate_selector_enabled"))
-            self.route_form_syncing = False
+            try:
+                self.query_one("#route-name", Input).value = str(route_entry.get("name") or "Scholar")
+                self.query_one("#route-listen-host", Input).value = str(route_entry.get("listen_host") or "127.0.0.1")
+                self.query_one("#route-listen-port", Input).value = str(route_entry.get("listen_port") or "19080")
+                self.query_one("#route-enabled", Switch).value = bool(route_entry.get("enabled", True))
+                route_select = self.query_one("#route-candidate-select", Select)
+                route_state_dict = controller.workflow_state.get("route", {})
+                options = _build_route_select_options(route_state_dict if isinstance(route_state_dict, dict) else {})
+                route_select.set_options(options)
+                route_select_value = _resolve_route_select_value(route_entry if isinstance(route_entry, dict) else {}, options)
+                if route_select_value is None:
+                    route_select.clear()
+                elif route_select.value != route_select_value:
+                    route_select.value = route_select_value
+                route_select.disabled = not bool(controller.workflow_state.get("route", {}).get("candidate_selector_enabled"))
+            finally:
+                self.route_form_syncing = False
             self.query_one("#route-select", Button).disabled = route_select.disabled
             self.query_one("#route-apply", Button).disabled = not bool(controller.workflow_state.get("route", {}).get("can_apply"))
             port_result = controller.workflow_state.get("route", {}).get("current_port_result")
@@ -1623,7 +1681,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rich_log.write(line)
 
             self._refresh_confirmation_panel()
-            self._refresh_inspector()
             self.query_one("#shortcut-bar", Static).update(
                 _shortcuts_for_tab(self.current_page, pending_confirmation=bool(controller.pending_action))
             )
@@ -1650,6 +1707,72 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.query_one("#error-title", Static).update(title)
             self.query_one("#error-body", Static).update(message)
 
+        def _notify_user(self, message: str, *, key: str | None = None, severity: str = "information") -> None:
+            notice_key = key or message
+            if self.last_notice_key == notice_key:
+                return
+            self.last_notice_key = notice_key
+            self.notify(message, severity=severity)
+
+        def _open_detail_panel(self, title: str, body: str) -> None:
+            panel = self.query_one("#detail-panel", Vertical)
+            panel.display = True
+            self.query_one("#detail-title", Static).update(title)
+            self.query_one("#detail-body", Static).update(body)
+            self.detail_open = True
+
+        def _close_detail_panel(self) -> None:
+            panel = self.query_one("#detail-panel", Vertical)
+            panel.display = False
+            self.query_one("#detail-title", Static).update("Details")
+            self.query_one("#detail-body", Static).update("")
+            self.detail_open = False
+
+        def _build_current_detail(self) -> tuple[str, str]:
+            if self.current_page == "Testing":
+                return "Testing detail", build_testing_detail_body(controller.workflow_state.get("testing", {}))
+            if self.current_page == "Route":
+                return "Route detail", build_route_detail_body(controller.workflow_state.get("route", {}))
+            if self.current_page == "Home":
+                home = controller.workflow_state.get("home", {})
+                return "Home detail", f"Next action: {home.get('next_recommended_action') or 'none'}\nLatest action: {home.get('latest_action_summary') or 'none'}"
+            return "Details", "No additional detail is available for this page."
+
+        def _set_testing_job_state(self, state: TestingJobState) -> None:
+            self.testing_job_state = state
+
+        def _apply_testing_event(self, event: TestingEvent) -> None:
+            current_state = self._load_testing_state()
+            rows = [dict(row) for row in testing_screen_state_to_dict(current_state)["rows"]]
+            if self.testing_live_rows is not None:
+                rows = [dict(row) for row in self.testing_live_rows]
+            rows = _apply_testing_event_to_rows(rows, event)
+            self.testing_live_rows = rows
+            next_log = [*self.testing_log_lines, render_testing_event_line(event)][-10:]
+            self.testing_log_lines = next_log
+            job_state = self.testing_job_state
+            passed = sum(1 for row in rows if row.get("status_icon") == "PASS")
+            failed = sum(1 for row in rows if row.get("status_icon") == "FAIL")
+            skipped = sum(1 for row in rows if row.get("status_icon") == "SKIP")
+            self._set_testing_job_state(
+                update_testing_job_state(
+                    job_state,
+                    current=event.current if event.current is not None else job_state.current,
+                    total=event.total if event.total is not None else job_state.total,
+                    passed=passed,
+                    failed=failed,
+                    skipped=skipped,
+                    message=event.message,
+                    redacted_log_tail=next_log,
+                )
+            )
+
+        def _reset_testing_live_state(self) -> None:
+            self.testing_live_rows = None
+            self.testing_log_lines = []
+            self.testing_thread = None
+            self._set_testing_job_state(idle_testing_job_state())
+
         def _refresh_confirmation_panel(self) -> None:
             panel = self.query_one("#confirmation-panel", Vertical)
             pending = controller.pending_action
@@ -1660,49 +1783,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.query_one("#confirmation-title", Static).update(f"Confirm: {pending.title}")
             self.query_one("#confirmation-body", Static).update(_build_confirmation_body(pending))
 
-        def _refresh_inspector(self) -> None:
-            if self.current_page == "Home":
-                body = [
-                    f"Next action: {controller.workflow_state.get('home', {}).get('next_recommended_action')}",
-                    f"Latest action: {controller.workflow_state.get('home', {}).get('latest_action_summary') or 'none'}",
-                ]
-            elif self.current_page == "Settings":
-                body = [
-                    "Config-centered editing surface.",
-                    "Subscription URL remains masked in the UI.",
-                    "Undo restores config.yaml only.",
-                ]
-            elif self.current_page == "Testing":
-                body = [
-                    "Fetch/Test are live network operations.",
-                    "They write local artifacts under user_data_dir.",
-                    "They do not modify production Xray/XrayR/x-ui.",
-                    "Recent events remain redacted.",
-                ]
-            elif self.current_page == "Route":
-                validation_errors = controller.workflow_state.get("route", {}).get("validation_errors") or []
-                body = [
-                    "Only the managed sidecar is in scope.",
-                    "No production Xray/XrayR/x-ui mutation.",
-                    "Validate is explicit and review-safe.",
-                    f"Apply available: {'yes' if controller.workflow_state.get('route', {}).get('can_apply') else 'no'}",
-                    f"Validation errors: {len(validation_errors)}",
-                ]
-            else:
-                body = [
-                    "Rollback restores local artifacts only.",
-                    "It does not undo network effects.",
-                    "It does not restart sidecar.",
-                ]
-            self.query_one("#inspector-body", Static).update("\n".join(body))
-
-        def _run_tui_action(self, description: str, func: Callable[[], str | None]) -> None:
+        def _run_tui_action(self, description: str, func: Callable[[], str | None], *, notify: bool = True) -> None:
             message, succeeded = _run_safe_tui_action(controller, description, func)
             self._safe_refresh_ui("after action")
-            if message:
-                self.notify(message)
-            elif succeeded and controller.action_state.status_message:
-                self.notify(str(controller.action_state.status_message))
+            if notify and message:
+                self._notify_user(message, key=f"{description}:{message}")
+            elif notify and succeeded and controller.action_state.status_message:
+                self._notify_user(str(controller.action_state.status_message), key=f"{description}:{controller.action_state.status_message}")
 
         def on_button_pressed(self, event: Button.Pressed) -> None:
             button_id = event.button.id or ""
@@ -1715,7 +1802,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "nav-logs": "Logs",
                 }.get(button_id, "Home")
                 self._set_page(page)
-                self._refresh_inspector()
                 return
             button_actions: dict[str, Callable[[], None]] = {
                 "home-open-settings": self.action_open_settings,
@@ -1743,6 +1829,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "logs-rollback": self.action_rollback_latest_snapshot,
                 "pending-confirm": self.action_confirm_selected,
                 "pending-cancel": self.action_cancel_pending,
+                "detail-close": self.action_close_detail,
             }
             action = button_actions.get(button_id)
             if action is not None:
@@ -1770,14 +1857,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 self._safe_refresh_ui("route toggle")
 
         def on_select_changed(self, event) -> None:
-            if self.current_page != "Route" or self.route_form_syncing:
+            if self.current_page != "Route":
                 return
             if getattr(event.select, "id", "") != "route-candidate-select":
                 return
             value = event.value
-            if not isinstance(value, str) or not value:
+            current_route = controller.workflow_state.get("route", {})
+            entries = current_route.get("entries", []) if isinstance(current_route, dict) else []
+            current_entry = entries[self.route_selected_index] if isinstance(entries, list) and entries and 0 <= self.route_selected_index < len(entries) else {}
+            current_candidate_id = current_entry.get("candidate_id") if isinstance(current_entry, dict) else None
+            if _should_ignore_route_select_change(
+                route_form_syncing=self.route_form_syncing,
+                event_value=value,
+                current_candidate_id=current_candidate_id if isinstance(current_candidate_id, str) else None,
+            ):
                 return
-            self._run_tui_action("Choose passed node", lambda: self._choose_route_candidate_id(value))
+            self._run_tui_action("Choose passed node", lambda: self._choose_route_candidate_id(value), notify=False)
 
         def action_open_home(self) -> None:
             self._set_page("Home")
@@ -1838,7 +1933,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     self._confirm_pending_action,
                 )
                 return
-            self._run_tui_action("Confirm selected action", lambda: controller.handle_operation("choose_selected_candidate"))
+            self.action_open_detail()
+
+        def action_open_detail(self) -> None:
+            title, body = self._build_current_detail()
+            self._open_detail_panel(title, body)
+
+        def action_close_detail(self) -> None:
+            self._close_detail_panel()
 
         def action_cancel_pending(self) -> None:
             self._run_tui_action(
@@ -1847,10 +1949,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         def action_run_fetch(self) -> None:
-            self._run_tui_action("Run fetch", lambda: controller.handle_operation("fetch"))
+            self._start_testing_operation("fetch", "fetching")
 
         def action_run_probe(self) -> None:
-            self._run_tui_action("Run probe", lambda: controller.handle_operation("probe"))
+            self._start_testing_operation("probe", "probing")
 
         def action_run_retest_failed(self) -> None:
             self._run_tui_action(
@@ -1859,10 +1961,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         def action_stop_testing_job(self) -> None:
-            self._run_tui_action(
-                "Stop testing job",
-                lambda: "No running fetch/probe worker is attached in this phase.",
-            )
+            if self.testing_job_state.status not in {"fetching", "probing"}:
+                self._run_tui_action("Stop testing job", lambda: "No running fetch/probe worker is attached in this phase.", notify=False)
+                return
+            self._set_testing_job_state(update_testing_job_state(self.testing_job_state, status="cancelling", can_cancel=False, message="Cancelling Testing job..."))
+            controller.action_state.status_message = "Cancelling Testing job..."
+            self._safe_refresh_ui("testing cancel request")
 
         def action_run_artifact_check(self) -> None:
             self._run_tui_action("Run artifact check", lambda: controller.handle_operation("artifact_check"))
@@ -1931,7 +2035,112 @@ def main(argv: Sequence[str] | None = None) -> int:
             self._run_tui_action("Rollback latest snapshot", lambda: self._request_confirmation("rollback_snapshot"))
 
         def action_show_help(self) -> None:
-            self._run_tui_action("Show help", lambda: _shortcuts_for_tab(self.current_page, pending_confirmation=bool(controller.pending_action)))
+            self._open_detail_panel("Help", _shortcuts_for_tab(self.current_page, pending_confirmation=bool(controller.pending_action)))
+
+        def _start_testing_operation(self, action_key: str, status: str) -> None:
+            if self.testing_thread is not None and self.testing_thread.is_alive():
+                self._notify_user("A Testing job is already running.", key="testing-job-running")
+                return
+            state = self._load_testing_state()
+            total = max(state.summary.supported_count, len(state.rows), 1)
+            message = "Fetching subscription..." if action_key == "fetch" else "Probing candidates..."
+            self.testing_live_rows = [asdict(row) for row in state.rows]
+            self.testing_log_lines = [message]
+            self._set_testing_job_state(
+                TestingJobState(
+                    job_id=f"{action_key}-{int(time.time())}",
+                    kind=action_key,
+                    status=status,
+                    started_at=None,
+                    finished_at=None,
+                    current=0,
+                    total=total,
+                    passed=0,
+                    failed=0,
+                    skipped=0,
+                    message=message,
+                    can_cancel=True,
+                    redacted_log_tail=list(self.testing_log_lines),
+                )
+            )
+            self._safe_refresh_ui(f"{action_key} start")
+
+            def run_job() -> None:
+                try:
+                    result_message = controller.handle_operation(action_key)
+                    self.call_from_thread(self._finalize_testing_operation, action_key, result_message, True)
+                except Exception as exc:  # pragma: no cover - safe wrapper covers UI path
+                    safe_message = redact_exception_message(str(exc))
+                    self.call_from_thread(self._finalize_testing_operation, action_key, safe_message, False)
+
+            def poll_job() -> None:
+                last_seen: dict[str, str] = {}
+                while self.testing_thread is not None and self.testing_thread.is_alive():
+                    try:
+                        current_state = build_testing_screen_state(
+                            config_path=controller._paths()["config"],
+                            user_data_paths=resolve_user_data_paths(controller._paths()["config"]),
+                            selected_index=self.testing_selected_index,
+                        )
+                        rows = [asdict(row) for row in current_state.rows]
+                        total_supported = max(current_state.summary.supported_count, len(rows), 1)
+                        current_count = 0
+                        for row in rows:
+                            row_id = str(row.get("candidate_id") or "")
+                            status_icon = str(row.get("status_icon") or "")
+                            if status_icon in {"PASS", "FAIL", "SKIP", "EXP", "UNSUP", "STALE"}:
+                                current_count += 1
+                            if last_seen.get(row_id) != status_icon and status_icon not in {"PEND", ""}:
+                                last_seen[row_id] = status_icon
+                                self.call_from_thread(
+                                    self._apply_testing_event,
+                                    TestingEvent(
+                                        event_type="candidate_result",
+                                        candidate_id=row_id,
+                                        index=row.get("index") if isinstance(row.get("index"), int) else None,
+                                        label=str(row.get("label") or ""),
+                                        region_hint=str(row.get("region_hint") or "") or None,
+                                        protocol=str(row.get("protocol") or "") or None,
+                                        status=status_icon,
+                                        home_status=row.get("home_status") if isinstance(row.get("home_status"), int) else None,
+                                        query_status=row.get("query_status") if isinstance(row.get("query_status"), int) else None,
+                                        stage=str(row.get("stage") or "") or None,
+                                        markers=tuple(row.get("markers") or ()),
+                                        latency_ms=row.get("latency_ms") if isinstance(row.get("latency_ms"), int) else None,
+                                        current=current_count,
+                                        total=total_supported,
+                                        message=f"{row.get('label') or row_id} -> {status_icon}",
+                                    ),
+                                )
+                    except Exception:
+                        pass
+                    time.sleep(0.3)
+
+            self.testing_thread = threading.Thread(target=run_job, daemon=True)
+            self.testing_thread.start()
+            threading.Thread(target=poll_job, daemon=True).start()
+
+        def _finalize_testing_operation(self, action_key: str, result_message: str, succeeded: bool) -> None:
+            fresh_state = self._load_testing_state()
+            rows = [asdict(row) for row in fresh_state.rows]
+            self.testing_live_rows = rows
+            self.testing_log_lines = [*(self.testing_log_lines or []), redact_text(result_message)][-10:]
+            final_status = "completed" if succeeded else "failed"
+            self._set_testing_job_state(
+                update_testing_job_state(
+                    self.testing_job_state,
+                    status=final_status,
+                    current=sum(1 for row in rows if str(row.get("status_icon")) in {"PASS", "FAIL", "SKIP", "EXP", "UNSUP", "STALE"}),
+                    total=max(fresh_state.summary.supported_count, len(rows), 1),
+                    passed=fresh_state.summary.passed_count,
+                    failed=fresh_state.summary.failed_count,
+                    skipped=sum(1 for row in rows if str(row.get("status_icon")) == "SKIP"),
+                    message=redact_text(result_message),
+                    can_cancel=False,
+                    redacted_log_tail=list(self.testing_log_lines),
+                )
+            )
+            self._safe_refresh_ui(f"{action_key} finalize")
 
         def _load_testing_state(self):
             state = build_testing_screen_state(
@@ -1941,6 +2150,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             self.testing_selected_index = state.selected_index
             return state
+
+        def _testing_workflow_state(self) -> dict[str, object]:
+            state = self._load_testing_state()
+            testing = testing_screen_state_to_dict(state)
+            if self.testing_live_rows is not None:
+                testing["rows"] = [dict(row) for row in self.testing_live_rows]
+            if self.testing_job_state.status != "idle":
+                testing["job_state"] = self.testing_job_state.status
+                testing["progress_current"] = self.testing_job_state.current
+                testing["progress_total"] = self.testing_job_state.total
+                testing["log_lines"] = list(self.testing_log_lines or testing.get("log_lines", []))
+                summary = dict(testing.get("summary", {}))
+                summary["attempted_count"] = self.testing_job_state.current or summary.get("attempted_count", 0)
+                summary["passed_count"] = self.testing_job_state.passed
+                summary["failed_count"] = self.testing_job_state.failed
+                testing["summary"] = summary
+            return testing
 
         def _load_route_state(self):
             state = build_route_workbench_state(
@@ -2019,13 +2245,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return "Choose a passed candidate first."
             updated = update_route_entry_candidate(route_state, entry_index=self.route_selected_index, candidate_id=value)
             self._store_route_state(updated)
-            return f"Updated route candidate to {value}."
+            label = updated.entries[self.route_selected_index].candidate_label or value
+            return f"{updated.entries[self.route_selected_index].name} candidate set to {label}."
 
         def _choose_route_candidate_id(self, value: str) -> str:
             route_state = self._load_route_state()
+            current_candidate_id = route_state.entries[self.route_selected_index].candidate_id
+            if value == current_candidate_id:
+                return f"{route_state.entries[self.route_selected_index].name} candidate is already selected."
             updated = update_route_entry_candidate(route_state, entry_index=self.route_selected_index, candidate_id=value)
             self._store_route_state(updated)
-            return f"Updated route candidate to {value}."
+            label = updated.entries[self.route_selected_index].candidate_label or value
+            controller.action_state.status_message = f"{updated.entries[self.route_selected_index].name} candidate set to {label}."
+            return str(controller.action_state.status_message)
 
         def _add_route_entry(self) -> str:
             state = self._load_route_state()

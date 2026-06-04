@@ -99,6 +99,32 @@ def test_render_testing_page_uses_workbench_language_not_command_dump() -> None:
     assert "scholar-outbound-manager probe" not in rendered
 
 
+def test_testing_table_model_supports_run_status() -> None:
+    model = build_testing_table_model(
+        {
+            "testing": {
+                "rows": [
+                    {
+                        "index": 1,
+                        "region_hint": "JP",
+                        "label": "JP relay",
+                        "protocol": "vless",
+                        "passed": False,
+                        "status_icon": "RUN",
+                        "latency_ms": None,
+                        "home_status": None,
+                        "query_status": None,
+                        "stage": "running",
+                        "markers": (),
+                    }
+                ]
+            }
+        }
+    )
+
+    assert model.rows[0][0] == "RUN"
+
+
 def test_testing_state_reports_timeout_diagnosis_and_stale_artifacts(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(

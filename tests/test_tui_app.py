@@ -277,6 +277,59 @@ def test_on_mount_uses_safe_refresh_wrapper() -> None:
     assert 'self._safe_refresh_ui("startup")' in source
 
 
+def test_persistent_inspector_column_is_removed() -> None:
+    source = (Path(tui_app.__file__)).read_text(encoding="utf-8")
+
+    assert "inspector-column" not in source
+    assert 'yield Static("Inspector"' not in source
+
+
+def test_route_selection_helper_ignores_non_user_refresh_changes() -> None:
+    assert tui_app._should_ignore_route_select_change(
+        route_form_syncing=True,
+        event_value="candidate-001",
+        current_candidate_id=None,
+    )
+    assert tui_app._should_ignore_route_select_change(
+        route_form_syncing=False,
+        event_value="candidate-001",
+        current_candidate_id="candidate-001",
+    )
+
+
+def test_testing_event_updates_row_without_secrets() -> None:
+    rows = [
+        {
+            "candidate_id": "candidate-001",
+            "status_icon": "PEND",
+            "stage": "pending",
+            "label": "US relay",
+        }
+    ]
+    event = tui_app.TestingEvent(
+        event_type="candidate_result",
+        candidate_id="candidate-001",
+        index=1,
+        label="US relay",
+        region_hint="US",
+        protocol="vless",
+        status="PASS",
+        home_status=200,
+        query_status=200,
+        stage="full_access",
+        markers=(),
+        latency_ms=800,
+        current=1,
+        total=1,
+        message="candidate finished",
+    )
+
+    updated = tui_app._apply_testing_event_to_rows(rows, event)
+
+    assert updated[0]["status_icon"] == "PASS"
+    assert updated[0]["stage"] == "full_access"
+
+
 def test_probe_command_preview_uses_user_data_dir_paths(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
