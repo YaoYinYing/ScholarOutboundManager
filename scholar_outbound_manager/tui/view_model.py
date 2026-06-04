@@ -92,6 +92,45 @@ class SettingsFieldView:
     key: str
 
 
+@dataclass(frozen=True, slots=True)
+class PageAction:
+    label: str
+    key_hint: str
+    description: str
+
+
+@dataclass(frozen=True, slots=True)
+class HomeCard:
+    title: str
+    rows: list[tuple[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class SettingsSummary:
+    config_path: str
+    user_data_dir: str
+    subscription_url_masked: str
+    subscription_user_agent: str
+    xray_binary_path: str
+    fail_closed: bool
+    experimental_hysteria2: bool
+    service_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class TableModel:
+    columns: list[str]
+    rows: list[list[str]]
+    empty_message: str
+
+
+@dataclass(frozen=True, slots=True)
+class LogsSummary:
+    action_rows: list[list[str]]
+    snapshot_rows: list[list[str]]
+    rollback_warning: list[str]
+
+
 def build_candidate_table_rows(entries: list[CandidateCatalogEntry]) -> list[dict[str, object]]:
     """Build secret-safe table rows for TUI rendering."""
     return [
@@ -302,6 +341,143 @@ def build_settings_groups(form: dict[str, object]) -> dict[str, list[SettingsFie
         else:
             groups["Routing"].append(view)
     return groups
+
+
+def build_home_cards(workflow_state: dict[str, object]) -> list[HomeCard]:
+    """Build the task-centered Home card set."""
+    home = workflow_state.get("home", {})
+    return [
+        HomeCard(
+            title="Subscription",
+            rows=[
+                ("Configured", "yes" if home.get("subscription_configured") else "no"),
+                ("Last fetch", str(home.get("last_fetch_status") or "unknown")),
+                ("Candidates", str(home.get("candidate_count") or 0)),
+                ("Supported", str(home.get("supported_count") or 0)),
+            ],
+        ),
+        HomeCard(
+            title="Testing",
+            rows=[
+                ("Tested", str(home.get("tested_count") or 0)),
+                ("Passed", str(home.get("passed_count") or 0)),
+                ("Failed", str(home.get("failed_count") or 0)),
+                ("Full access", str(home.get("full_access_count") or 0)),
+                ("Query blocked", str(home.get("query_blocked_count") or 0)),
+                ("Transport failed", str(home.get("transport_failed_count") or 0)),
+            ],
+        ),
+        HomeCard(
+            title="Route",
+            rows=[
+                ("Entries", str(home.get("route_count") or 0)),
+                ("Enabled", str(home.get("enabled_route_count") or 0)),
+                ("Selected", str(home.get("selected_candidate_label") or "none")),
+                ("Ports", ", ".join(str(port) for port in home.get("active_listen_ports", [])) or "none"),
+            ],
+        ),
+        HomeCard(
+            title="Sidecar",
+            rows=[
+                ("Service", str(home.get("service_active") or "unknown")),
+                ("Enabled", str(home.get("service_enabled") or "unknown")),
+                ("SOCKS", str(home.get("socks_status") or "unknown")),
+                ("Last validation", str(home.get("last_validation") or "unknown")),
+            ],
+        ),
+    ]
+
+
+def build_settings_summary(workflow_state: dict[str, object]) -> SettingsSummary:
+    """Build one Settings page summary."""
+    settings = workflow_state.get("settings", {})
+    return SettingsSummary(
+        config_path=str(settings.get("config_path") or ""),
+        user_data_dir=str(settings.get("user_data_dir") or ""),
+        subscription_url_masked=str(settings.get("subscription_url_masked") or "Not configured"),
+        subscription_user_agent=str(settings.get("subscription_user_agent") or ""),
+        xray_binary_path=str(settings.get("xray_binary_path") or ""),
+        fail_closed=bool(settings.get("fail_closed")),
+        experimental_hysteria2=bool(settings.get("experimental_hysteria2")),
+        service_name=str(settings.get("service_name") or ""),
+    )
+
+
+def build_testing_table_model(workflow_state: dict[str, object]) -> TableModel:
+    """Build the Testing candidate table model."""
+    rows = workflow_state.get("testing", {}).get("candidate_rows", [])
+    table_rows: list[list[str]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        table_rows.append(
+            [
+                "PASS" if row.get("passed") else "REVIEW",
+                str(row.get("index")),
+                str(row.get("region") or "Unknown"),
+                truncate_display_value(str(row.get("label") or ""), limit=24),
+                str(row.get("protocol") or "unknown"),
+                _latency_label(row.get("latency_ms")),
+                str(row.get("home_status") or "-"),
+                str(row.get("query_status") or "-"),
+                str(row.get("stage") or "-"),
+                str(row.get("failure_marker_count") or 0),
+            ]
+        )
+    return TableModel(
+        columns=["status", "#", "region", "label", "protocol", "latency", "home", "query", "stage", "markers"],
+        rows=table_rows,
+        empty_message="No candidate results yet. Use Fetch Subscription or Test Nodes.",
+    )
+
+
+def build_route_table_model(workflow_state: dict[str, object]) -> TableModel:
+    """Build the Route table model."""
+    route = workflow_state.get("route", {})
+    table_rows: list[list[str]] = []
+    for entry in route.get("entries", []) if isinstance(route.get("entries"), list) else []:
+        if not isinstance(entry, dict):
+            continue
+        table_rows.append(
+            [
+                "ON" if entry.get("enabled") else "OFF",
+                str(entry.get("name") or "Route"),
+                truncate_display_value(str(route.get("selected_candidate_label") or "Unassigned"), limit=24),
+                str(entry.get("listen_host") or "127.0.0.1"),
+                str(entry.get("listen_port") or "19080"),
+                "Pending",
+                "Not validated",
+            ]
+        )
+    return TableModel(
+        columns=["enabled", "name", "candidate", "host", "port", "port status", "validation"],
+        rows=table_rows,
+        empty_message="No routes configured yet.",
+    )
+
+
+def build_logs_summary(workflow_state: dict[str, object]) -> LogsSummary:
+    """Build the Logs page summary."""
+    logs = workflow_state.get("logs_screen", {})
+    last_action = logs.get("last_action")
+    action_rows: list[list[str]] = []
+    if isinstance(last_action, dict):
+        action_rows.append(
+            [
+                str(last_action.get("title") or last_action.get("key") or "Action"),
+                "ok" if last_action.get("succeeded") else "review",
+                truncate_display_value(str(last_action.get("summary") or ""), limit=60),
+            ]
+        )
+    snapshot_rows = [[
+        str(logs.get("latest_snapshot_id") or "none"),
+        str(logs.get("latest_snapshot_reason") or "none"),
+    ]]
+    return LogsSummary(
+        action_rows=action_rows,
+        snapshot_rows=snapshot_rows,
+        rollback_warning=list(logs.get("rollback_warning") or []),
+    )
 
 
 def resolve_next_action(workflow_state: dict[str, object]) -> tuple[str, str]:

@@ -5,9 +5,14 @@ from __future__ import annotations
 from scholar_outbound_manager.selection import CandidateCatalogEntry
 from scholar_outbound_manager.tui.view_model import build_dashboard_model
 from scholar_outbound_manager.tui.view_model import build_candidate_detail
+from scholar_outbound_manager.tui.view_model import build_home_cards
+from scholar_outbound_manager.tui.view_model import build_logs_summary
 from scholar_outbound_manager.tui.view_model import build_pool_plan_rows
+from scholar_outbound_manager.tui.view_model import build_route_table_model
+from scholar_outbound_manager.tui.view_model import build_settings_summary
 from scholar_outbound_manager.tui.view_model import build_snippet_view
 from scholar_outbound_manager.tui.view_model import build_candidate_table_rows
+from scholar_outbound_manager.tui.view_model import build_testing_table_model
 from scholar_outbound_manager.tui.view_model import truncate_display_value
 
 
@@ -177,3 +182,17 @@ def test_snippets_view_does_not_contain_secrets() -> None:
 
     assert "PASSWORD_PLACEHOLDER" not in view["rendered"]
     assert "production Xray/XrayR" in view["warning"]
+
+
+def test_new_page_models_are_task_centered() -> None:
+    home_cards = build_home_cards({"home": {"subscription_configured": True, "last_fetch_status": "ready", "candidate_count": 3, "supported_count": 3, "tested_count": 3, "passed_count": 2, "failed_count": 1, "full_access_count": 2, "query_blocked_count": 1, "transport_failed_count": 0, "route_count": 1, "enabled_route_count": 1, "selected_candidate_label": "US relay", "active_listen_ports": [19080], "service_active": "unknown", "service_enabled": "unknown", "socks_status": "unknown", "last_validation": "needed"}})
+    settings = build_settings_summary({"settings": {"config_path": "/tmp/config.yaml", "user_data_dir": "/tmp/state_data", "subscription_url_masked": "******** configured", "subscription_user_agent": "Clash.Meta", "xray_binary_path": ".runtime/xray/xray", "fail_closed": True, "experimental_hysteria2": False, "service_name": "scholar-outbound-sidecar.service"}})
+    testing = build_testing_table_model({"testing": {"candidate_rows": [{"index": 1, "region": "US", "label": "US relay", "protocol": "vless", "passed": True, "latency_ms": 15, "home_status": 200, "query_status": 200, "stage": "full_access", "failure_marker_count": 0}]}})
+    route = build_route_table_model({"route": {"entries": [{"name": "Scholar", "listen_host": "127.0.0.1", "listen_port": 19080, "enabled": True}], "selected_candidate_label": "US relay"}})
+    logs = build_logs_summary({"logs_screen": {"rollback_warning": ["Artifact rollback restores local artifacts only."], "last_action": {"title": "Artifact Check", "succeeded": True, "summary": "ok"}}})
+
+    assert home_cards[0].title == "Subscription"
+    assert settings.subscription_url_masked == "******** configured"
+    assert testing.columns[0] == "status"
+    assert route.columns[0] == "enabled"
+    assert logs.rollback_warning[0] == "Artifact rollback restores local artifacts only."

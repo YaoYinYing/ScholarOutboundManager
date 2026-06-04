@@ -16,6 +16,7 @@ from scholar_outbound_manager.selection import write_selected_candidate_artifact
 from scholar_outbound_manager.tui.action_runner import ActionResult
 from scholar_outbound_manager.tui.artifact_rollback import ArtifactSnapshot
 from scholar_outbound_manager.tui.action_runner import FakeActionRunner
+from scholar_outbound_manager.tui.action_runner import append_action_journal
 from scholar_outbound_manager.tui.config_centered import build_first_run_wizard_state
 from scholar_outbound_manager.tui.config_centered import summarize_config_centered_state
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
@@ -31,13 +32,18 @@ from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
 from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import write_session_state
 from scholar_outbound_manager.tui.view_model import ActivateStep
+from scholar_outbound_manager.tui.view_model import build_home_cards
+from scholar_outbound_manager.tui.view_model import build_logs_summary
 from scholar_outbound_manager.tui.view_model import RouteSummary
 from scholar_outbound_manager.tui.view_model import SettingsFieldView
 from scholar_outbound_manager.tui.view_model import build_activate_steps
 from scholar_outbound_manager.tui.view_model import build_operation_impact
 from scholar_outbound_manager.tui.view_model import build_route_detail
+from scholar_outbound_manager.tui.view_model import build_route_table_model
 from scholar_outbound_manager.tui.view_model import build_route_summaries
+from scholar_outbound_manager.tui.view_model import build_settings_summary
 from scholar_outbound_manager.tui.view_model import build_settings_groups
+from scholar_outbound_manager.tui.view_model import build_testing_table_model
 from scholar_outbound_manager.tui.view_model import build_workflow_summary
 from scholar_outbound_manager.tui.view_model import redact_text
 from scholar_outbound_manager.tui.view_model import resolve_next_action
@@ -45,6 +51,11 @@ from scholar_outbound_manager.tui.workflow import MAIN_TABS
 
 
 TUI_KEY_BINDINGS: tuple[tuple[str, str, str], ...] = (
+    ("1", "open_home", "Home"),
+    ("2", "open_settings", "Settings"),
+    ("3", "open_testing", "Testing"),
+    ("4", "open_route", "Route"),
+    ("5", "open_logs", "Logs"),
     ("q", "quit", "Quit"),
     ("r", "reload_state", "Reload State"),
     ("j", "cursor_down", "Move Down"),
@@ -163,6 +174,25 @@ def _run_safe_tui_action(
         message = func()
     except Exception as exc:
         safe_message = redact_exception_message(str(exc))
+        append_action_journal(
+            ActionResult(
+                key="tui_safe_error",
+                title=description,
+                command=["internal", "tui_safe_error"],
+                started_at="",
+                finished_at="",
+                exit_code=126,
+                succeeded=False,
+                stdout="",
+                stderr=safe_message,
+                redacted_stdout="",
+                redacted_stderr=safe_message,
+                summary=safe_message,
+                expected_artifacts=[],
+                warnings=["UI action failed before backend execution."],
+            ),
+            journal_path=controller._action_journal_path,  # type: ignore[attr-defined]
+        )
         controller.message = WorkbenchMessage("error", description, safe_message)
         controller.action_state.status_message = safe_message
         controller.workflow_state = _build_workflow_state(controller)
@@ -205,15 +235,15 @@ def _selected_cursor_candidate_id(workbench: dict[str, object]) -> str | None:
 
 def _shortcuts_for_tab(tab: str, *, pending_confirmation: bool) -> str:
     if pending_confirmation:
-        return "Shortcuts: Enter confirm | Esc cancel | q quit"
+        return "Keys: 1-5 pages | Enter confirm | Esc cancel | q quit"
     shortcuts = {
-        "Home": "Keys: f fetch | t test | R route | s settings | l logs | q quit",
-        "Settings": "Keys: s save | u undo | d diff | t test fetch | q quit",
-        "Testing": "Keys: f fetch | t test all | F retest failed | Enter inspect | q quit",
-        "Route": "Keys: a add | d delete | p test port | A apply | v validate | q quit",
-        "Logs": "Shortcuts: j/k scroll | c copy command | r refresh | q quit",
+        "Home": "Keys: 1-5 pages | f fetch | p test nodes | x snapshot | q quit",
+        "Settings": "Keys: 1-5 pages | s save | u undo | d diff | f test fetch | q quit",
+        "Testing": "Keys: 1-5 pages | f fetch | p test nodes | j/k move | q quit",
+        "Route": "Keys: 1-5 pages | c choose node | g stage | v validate | q quit",
+        "Logs": "Keys: 1-5 pages | a artifact check | x snapshot | z rollback | q quit",
     }
-    return shortcuts.get(tab, "Shortcuts: r refresh | q quit")
+    return shortcuts.get(tab, "Keys: 1-5 pages | r refresh | q quit")
 
 
 def _render_route_table(routes: list[RouteSummary]) -> list[str]:
@@ -483,6 +513,7 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
             "config_path": config_summary.config_path,
             "user_data_dir": config_summary.user_data_dir,
             "subscription_url_configured": config_summary.subscription_url_configured,
+            "subscription_url_masked": config_summary.subscription_url_masked,
             "subscription_user_agent": config_summary.subscription_user_agent,
             "xray_binary_path": config_summary.xray_binary_path,
             "fail_closed": config_summary.fail_closed,
@@ -499,18 +530,27 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
             "full_access_count": markers["full_access"],
             "query_blocked_count": markers["query_blocked"],
             "transport_failed_count": markers["transport_failed"],
+            "toolbar_actions": ["Fetch Subscription", "Test Nodes", "Retest Failed", "Stop"],
         },
         "route": {
             "entries": config_summary.route_entries,
             "selected_candidate_label": payload["selection_state"]["selected_candidate_label"],
             "selected_candidate_id": payload["selection_state"]["selected_candidate_id"],
             "service_name": config_summary.service_name,
+            "production_boundary": "Only manages the ScholarOutboundManager sidecar. It does not modify production Xray/XrayR/x-ui.",
+            "actions": ["Add Route", "Remove Route", "Apply", "Start", "Stop", "Restart", "Validate"],
         },
         "logs_screen": {
             "last_action": latest_action,
             "snapshot_count": payload["artifact_state"]["snapshot_count"],
             "latest_snapshot_id": payload["artifact_state"]["latest_snapshot_id"],
             "latest_snapshot_reason": payload["artifact_state"]["latest_snapshot_reason"],
+            "rollback_warning": [
+                "Artifact rollback restores local artifacts only.",
+                "It does not undo network effects.",
+                "It does not restart sidecar.",
+                "It does not modify production Xray/XrayR/x-ui.",
+            ],
         },
         "dashboard": {
             "repo_status": payload["repo_status"],
@@ -681,34 +721,19 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
     if tab == "Home":
         home = workflow_state.get("home", {})
         wizard = workflow_state.get("wizard", {})
+        cards = build_home_cards(workflow_state)
         lines = [
             "Scholar Outbound Manager",
             "",
             f"Config: {home.get('config_path')}",
             f"User data: {home.get('user_data_dir')}",
-            "",
-            "Subscription",
-            f"  Configured: {'yes' if home.get('subscription_configured') else 'no'}",
-            f"  Last fetch: {home.get('last_fetch_status')}",
-            f"  Candidates: {home.get('candidate_count')}",
-            "",
-            "Testing",
-            f"  Passed: {home.get('passed_count')} / {home.get('tested_count')}",
-            f"  Full access: {home.get('full_access_count')}",
-            f"  Query blocked: {home.get('query_blocked_count')}",
-            "",
-            "Route",
-            f"  Routes enabled: {home.get('enabled_route_count')} / {home.get('route_count')}",
-            f"  Ports: {', '.join(str(port) for port in home.get('active_listen_ports', [])) or 'none'}",
-            f"  Selected: {home.get('selected_candidate_label') or 'none'}",
-            "",
-            "Sidecar",
-            f"  Service: {home.get('service_active')}",
-            f"  SOCKS: {home.get('socks_status')}",
-            f"  Validate: {home.get('last_validation')}",
-            "",
-            f"Next: {home.get('next_recommended_action')}",
         ]
+        for card in cards:
+            lines.append("")
+            lines.append(card.title)
+            for label, value in card.rows:
+                lines.append(f"  {label}: {value}")
+        lines.extend(["", f"Next: {home.get('next_recommended_action')}"])
         if wizard.get("active"):
             lines.extend(
                 [
@@ -720,92 +745,96 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
             )
         return "\n".join(lines)
     if tab == "Settings":
-        settings = workflow_state.get("settings", {})
+        settings = build_settings_summary(workflow_state)
         lines = [
             "Settings",
             "",
-            f"Config path: {settings.get('config_path')}",
-            f"User data dir: {settings.get('user_data_dir')}",
+            f"Config path: {settings.config_path}",
+            f"User data dir: {settings.user_data_dir}",
             "",
             "Subscription",
-            f"  URL configured: {'yes' if settings.get('subscription_url_configured') else 'no'}",
-            f"  User-Agent: {settings.get('subscription_user_agent')}",
+            f"  URL: {settings.subscription_url_masked}",
+            f"  User-Agent: {settings.subscription_user_agent}",
             "",
             "Runtime",
-            f"  Xray: {settings.get('xray_binary_path')}",
+            f"  Xray: {settings.xray_binary_path}",
             "",
             "Safety",
-            f"  fail_closed: {'ON' if settings.get('fail_closed') else 'OFF'}",
-            f"  hysteria2 experimental: {'ON' if settings.get('experimental_hysteria2') else 'OFF'}",
-            f"  service name: {settings.get('service_name')}",
+            f"  fail_closed: {'ON' if settings.fail_closed else 'OFF'}",
+            f"  hysteria2 experimental: {'ON' if settings.experimental_hysteria2 else 'OFF'}",
+            f"  service name: {settings.service_name}",
+            "",
+            "Actions",
+            "  [Save] [Undo] [Show Diff] [Test Fetch]",
         ]
-        diff = settings.get("redacted_diff")
+        diff = workflow_state.get("settings", {}).get("redacted_diff")
         if isinstance(diff, str) and diff:
             lines.extend(["", "Redacted diff", diff])
         return "\n".join(lines)
     if tab == "Testing":
         testing = workflow_state.get("testing", {})
-        rows = testing.get("candidate_rows", [])
+        table = build_testing_table_model(workflow_state)
         lines = [
             "Testing",
             "",
             "Toolbar: [Fetch Subscription] [Test Nodes] [Retest Failed] [Stop]",
             f"Progress: {testing.get('passed_count')} passed / {testing.get('tested_count')} tested",
             "",
-            "Candidates",
+            "Candidate table",
+            "  " + " | ".join(table.columns),
         ]
-        for row in rows[:8] if isinstance(rows, list) else []:
-            if not isinstance(row, dict):
-                continue
-            status = "✓" if row.get("passed") else "✗"
-            lines.append(
-                f"  {status} #{row.get('index')} {row.get('region')} {row.get('label')} {row.get('protocol')} "
-                f"{row.get('latency_label')} home={row.get('home_status')} query={row.get('query_status')}"
-            )
+        for row in table.rows[:8]:
+            lines.append("  " + " | ".join(row))
+        if not table.rows:
+            lines.append(f"  {table.empty_message}")
         return "\n".join(lines)
     if tab == "Route":
         route = workflow_state.get("route", {})
+        table = build_route_table_model(workflow_state)
         lines = [
             "Route",
             "",
-            "Routes",
+            "Route table",
+            "  " + " | ".join(table.columns),
         ]
-        for entry in route.get("entries", []) if isinstance(route.get("entries"), list) else []:
-            if not isinstance(entry, dict):
-                continue
-            enabled = "✓" if entry.get("enabled") else " "
-            lines.append(
-                f"  {enabled} {entry.get('name')}  {entry.get('listen_host')}:{entry.get('listen_port')}  "
-                f"{route.get('selected_candidate_label') or 'unassigned'}"
-            )
+        for row in table.rows[:8]:
+            lines.append("  " + " | ".join(row))
+        if not table.rows:
+            lines.append(f"  {table.empty_message}")
         lines.extend(
             [
                 "",
                 "Editor",
                 f"  Candidate: {route.get('selected_candidate_label') or 'none'}",
                 f"  Managed service: {route.get('service_name')}",
+                "  Actions: [Add Route] [Remove Route] [Apply] [Start] [Stop] [Restart] [Validate]",
+                f"  Boundary: {route.get('production_boundary')}",
             ]
         )
         return "\n".join(lines)
     if tab == "Logs":
-        logs = workflow_state.get("logs_screen", {})
+        logs = build_logs_summary(workflow_state)
         lines = [
             "Logs",
             "",
-            f"Latest snapshot: {logs.get('latest_snapshot_id') or 'none'}",
-            f"Snapshot reason: {logs.get('latest_snapshot_reason') or 'none'}",
-            "",
-            "Warnings",
-            "  Artifact rollback restores local artifacts only.",
-            "  It does not restart sidecar.",
-            "  It does not modify production Xray/XrayR/x-ui.",
+            "Action history",
         ]
-        last_action = logs.get("last_action")
+        for row in logs.action_rows:
+            lines.append("  " + " | ".join(row))
+        if not logs.action_rows:
+            lines.append("  No actions recorded in this session.")
+        lines.extend(["", "Snapshots"])
+        for row in logs.snapshot_rows:
+            lines.append("  " + " | ".join(row))
+        lines.extend(["", "Rollback boundary"])
+        for warning in logs.rollback_warning:
+            lines.append(f"  {warning}")
+        last_action = workflow_state.get("logs_screen", {}).get("last_action")
         if isinstance(last_action, dict):
             lines.extend(
                 [
                     "",
-                    "Last action",
+                    "Latest result",
                     f"  {last_action.get('title') or last_action.get('key')}: {last_action.get('summary')}",
                 ]
             )
@@ -1043,11 +1072,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         from textual.app import App
         from textual.app import ComposeResult
+        from textual.containers import Horizontal
         from textual.containers import Vertical
+        from textual.widgets import Button
+        from textual.widgets import DataTable
+        from textual.widgets import Footer
         from textual.widgets import Header
+        from textual.widgets import Input
+        from textual.widgets import RichLog
         from textual.widgets import Static
-        from textual.widgets import TabbedContent
-        from textual.widgets import TabPane
+        from textual.widgets import Switch
     except ModuleNotFoundError as exc:
         if exc.name != "textual":
             raise
@@ -1087,58 +1121,273 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     class ScholarOutboundWorkflowApp(App[None]):
-        """Minimal tabbed workflow-oriented TUI."""
+        """Task-oriented config-centered TUI."""
 
         BINDINGS = list(TUI_KEY_BINDINGS)
-
-        def _current_tab_title(self) -> str:
-            try:
-                tabbed = self.query_one(TabbedContent)
-                active_id = str(tabbed.active or "")
-            except Exception:
-                return controller.selection.active_tab
-            for tab_name in controller.workflow_state["tabs"]:
-                if _textual_safe_id(tab_name) == active_id:
-                    return tab_name
-            return controller.selection.active_tab
-
-        def _sync_active_tab(self) -> None:
-            controller.selection.active_tab = self._current_tab_title()
+        current_page = "Home"
 
         def compose(self) -> ComposeResult:
-            tab_specs, initial_tab_id = _build_tab_specs(list(controller.workflow_state["tabs"]))
-            yield Header()
-            with TabbedContent(initial=initial_tab_id):
-                for tab_spec in tab_specs:
-                    with TabPane(tab_spec["title"], id=tab_spec["id"]):
-                        with Vertical():
-                            yield Static(
-                                render_tab_text(tab_spec["title"], controller.workflow_state),
-                                id=_tab_body_id(tab_spec["title"]),
-                            )
-            yield Static(
-                _shortcuts_for_tab(controller.selection.active_tab, pending_confirmation=bool(controller.pending_action)),
-                id="shortcut-bar",
+            yield Header(show_clock=True)
+            with Horizontal(id="tui-root"):
+                with Vertical(id="nav-rail"):
+                    yield Static("Scholar Outbound Manager", id="nav-title")
+                    for page in controller.workflow_state["tabs"]:
+                        yield Button(page, id=f"nav-{_textual_safe_id(page)}")
+                with Vertical(id="main-column"):
+                    yield from self._build_home_page()
+                    yield from self._build_settings_page()
+                    yield from self._build_testing_page()
+                    yield from self._build_route_page()
+                    yield from self._build_logs_page()
+                with Vertical(id="inspector-column"):
+                    yield Static("Inspector", id="inspector-title")
+                    yield Static("", id="inspector-body")
+            yield Static("", id="shortcut-bar")
+            yield Footer()
+
+        def on_mount(self) -> None:
+            self._init_tables()
+            self._set_page("Home")
+            self._refresh_ui()
+
+        def _build_home_page(self):
+            with Vertical(id="page-home"):
+                yield Static("", id="home-summary")
+                with Horizontal(id="home-actions"):
+                    yield Button("Open Settings", id="home-open-settings")
+                    yield Button("Open Testing", id="home-open-testing")
+                    yield Button("Create Snapshot", id="home-snapshot")
+
+        def _build_settings_page(self):
+            with Vertical(id="page-settings"):
+                yield Static("Settings", classes="page-title")
+                yield Input("", id="settings-config-path", disabled=True)
+                yield Input("", id="settings-user-data-dir")
+                yield Input("", id="settings-subscription-url", password=True)
+                yield Input("", id="settings-user-agent")
+                yield Input("", id="settings-xray-path")
+                yield Input("", id="settings-service-name")
+                yield Switch(value=True, id="settings-fail-closed")
+                yield Switch(value=False, id="settings-hysteria2")
+                with Horizontal(id="settings-actions"):
+                    yield Button("Save", id="settings-save")
+                    yield Button("Undo", id="settings-undo")
+                    yield Button("Show Diff", id="settings-diff")
+                    yield Button("Test Fetch", id="settings-test-fetch")
+                yield Static("", id="settings-diff-panel")
+
+        def _build_testing_page(self):
+            with Vertical(id="page-testing"):
+                with Horizontal(id="testing-actions"):
+                    yield Button("Fetch Subscription", id="testing-fetch")
+                    yield Button("Test Nodes", id="testing-probe")
+                    yield Button("Retest Failed", id="testing-retest")
+                    yield Button("Stop", id="testing-stop", disabled=True)
+                yield Static("", id="testing-status")
+                yield DataTable(id="testing-table")
+                yield Static("", id="testing-detail")
+
+        def _build_route_page(self):
+            with Vertical(id="page-route"):
+                with Horizontal(id="route-actions"):
+                    yield Button("Choose Passed Node", id="route-select")
+                    yield Button("Apply", id="route-apply")
+                    yield Button("Start", id="route-start")
+                    yield Button("Stop", id="route-stop")
+                    yield Button("Restart", id="route-restart")
+                    yield Button("Validate", id="route-validate")
+                yield DataTable(id="route-table")
+                yield Input("", id="route-listen-host")
+                yield Input("", id="route-listen-port")
+                yield Switch(value=True, id="route-enabled")
+                yield Static("", id="route-boundary")
+
+        def _build_logs_page(self):
+            with Vertical(id="page-logs"):
+                with Horizontal(id="logs-actions"):
+                    yield Button("Artifact Check", id="logs-artifact-check")
+                    yield Button("Create Snapshot", id="logs-snapshot")
+                    yield Button("Rollback", id="logs-rollback")
+                yield DataTable(id="logs-action-table")
+                yield DataTable(id="logs-snapshot-table")
+                yield RichLog(id="logs-rich-log", wrap=True, markup=False)
+
+        def _init_tables(self) -> None:
+            testing_table = self.query_one("#testing-table", DataTable)
+            testing_table.add_columns(*build_testing_table_model(controller.workflow_state).columns)
+            route_table = self.query_one("#route-table", DataTable)
+            route_table.add_columns(*build_route_table_model(controller.workflow_state).columns)
+            action_table = self.query_one("#logs-action-table", DataTable)
+            action_table.add_columns("action", "status", "summary")
+            snapshot_table = self.query_one("#logs-snapshot-table", DataTable)
+            snapshot_table.add_columns("snapshot", "reason")
+
+        def _set_page(self, page: str) -> None:
+            self.current_page = page
+            controller.selection.active_tab = page
+            for candidate in controller.workflow_state["tabs"]:
+                page_widget = self.query_one(f"#page-{_textual_safe_id(candidate)}", Vertical)
+                page_widget.display = candidate == page
+                button = self.query_one(f"#nav-{_textual_safe_id(candidate)}", Button)
+                button.variant = "primary" if candidate == page else "default"
+            self.query_one("#shortcut-bar", Static).update(
+                _shortcuts_for_tab(page, pending_confirmation=bool(controller.pending_action))
             )
 
-        def _refresh_all_tabs(self) -> None:
-            _refresh_tab_bodies(
-                list(controller.workflow_state["tabs"]),
-                controller.workflow_state,
-                lambda body_id, text: self.query_one(f"#{body_id}", Static).update(text),
+        def _refresh_ui(self) -> None:
+            self.query_one("#home-summary", Static).update(render_tab_text("Home", controller.workflow_state))
+            self.query_one("#settings-diff-panel", Static).update(
+                controller.workflow_state.get("settings", {}).get("redacted_diff") or "No pending redacted diff."
             )
+            settings = build_settings_summary(controller.workflow_state)
+            self.query_one("#settings-config-path", Input).value = settings.config_path
+            self.query_one("#settings-user-data-dir", Input).value = settings.user_data_dir
+            self.query_one("#settings-subscription-url", Input).value = settings.subscription_url_masked
+            self.query_one("#settings-user-agent", Input).value = settings.subscription_user_agent
+            self.query_one("#settings-xray-path", Input).value = settings.xray_binary_path
+            self.query_one("#settings-service-name", Input).value = settings.service_name
+            self.query_one("#settings-fail-closed", Switch).value = settings.fail_closed
+            self.query_one("#settings-hysteria2", Switch).value = settings.experimental_hysteria2
+
+            testing = controller.workflow_state.get("testing", {})
+            self.query_one("#testing-status", Static).update(
+                f"Testing summary: passed {testing.get('passed_count')} / tested {testing.get('tested_count')}"
+            )
+            testing_table = self.query_one("#testing-table", DataTable)
+            testing_table.clear()
+            testing_model = build_testing_table_model(controller.workflow_state)
+            for row in testing_model.rows:
+                testing_table.add_row(*row)
+            selected_detail = controller.build_workbench_state().get("selected_candidate_detail")
+            self.query_one("#testing-detail", Static).update(
+                render_tab_text("Testing", controller.workflow_state) if not isinstance(selected_detail, dict) else str(build_route_detail(selected_detail) or "")
+            )
+
+            route_table = self.query_one("#route-table", DataTable)
+            route_table.clear()
+            route_model = build_route_table_model(controller.workflow_state)
+            for row in route_model.rows:
+                route_table.add_row(*row)
+            first_route = controller.workflow_state.get("route", {}).get("entries", [])
+            route_entry = first_route[0] if isinstance(first_route, list) and first_route else {}
+            self.query_one("#route-listen-host", Input).value = str(route_entry.get("listen_host") or "127.0.0.1")
+            self.query_one("#route-listen-port", Input).value = str(route_entry.get("listen_port") or "19080")
+            self.query_one("#route-enabled", Switch).value = bool(route_entry.get("enabled", True))
+            self.query_one("#route-boundary", Static).update(
+                controller.workflow_state.get("route", {}).get("production_boundary") or ""
+            )
+
+            logs = build_logs_summary(controller.workflow_state)
+            action_table = self.query_one("#logs-action-table", DataTable)
+            action_table.clear()
+            for row in logs.action_rows:
+                action_table.add_row(*row)
+            snapshot_table = self.query_one("#logs-snapshot-table", DataTable)
+            snapshot_table.clear()
+            for row in logs.snapshot_rows:
+                snapshot_table.add_row(*row)
+            rich_log = self.query_one("#logs-rich-log", RichLog)
+            rich_log.clear()
+            for line in logs.rollback_warning:
+                rich_log.write(line)
+
+            self._refresh_inspector()
             self.query_one("#shortcut-bar", Static).update(
-                _shortcuts_for_tab(self._current_tab_title(), pending_confirmation=bool(controller.pending_action))
+                _shortcuts_for_tab(self.current_page, pending_confirmation=bool(controller.pending_action))
             )
+
+        def _refresh_inspector(self) -> None:
+            if self.current_page == "Home":
+                body = [
+                    f"Next action: {controller.workflow_state.get('home', {}).get('next_recommended_action')}",
+                    f"Latest action: {controller.workflow_state.get('home', {}).get('latest_action_summary') or 'none'}",
+                ]
+            elif self.current_page == "Settings":
+                body = [
+                    "Config-centered editing surface.",
+                    "Subscription URL remains masked in the UI.",
+                    "Undo restores config.yaml only.",
+                ]
+            elif self.current_page == "Testing":
+                body = [
+                    "Fetch/Test are explicit live operations.",
+                    "Table rows remain redacted.",
+                    "No raw probe_summary paths are shown here.",
+                ]
+            elif self.current_page == "Route":
+                body = [
+                    "Only the managed sidecar is in scope.",
+                    "No production Xray/XrayR/x-ui mutation.",
+                    "Validate is explicit and review-safe.",
+                ]
+            else:
+                body = [
+                    "Rollback restores local artifacts only.",
+                    "It does not undo network effects.",
+                    "It does not restart sidecar.",
+                ]
+            self.query_one("#inspector-body", Static).update("\n".join(body))
 
         def _run_tui_action(self, description: str, func: Callable[[], str | None]) -> None:
-            self._sync_active_tab()
             message, succeeded = _run_safe_tui_action(controller, description, func)
-            self._refresh_all_tabs()
+            self._refresh_ui()
             if message:
                 self.notify(message)
             elif succeeded and controller.action_state.status_message:
                 self.notify(str(controller.action_state.status_message))
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            button_id = event.button.id or ""
+            if button_id.startswith("nav-"):
+                page = {
+                    "nav-home": "Home",
+                    "nav-settings": "Settings",
+                    "nav-testing": "Testing",
+                    "nav-route": "Route",
+                    "nav-logs": "Logs",
+                }.get(button_id, "Home")
+                self._set_page(page)
+                self._refresh_inspector()
+                return
+            button_actions: dict[str, Callable[[], None]] = {
+                "home-open-settings": self.action_open_settings,
+                "home-open-testing": self.action_open_testing,
+                "home-snapshot": self.action_create_snapshot,
+                "settings-save": self.action_save_draft,
+                "settings-undo": self.action_undo_save,
+                "settings-diff": self.action_show_config_diff,
+                "settings-test-fetch": self.action_run_fetch,
+                "testing-fetch": self.action_run_fetch,
+                "testing-probe": self.action_run_probe,
+                "testing-retest": self.action_run_probe,
+                "route-select": self.action_run_select,
+                "route-apply": self.action_run_stage_sidecar,
+                "route-start": self.action_route_start_placeholder,
+                "route-stop": self.action_route_stop_placeholder,
+                "route-restart": self.action_run_restart_sidecar,
+                "route-validate": self.action_run_validate_sidecar,
+                "logs-artifact-check": self.action_run_artifact_check,
+                "logs-snapshot": self.action_create_snapshot,
+                "logs-rollback": self.action_rollback_latest_snapshot,
+            }
+            action = button_actions.get(button_id)
+            if action is not None:
+                action()
+
+        def action_open_home(self) -> None:
+            self._set_page("Home")
+
+        def action_open_settings(self) -> None:
+            self._set_page("Settings")
+
+        def action_open_testing(self) -> None:
+            self._set_page("Testing")
+
+        def action_open_route(self) -> None:
+            self._set_page("Route")
+
+        def action_open_logs(self) -> None:
+            self._set_page("Logs")
 
         def action_reload_state(self) -> None:
             self._run_tui_action("Reload state", lambda: (controller.reload(), str(controller.action_state.status_message))[1])
@@ -1149,58 +1398,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         def action_undo_save(self) -> None:
             self._run_tui_action("Undo config save", controller.undo_config_save)
 
-        def action_edit_config_field(self) -> None:
-            def _describe_selected_field() -> str:
-                selected = controller.build_workbench_state().get("selected_config_field")
-                if not isinstance(selected, dict):
-                    return "No editable structured config fields are available."
-                return f"Structured config field: {selected['key']} current={selected['current_value']}"
-
-            self._run_tui_action("Inspect config field", _describe_selected_field)
-
         def action_show_config_diff(self) -> None:
-            def _show_contextual_details() -> str:
-                if controller.selection.active_tab == "Candidates":
-                    return str(build_route_detail(controller.build_workbench_state().get("selected_candidate_detail")) or "No route details are available.")
-                return (
+            self._run_tui_action(
+                "Show redacted config diff",
+                lambda: (
                     controller.workflow_state["config_form"]["redacted_diff"]
                     or controller.workflow_state["config_editor"]["redacted_diff"]
                     or "No pending redacted config diff is available."
-                )
-
-            self._run_tui_action("Show details", _show_contextual_details)
+                ),
+            )
 
         def action_cursor_down(self) -> None:
-            def _move_down() -> str:
-                if controller.selection.active_tab == "Settings":
-                    controller.move_config_field(1)
-                else:
-                    controller.move_candidate(1)
-                return "Selection moved down."
-
-            self._run_tui_action("Move selection", _move_down)
+            self._run_tui_action("Move selection", lambda: (controller.move_candidate(1), "Selection moved down.")[1])
 
         def action_cursor_up(self) -> None:
-            def _move_up() -> str:
-                if controller.selection.active_tab == "Settings":
-                    controller.move_config_field(-1)
-                else:
-                    controller.move_candidate(-1)
-                return "Selection moved up."
-
-            self._run_tui_action("Move selection", _move_up)
+            self._run_tui_action("Move selection", lambda: (controller.move_candidate(-1), "Selection moved up.")[1])
 
         def action_confirm_selected(self) -> None:
-            def _primary_action() -> str:
-                if controller.selection.active_tab == "Testing":
-                    return controller.handle_operation("choose_selected_candidate")
-                if controller.selection.active_tab == "Route":
-                    return controller.handle_operation("sidecar_stage")
-                if controller.selection.active_tab == "Logs":
-                    return controller.handle_operation("service_validate")
-                return str(controller.preview_selected_candidate())
-
-            self._run_tui_action("Primary action", _primary_action)
+            self._run_tui_action("Confirm selected action", lambda: controller.handle_operation("choose_selected_candidate"))
 
         def action_cancel_pending(self) -> None:
             self._run_tui_action("Cancel pending action", lambda: (controller.clear_pending_action(), "Pending action cleared.")[1])
@@ -1220,8 +1435,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         def action_run_stage_sidecar(self) -> None:
             self._run_tui_action("Stage sidecar", lambda: controller.handle_operation("sidecar_stage"))
 
+        def action_run_restart_sidecar(self) -> None:
+            self._run_tui_action("Restart sidecar", lambda: controller.handle_operation("service_restart"))
+
         def action_run_validate_sidecar(self) -> None:
             self._run_tui_action("Validate sidecar", lambda: controller.handle_operation("service_validate"))
+
+        def action_route_start_placeholder(self) -> None:
+            self._run_tui_action(
+                "Start sidecar",
+                lambda: "Managed start remains explicit and out of scope in this phase; restart/validate are the safe wired actions.",
+            )
+
+        def action_route_stop_placeholder(self) -> None:
+            self._run_tui_action(
+                "Stop sidecar",
+                lambda: "Managed stop remains explicit and out of scope in this phase; no external Xray process is touched.",
+            )
 
         def action_create_snapshot(self) -> None:
             self._run_tui_action("Create snapshot", controller.create_snapshot_message)
@@ -1230,10 +1460,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             self._run_tui_action("Rollback latest snapshot", controller.rollback_latest_snapshot)
 
         def action_show_help(self) -> None:
-            self._run_tui_action(
-                "Show help",
-                lambda: _shortcuts_for_tab(controller.selection.active_tab, pending_confirmation=bool(controller.pending_action)),
-            )
+            self._run_tui_action("Show help", lambda: _shortcuts_for_tab(self.current_page, pending_confirmation=bool(controller.pending_action)))
 
     ScholarOutboundWorkflowApp().run()
     return 0

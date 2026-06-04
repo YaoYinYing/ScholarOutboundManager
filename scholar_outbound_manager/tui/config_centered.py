@@ -39,6 +39,7 @@ class ConfigCenteredSummary:
     config_path: str
     user_data_dir: str
     subscription_url_configured: bool
+    subscription_url_masked: str
     subscription_user_agent: str
     xray_binary_path: str
     route_entries: list[dict[str, object]]
@@ -180,15 +181,20 @@ def summarize_config_centered_state(config_path: str | Path) -> ConfigCenteredSu
     subscription = raw.get("subscription")
     subscriptions = raw.get("subscriptions")
     subscription_url_configured = False
+    subscription_url_masked = "Not configured"
     subscription_user_agent = DEFAULT_USER_AGENT
     if isinstance(subscription, dict):
         subscription_url_configured = isinstance(subscription.get("url"), str) and bool(str(subscription.get("url")).strip())
+        if subscription_url_configured:
+            subscription_url_masked = "******** configured"
         if isinstance(subscription.get("user_agent"), str) and str(subscription.get("user_agent")).strip():
             subscription_user_agent = str(subscription.get("user_agent"))
     if not subscription_url_configured and isinstance(subscriptions, list) and subscriptions:
         first = subscriptions[0]
         if isinstance(first, dict):
             subscription_url_configured = isinstance(first.get("url"), str) and bool(str(first.get("url")).strip())
+            if subscription_url_configured:
+                subscription_url_masked = "******** configured"
             headers = first.get("headers")
             if isinstance(headers, dict) and isinstance(headers.get("User-Agent"), str) and str(headers.get("User-Agent")).strip():
                 subscription_user_agent = str(headers["User-Agent"])
@@ -223,6 +229,7 @@ def summarize_config_centered_state(config_path: str | Path) -> ConfigCenteredSu
         config_path=str(Path(config_path)),
         user_data_dir=str(paths.root),
         subscription_url_configured=subscription_url_configured,
+        subscription_url_masked=subscription_url_masked,
         subscription_user_agent=subscription_user_agent,
         xray_binary_path=xray_binary_path,
         route_entries=route_entries,
@@ -259,6 +266,8 @@ def _extract_route_entries(raw: dict[str, Any]) -> list[dict[str, object]]:
         if isinstance(xray.get("local_socks_host"), str) and str(xray.get("local_socks_host")).strip():
             listen_host = str(xray["local_socks_host"])
         listen_port = _coerce_int(xray.get("local_socks_port"), default=19080)
+        if listen_port <= 0:
+            listen_port = 19080
     return [
         {
             "name": "Scholar",
