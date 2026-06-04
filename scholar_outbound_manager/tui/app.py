@@ -30,6 +30,13 @@ from scholar_outbound_manager.tui.controller import WorkbenchMessage
 from scholar_outbound_manager.tui.controller import WorkbenchController as BaseWorkbenchController
 from scholar_outbound_manager.tui.controller import PendingAction
 from scholar_outbound_manager.tui.path_resolver import resolve_user_data_paths
+from scholar_outbound_manager.tui.route_model import add_route_entry
+from scholar_outbound_manager.tui.route_model import build_route_workbench_state
+from scholar_outbound_manager.tui.route_model import check_selected_route_port
+from scholar_outbound_manager.tui.route_model import delete_route_entry
+from scholar_outbound_manager.tui.route_model import route_workbench_state_to_dict
+from scholar_outbound_manager.tui.route_model import save_route_entries_to_config_or_selected_routes
+from scholar_outbound_manager.tui.route_model import update_route_entry_candidate
 from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
 from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import write_session_state
@@ -561,6 +568,7 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
     resolved_paths = resolve_user_data_paths(config_path)
     config_summary = summarize_config_centered_state(config_path)
     testing_screen = build_testing_screen_state(config_path=config_path, user_data_paths=resolved_paths)
+    route_workbench = build_route_workbench_state(config_path=config_path, user_data_paths=resolved_paths)
     testing_summary = testing_screen.summary
     wizard = build_first_run_wizard_state(config_path)
     route_count = len(config_summary.route_entries)
@@ -620,16 +628,11 @@ def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> di
         },
         "testing": testing_screen_state_to_dict(testing_screen),
         "route": {
-            "entries": config_summary.route_entries,
+            **route_workbench_state_to_dict(route_workbench),
+            "service_name": config_summary.service_name,
             "selected_candidate_label": payload["selection_state"]["selected_candidate_label"],
             "selected_candidate_id": payload["selection_state"]["selected_candidate_id"],
-            "listen_host": config_summary.route_entries[0].get("listen_host") if config_summary.route_entries else "127.0.0.1",
-            "listen_port": config_summary.route_entries[0].get("listen_port") if config_summary.route_entries else 19080,
-            "route_enabled": config_summary.route_entries[0].get("enabled", True) if config_summary.route_entries else True,
-            "service_name": config_summary.service_name,
-            "candidate_select_ready": False,
-            "production_boundary": "Only manages the ScholarOutboundManager sidecar. It does not modify production Xray/XrayR/x-ui.",
-            "actions": ["Add Route", "Remove Route", "Apply", "Start", "Stop", "Restart", "Validate"],
+            "actions": ["Add Route", "Delete Route", "Choose Passed Node", "Test Port", "Apply", "Start", "Stop", "Restart", "Validate"],
         },
         "logs_screen": {
             "last_action": latest_action,
@@ -887,6 +890,8 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
             f"  Tested: {summary.get('attempted_count') or 0} / {summary.get('supported_count') or 0}",
             f"  Passed: {summary.get('passed_count') or 0}",
             f"  Failed: {summary.get('failed_count') or 0}",
+            f"  Last exit code: {testing.get('last_exit_code') if testing.get('last_exit_code') is not None else '-'}",
+            f"  Artifacts stale: {'yes' if testing.get('artifacts_stale') else 'no'}",
             "",
             "Candidate table",
             "  " + " | ".join(table.columns),
@@ -914,6 +919,9 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
         warning = inspector.get("artifact_warning")
         if isinstance(warning, str) and warning:
             lines.extend(["", warning])
+        failure_reason = testing.get("last_failure_reason")
+        if isinstance(failure_reason, str) and failure_reason:
+            lines.extend(["", f"Last failure: {failure_reason}"])
         if log_lines:
             lines.extend(["", "Recent events"])
             for line in log_lines[:4]:
@@ -936,16 +944,23 @@ def render_tab_text(tab: str, workflow_state: dict[str, object]) -> str:
             [
                 "",
                 "Editor",
-                f"  Candidate: {route.get('selected_candidate_label') or 'none'}",
-                f"  Listen host: {route.get('listen_host') or '127.0.0.1'}",
-                f"  Listen port: {route.get('listen_port') or '19080'}",
-                f"  Enabled: {'yes' if route.get('route_enabled', True) else 'no'}",
+                f"  Candidate: {route.get('entries', [{}])[route.get('selected_index', 0)].get('candidate_label') if route.get('entries') else 'none'}",
+                f"  Listen host: {route.get('entries', [{}])[route.get('selected_index', 0)].get('listen_host') if route.get('entries') else '127.0.0.1'}",
+                f"  Listen port: {route.get('entries', [{}])[route.get('selected_index', 0)].get('listen_port') if route.get('entries') else '19080'}",
+                f"  Enabled: {'yes' if (route.get('entries', [{}])[route.get('selected_index', 0)].get('enabled', True) if route.get('entries') else True) else 'no'}",
                 f"  Managed service: {route.get('service_name')}",
                 "  Actions: [Choose Passed Node] [Test Port] [Apply] [Start] [Stop] [Restart] [Validate]",
-                "  Candidate selector not implemented yet." if not route.get("candidate_select_ready", False) else "  Candidate selector is ready.",
+                f"  Apply available: {'yes' if route.get('can_apply') else 'no'}",
                 f"  Boundary: {route.get('production_boundary')}",
             ]
         )
+        if route.get("stale_warning"):
+            lines.extend(["", f"  {route.get('stale_warning')}"])
+        validation_errors = route.get("validation_errors")
+        if isinstance(validation_errors, list) and validation_errors:
+            lines.extend(["", "Validation errors"])
+            for error in validation_errors:
+                lines.append(f"  {error}")
         return "\n".join(lines)
     if tab == "Logs":
         logs = build_logs_summary(workflow_state)
@@ -1216,6 +1231,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         from textual.widgets import Input
         from textual.widgets import ProgressBar
         from textual.widgets import RichLog
+        from textual.widgets import Select
         from textual.widgets import Static
         from textual.widgets import Switch
     except ModuleNotFoundError as exc:
@@ -1262,6 +1278,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         BINDINGS = list(TUI_KEY_BINDINGS)
         current_page = "Home"
         testing_selected_index: int | None = None
+        route_selected_index: int = 0
+        route_port_results: dict[str, object] = {}
+        route_form_syncing = False
         pending_action_handler: Callable[[], str] | None = None
 
         def compose(self) -> ComposeResult:
@@ -1351,6 +1370,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         def _build_route_page(self):
             with Vertical(id="page-route"):
                 with Horizontal(id="route-actions"):
+                    yield Button("Add Route", id="route-add")
+                    yield Button("Delete Route", id="route-delete")
                     yield Button("Choose Passed Node", id="route-select")
                     yield Button("Test Port", id="route-test-port")
                     yield Button("Apply", id="route-apply")
@@ -1359,14 +1380,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     yield Button("Restart", id="route-restart")
                     yield Button("Validate", id="route-validate")
                 yield DataTable(id="route-table")
+                yield Static("Route name", classes="field-label")
+                yield Input("", id="route-name")
                 yield Static("Candidate", classes="field-label")
-                yield Static("Candidate selector not implemented yet.", id="route-candidate-note")
+                yield Select([], prompt="Choose passed node", id="route-candidate-select")
                 yield Static("Listen host", classes="field-label")
                 yield Input("", id="route-listen-host")
                 yield Static("Listen port", classes="field-label")
                 yield Input("", id="route-listen-port")
                 yield Static("Enabled", classes="field-label")
                 yield Switch(value=True, id="route-enabled")
+                yield Static("", id="route-port-result")
+                yield Static("", id="route-validation-errors")
                 yield Static("", id="route-boundary")
 
         def _build_logs_page(self):
@@ -1444,16 +1469,46 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.query_one("#testing-retest", Button).disabled = not testing_state.actions.get("retest_failed", False)
             self.query_one("#testing-stop", Button).disabled = not testing_state.actions.get("stop", False)
 
+            route_state = self._load_route_state()
+            controller.workflow_state["route"] = route_workbench_state_to_dict(route_state) | {
+                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
+                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
+                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
+                "actions": ["Add Route", "Delete Route", "Choose Passed Node", "Test Port", "Apply", "Start", "Stop", "Restart", "Validate"],
+            }
             route_table = self.query_one("#route-table", DataTable)
             route_table.clear()
             route_model = build_route_table_model(controller.workflow_state)
             for row in route_model.rows:
                 route_table.add_row(*row)
-            first_route = controller.workflow_state.get("route", {}).get("entries", [])
-            route_entry = first_route[0] if isinstance(first_route, list) and first_route else {}
+            route_entries = controller.workflow_state.get("route", {}).get("entries", [])
+            route_entry = route_entries[self.route_selected_index] if isinstance(route_entries, list) and route_entries else {}
+            self.route_form_syncing = True
+            self.query_one("#route-name", Input).value = str(route_entry.get("name") or "Scholar")
             self.query_one("#route-listen-host", Input).value = str(route_entry.get("listen_host") or "127.0.0.1")
             self.query_one("#route-listen-port", Input).value = str(route_entry.get("listen_port") or "19080")
             self.query_one("#route-enabled", Switch).value = bool(route_entry.get("enabled", True))
+            route_select = self.query_one("#route-candidate-select", Select)
+            options = [
+                (f"{option['label']} · {option['region_hint'] or '-'} · {option['protocol']} · {option['stage']}", str(option["candidate_id"]))
+                for option in controller.workflow_state.get("route", {}).get("passed_candidates", [])
+                if isinstance(option, dict)
+            ]
+            route_select.set_options(options)
+            route_select.value = str(route_entry.get("candidate_id") or Select.BLANK)
+            route_select.disabled = not bool(controller.workflow_state.get("route", {}).get("candidate_selector_enabled"))
+            self.route_form_syncing = False
+            self.query_one("#route-select", Button).disabled = route_select.disabled
+            self.query_one("#route-apply", Button).disabled = not bool(controller.workflow_state.get("route", {}).get("can_apply"))
+            port_result = controller.workflow_state.get("route", {}).get("current_port_result")
+            self.query_one("#route-port-result", Static).update(
+                "" if not isinstance(port_result, dict) else f"Port check: {port_result.get('status')} - {port_result.get('message')}"
+            )
+            validation_errors = controller.workflow_state.get("route", {}).get("validation_errors")
+            if isinstance(validation_errors, list) and validation_errors:
+                self.query_one("#route-validation-errors", Static).update("\n".join(str(error) for error in validation_errors))
+            else:
+                self.query_one("#route-validation-errors", Static).update("No route validation errors.")
             self.query_one("#route-boundary", Static).update(
                 controller.workflow_state.get("route", {}).get("production_boundary") or ""
             )
@@ -1508,10 +1563,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "Recent events remain redacted.",
                 ]
             elif self.current_page == "Route":
+                validation_errors = controller.workflow_state.get("route", {}).get("validation_errors") or []
                 body = [
                     "Only the managed sidecar is in scope.",
                     "No production Xray/XrayR/x-ui mutation.",
                     "Validate is explicit and review-safe.",
+                    f"Apply available: {'yes' if controller.workflow_state.get('route', {}).get('can_apply') else 'no'}",
+                    f"Validation errors: {len(validation_errors)}",
                 ]
             else:
                 body = [
@@ -1554,8 +1612,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "testing-probe": self.action_run_probe,
                 "testing-retest": self.action_run_retest_failed,
                 "testing-stop": self.action_stop_testing_job,
+                "route-add": self.action_route_add,
+                "route-delete": self.action_route_delete,
                 "route-select": self.action_run_select,
-                "route-test-port": self.action_route_test_port_placeholder,
+                "route-test-port": self.action_route_test_port,
                 "route-apply": self.action_run_stage_sidecar,
                 "route-start": self.action_route_start_placeholder,
                 "route-stop": self.action_route_stop_placeholder,
@@ -1570,6 +1630,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             action = button_actions.get(button_id)
             if action is not None:
                 action()
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if self.current_page != "Route" or self.route_form_syncing:
+                return
+            if event.input.id == "route-name":
+                self._update_route_field("name", event.value)
+            elif event.input.id == "route-listen-host":
+                self._update_route_field("listen_host", event.value)
+            elif event.input.id == "route-listen-port":
+                try:
+                    self._update_route_field("listen_port", int(event.value))
+                except ValueError:
+                    self._update_route_field("listen_port", 0)
+            self._refresh_ui()
+
+        def on_switch_changed(self, event: Switch.Changed) -> None:
+            if self.current_page != "Route" or self.route_form_syncing:
+                return
+            if event.switch.id == "route-enabled":
+                self._update_route_field("enabled", bool(event.value))
+                self._refresh_ui()
+
+        def on_select_changed(self, event) -> None:
+            if self.current_page != "Route" or self.route_form_syncing:
+                return
+            if getattr(event.select, "id", "") != "route-candidate-select":
+                return
+            value = event.value
+            if not isinstance(value, str) or not value:
+                return
+            self._run_tui_action("Choose passed node", lambda: self._choose_route_candidate_id(value))
 
         def action_open_home(self) -> None:
             self._set_page("Home")
@@ -1609,11 +1700,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             if self.current_page == "Testing":
                 self._run_tui_action("Move selection", lambda: self._move_testing_selection(1))
                 return
+            if self.current_page == "Route":
+                self._run_tui_action("Move route selection", lambda: self._move_route_selection(1))
+                return
             self._run_tui_action("Move selection", lambda: (controller.move_candidate(1), "Selection moved down.")[1])
 
         def action_cursor_up(self) -> None:
             if self.current_page == "Testing":
                 self._run_tui_action("Move selection", lambda: self._move_testing_selection(-1))
+                return
+            if self.current_page == "Route":
+                self._run_tui_action("Move route selection", lambda: self._move_route_selection(-1))
                 return
             self._run_tui_action("Move selection", lambda: (controller.move_candidate(-1), "Selection moved up.")[1])
 
@@ -1654,10 +1751,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             self._run_tui_action("Run artifact check", lambda: controller.handle_operation("artifact_check"))
 
         def action_run_select(self) -> None:
-            self._run_tui_action("Choose selected candidate", lambda: controller.handle_operation("choose_selected_candidate"))
+            self._run_tui_action("Choose passed node", self._choose_selected_route_candidate)
 
         def action_run_stage_sidecar(self) -> None:
-            self._run_tui_action("Stage sidecar", lambda: self._request_confirmation("sidecar_stage"))
+            self._run_tui_action(
+                "Apply route workbench",
+                lambda: self._request_confirmation("sidecar_stage", handler=self._apply_route_draft),
+            )
 
         def action_run_restart_sidecar(self) -> None:
             self._run_tui_action("Restart sidecar", lambda: self._request_confirmation("service_restart"))
@@ -1689,11 +1789,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
 
-        def action_route_test_port_placeholder(self) -> None:
-            self._run_tui_action(
-                "Test route port",
-                lambda: "Port occupancy testing is not implemented yet.",
-            )
+        def action_route_add(self) -> None:
+            self._run_tui_action("Add route", self._add_route_entry)
+
+        def action_route_delete(self) -> None:
+            self._run_tui_action("Delete route", self._delete_route_entry)
+
+        def action_route_test_port(self) -> None:
+            self._run_tui_action("Test route port", self._test_selected_route_port)
 
         def action_create_snapshot(self) -> None:
             self._run_tui_action("Create snapshot", controller.create_snapshot_message)
@@ -1722,6 +1825,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.testing_selected_index = state.selected_index
             return state
 
+        def _load_route_state(self):
+            current_route = controller.workflow_state.get("route", {})
+            state = build_route_workbench_state(
+                config_path=controller._paths()["config"],
+                user_data_paths=resolve_user_data_paths(controller._paths()["config"]),
+                selected_index=self.route_selected_index,
+                port_results=self.route_port_results,
+                route_entries=current_route.get("entries") if isinstance(current_route.get("entries"), list) else None,
+            )
+            self.route_selected_index = state.selected_index
+            return state
+
         def _move_testing_selection(self, delta: int) -> str:
             state = self._load_testing_state()
             if not state.rows:
@@ -1729,6 +1844,139 @@ def main(argv: Sequence[str] | None = None) -> int:
             current = 0 if self.testing_selected_index is None else self.testing_selected_index
             self.testing_selected_index = max(0, min(len(state.rows) - 1, current + delta))
             return "Selection moved down." if delta > 0 else "Selection moved up."
+
+        def _move_route_selection(self, delta: int) -> str:
+            state = self._load_route_state()
+            if not state.entries:
+                return "No route entries are available yet."
+            current = self.route_selected_index
+            self.route_selected_index = max(0, min(len(state.entries) - 1, current + delta))
+            return "Route selection moved down." if delta > 0 else "Route selection moved up."
+
+        def _update_route_field(self, field: str, value: object) -> str:
+            route_state = self._load_route_state()
+            entries = [
+                {
+                    "route_id": entry.route_id,
+                    "name": entry.name,
+                    "enabled": entry.enabled,
+                    "candidate_id": entry.candidate_id,
+                    "candidate_label": entry.candidate_label,
+                    "region_hint": entry.region_hint,
+                    "protocol": entry.protocol,
+                    "listen_host": entry.listen_host,
+                    "listen_port": entry.listen_port,
+                    "port_status": entry.port_status,
+                    "validation_status": entry.validation_status,
+                    "error": entry.error,
+                }
+                for entry in route_state.entries
+            ]
+            if not entries:
+                return "No route entry is available."
+            entry = entries[self.route_selected_index]
+            entry[field] = value
+            rebuilt = build_route_workbench_state(
+                config_path=controller._paths()["config"],
+                user_data_paths=resolve_user_data_paths(controller._paths()["config"]),
+                selected_index=self.route_selected_index,
+                port_results=self.route_port_results,
+                route_entries=entries,
+            )
+            controller.workflow_state["route"] = route_workbench_state_to_dict(rebuilt) | {
+                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
+                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
+                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
+                "actions": controller.workflow_state.get("route", {}).get("actions", []),
+            }
+            return f"Updated {field}."
+
+        def _choose_selected_route_candidate(self) -> str:
+            route_state = self._load_route_state()
+            select_widget = self.query_one("#route-candidate-select", Select)
+            value = select_widget.value
+            if not isinstance(value, str) or not value:
+                return "Choose a passed candidate first."
+            updated = update_route_entry_candidate(route_state, entry_index=self.route_selected_index, candidate_id=value)
+            controller.workflow_state["route"] = route_workbench_state_to_dict(updated) | {
+                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
+                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
+                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
+                "actions": controller.workflow_state.get("route", {}).get("actions", []),
+            }
+            return f"Updated route candidate to {value}."
+
+        def _choose_route_candidate_id(self, value: str) -> str:
+            route_state = self._load_route_state()
+            updated = update_route_entry_candidate(route_state, entry_index=self.route_selected_index, candidate_id=value)
+            controller.workflow_state["route"] = route_workbench_state_to_dict(updated) | {
+                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
+                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
+                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
+                "actions": controller.workflow_state.get("route", {}).get("actions", []),
+            }
+            return f"Updated route candidate to {value}."
+
+        def _add_route_entry(self) -> str:
+            state = self._load_route_state()
+            updated = add_route_entry(state)
+            controller.workflow_state["route"] = route_workbench_state_to_dict(updated) | {
+                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
+                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
+                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
+                "actions": controller.workflow_state.get("route", {}).get("actions", []),
+            }
+            self.route_selected_index = updated.selected_index
+            return "Added route draft."
+
+        def _delete_route_entry(self) -> str:
+            state = self._load_route_state()
+            updated, warning = delete_route_entry(state)
+            if warning is not None:
+                return warning
+            controller.workflow_state["route"] = route_workbench_state_to_dict(updated) | {
+                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
+                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
+                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
+                "actions": controller.workflow_state.get("route", {}).get("actions", []),
+            }
+            self.route_selected_index = updated.selected_index
+            return "Deleted selected route draft."
+
+        def _test_selected_route_port(self) -> str:
+            state = self._load_route_state()
+            updated = check_selected_route_port(
+                state,
+                managed_service_name=str(controller.workflow_state.get("settings", {}).get("service_name") or ""),
+            )
+            self.route_port_results = {
+                entry.route_id: result
+                for entry, result in ((updated.entries[updated.selected_index], updated.current_port_result),)
+                if result is not None
+            } | {key: value for key, value in self.route_port_results.items() if key != updated.entries[updated.selected_index].route_id}
+            controller.workflow_state["route"] = route_workbench_state_to_dict(updated) | {
+                "service_name": controller.workflow_state.get("settings", {}).get("service_name"),
+                "selected_candidate_label": controller.workflow_state.get("selection", {}).get("selected_candidate_label"),
+                "selected_candidate_id": controller.workflow_state.get("selection", {}).get("selected_candidate_id"),
+                "actions": controller.workflow_state.get("route", {}).get("actions", []),
+            }
+            if updated.current_port_result is None:
+                return "Port check did not return a result."
+            return updated.current_port_result.message
+
+        def _apply_route_draft(self) -> str:
+            state = self._load_route_state()
+            if state.validation_errors:
+                return state.validation_errors[0]
+            paths = resolve_user_data_paths(controller._paths()["config"])
+            message = save_route_entries_to_config_or_selected_routes(
+                controller._paths()["config"],
+                user_data_paths=paths,
+                entries=state.entries,
+            )
+            controller.reload()
+            self.route_port_results = {}
+            return message
 
         def _request_confirmation(self, action_key: str, handler: Callable[[], str] | None = None) -> str:
             policy = get_action_policy(action_key)

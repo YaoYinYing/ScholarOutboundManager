@@ -185,11 +185,7 @@ def load_last_action(
         "title": last_payload.get("title"),
         "exit_code": last_payload.get("exit_code"),
         "succeeded": last_payload.get("succeeded"),
-        "summary": str(last_payload.get("summary") or _summarize(
-            title=str(last_payload.get("title") or ""),
-            exit_code=last_payload.get("exit_code"),
-            success=bool(last_payload.get("succeeded") is True),
-        )),
+        "summary": str(last_payload.get("summary") or _legacy_summary_from_payload(last_payload)),
         "redacted_stdout_tail": _tail(str(last_payload.get("redacted_stdout") or "")),
         "redacted_stderr_tail": _tail(str(last_payload.get("redacted_stderr") or "")),
         "warnings": list(last_payload.get("warnings") or []),
@@ -235,7 +231,7 @@ def _build_result(
         stderr=stderr,
         redacted_stdout=redacted_stdout,
         redacted_stderr=redacted_stderr,
-        summary=_summarize(title=spec.title, exit_code=exit_code, success=succeeded),
+        summary=_summarize(spec, exit_code=exit_code, success=succeeded),
         expected_artifacts=list(spec.expected_artifacts),
         warnings=list(warnings),
         snapshot_id=snapshot_id,
@@ -279,10 +275,33 @@ def _maybe_snapshot(spec: OperationSpec, options: ActionRunOptions) -> str | Non
     return snapshot.snapshot_id
 
 
-def _summarize(*, title: str, exit_code: object, success: bool) -> str:
+def _summarize(spec: OperationSpec, *, exit_code: object, success: bool) -> str:
     if success:
-        return f"{title} completed successfully."
-    return f"{title} failed with exit code {exit_code}."
+        return f"{spec.title} completed successfully."
+    if exit_code == TIMEOUT_EXIT_CODE:
+        if spec.key == "probe":
+            return "Probe timed out or was interrupted. Artifacts may be stale. Run Test Nodes again or increase testing timeout."
+        if spec.key == "fetch":
+            return "Fetch timed out or was interrupted. Run Fetch Subscription again."
+        return f"{spec.title} timed out or was interrupted."
+    return f"{spec.title} failed with exit code {exit_code}."
+
+
+def _legacy_summary_from_payload(payload: dict[str, object]) -> str:
+    title = str(payload.get("title") or payload.get("operation_key") or "Action")
+    exit_code = payload.get("exit_code")
+    success = bool(payload.get("succeeded") is True)
+    spec = OperationSpec(
+        key=str(payload.get("operation_key") or "legacy"),
+        title=title,
+        command=["internal", "legacy_action"],
+        requires_confirmation=False,
+        network_access=False,
+        systemd_access=False,
+        sensitive_outputs=False,
+        expected_artifacts=[],
+    )
+    return _summarize(spec, exit_code=exit_code, success=success)
 
 
 def _tail(text: str, limit: int = 400) -> str:

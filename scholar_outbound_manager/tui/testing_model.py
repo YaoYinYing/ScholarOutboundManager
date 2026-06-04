@@ -83,6 +83,9 @@ class TestingScreenState:
     progress_total: int
     log_lines: list[str]
     actions: dict[str, bool]
+    last_exit_code: int | None
+    last_failure_reason: str | None
+    artifacts_stale: bool
 
 
 def build_testing_screen_state(
@@ -147,6 +150,9 @@ def build_testing_screen_state(
             "retest_failed": summary.failed_count > 0,
             "stop": job.can_cancel,
         },
+        last_exit_code=_load_last_testing_exit_code(user_data_paths),
+        last_failure_reason=_load_last_testing_failure_reason(user_data_paths),
+        artifacts_stale=artifact_warning is not None,
     )
 
 
@@ -319,6 +325,9 @@ def testing_screen_state_to_dict(state: TestingScreenState) -> dict[str, object]
         "progress_total": state.progress_total,
         "log_lines": list(state.log_lines),
         "actions": dict(state.actions),
+        "last_exit_code": state.last_exit_code,
+        "last_failure_reason": state.last_failure_reason,
+        "artifacts_stale": state.artifacts_stale,
     }
 
 
@@ -395,8 +404,33 @@ def _build_log_lines(user_data_paths: UserDataPaths, *, fallback_message: str) -
     return lines or [fallback_message]
 
 
+def _load_last_testing_exit_code(user_data_paths: UserDataPaths) -> int | None:
+    for payload in _iter_journal_rows(user_data_paths.action_journal):
+        if str(payload.get("operation_key") or "") not in {"fetch", "probe"}:
+            continue
+        exit_code = payload.get("exit_code")
+        if isinstance(exit_code, int):
+            return exit_code
+    return None
+
+
+def _load_last_testing_failure_reason(user_data_paths: UserDataPaths) -> str | None:
+    for payload in _iter_journal_rows(user_data_paths.action_journal):
+        if str(payload.get("operation_key") or "") not in {"fetch", "probe"}:
+            continue
+        if payload.get("succeeded") is True:
+            return None
+        summary = payload.get("summary")
+        if isinstance(summary, str) and summary:
+            return summary
+        break
+    return None
+
+
 def _iter_journal_rows(path: Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
+    if not path.exists():
+        return rows
     for line in reversed(path.read_text(encoding="utf-8").splitlines()):
         if not line.strip():
             continue

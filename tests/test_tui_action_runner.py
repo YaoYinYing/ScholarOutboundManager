@@ -96,6 +96,25 @@ def test_subprocess_action_runner_timeout_returns_failed_result() -> None:
 
     assert result.succeeded is False
     assert result.exit_code == 124
+    assert "timed out or was interrupted" in result.summary
+
+
+def test_probe_timeout_uses_readable_summary() -> None:
+    spec = OperationSpec(
+        key="probe",
+        title="Probe Candidates",
+        command=[sys.executable, "-c", "import time; time.sleep(1)"],
+        requires_confirmation=False,
+        network_access=False,
+        systemd_access=False,
+        sensitive_outputs=False,
+        expected_artifacts=[],
+    )
+
+    result = SubprocessActionRunner().run(spec, ActionRunOptions(timeout_seconds=0.01))
+
+    assert result.exit_code == 124
+    assert result.summary == "Probe timed out or was interrupted. Artifacts may be stale. Run Test Nodes again or increase testing timeout."
 
 
 def test_subprocess_action_runner_redacts_stdout_and_stderr() -> None:

@@ -412,7 +412,7 @@ class WorkbenchController:
         paths = self._paths()
         return ActionRunOptions(
             cwd=None,
-            timeout_seconds=30.0,
+            timeout_seconds=spec.timeout_seconds,
             allow_network=spec.network_access,
             allow_systemd=spec.systemd_access,
             allow_sensitive_artifact_write=spec.sensitive_outputs,

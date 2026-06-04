@@ -23,7 +23,7 @@ def test_route_table_model_exposes_operator_fields() -> None:
         }
     )
 
-    assert model.columns == ["enabled", "name", "candidate", "host", "port", "port status", "validation"]
+    assert model.columns == ["enabled", "name", "candidate", "region", "protocol", "host", "port", "port status", "validation"]
     assert model.rows[0][2] == "US relay"
     assert "production Xray" not in str(model.rows)
 
@@ -44,10 +44,10 @@ def test_route_render_shows_editor_labels_and_boundary() -> None:
                 "selected_candidate_label": "US relay",
                 "service_name": "scholar-outbound-sidecar.service",
                 "production_boundary": "Only manages the ScholarOutboundManager sidecar. It does not modify production Xray/XrayR/x-ui.",
-                "candidate_select_ready": False,
-                "listen_host": "127.0.0.1",
-                "listen_port": 19080,
-                "route_enabled": True,
+                "candidate_selector_enabled": True,
+                "selected_index": 0,
+                "can_apply": True,
+                "validation_errors": [],
             }
         },
     )
@@ -56,5 +56,5 @@ def test_route_render_shows_editor_labels_and_boundary() -> None:
     assert "Listen port:" in rendered
     assert "Enabled:" in rendered
     assert "Choose Passed Node" in rendered
-    assert "Candidate selector not implemented yet." in rendered
+    assert "Candidate selector not implemented yet." not in rendered
     assert "does not modify production Xray/XrayR/x-ui" in rendered

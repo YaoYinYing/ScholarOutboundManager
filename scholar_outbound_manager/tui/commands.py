@@ -65,6 +65,7 @@ class OperationSpec:
     sensitive_outputs: bool
     expected_artifacts: list[str]
     success_exit_codes: tuple[int, ...] = (0,)
+    timeout_seconds: float | None = None
     description: str = ""
     risk_note: str | None = None
 
@@ -299,6 +300,26 @@ def build_service_restart_command(*, unit_name: str = "scholar-outbound-sidecar.
         "scholar-outbound-manager",
         "sidecar",
         "service-restart",
+        "--unit-name",
+        unit_name,
+    ]
+
+
+def build_service_start_command(*, unit_name: str = "scholar-outbound-sidecar.service") -> list[str]:
+    return [
+        "scholar-outbound-manager",
+        "sidecar",
+        "service-start",
+        "--unit-name",
+        unit_name,
+    ]
+
+
+def build_service_stop_command(*, unit_name: str = "scholar-outbound-sidecar.service") -> list[str]:
+    return [
+        "scholar-outbound-manager",
+        "sidecar",
+        "service-stop",
         "--unit-name",
         unit_name,
     ]

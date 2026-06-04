@@ -12,6 +12,7 @@ def test_routine_and_passive_actions_do_not_require_confirmation() -> None:
     assert get_action_policy("retest_failed").requires_confirmation is False
     assert get_action_policy("artifact_check").requires_confirmation is False
     assert get_action_policy("service_validate").requires_confirmation is False
+    assert get_action_policy("route_test_port").requires_confirmation is False
 
 
 def test_destructive_actions_require_confirmation() -> None:

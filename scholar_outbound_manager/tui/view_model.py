@@ -449,15 +449,17 @@ def build_route_table_model(workflow_state: dict[str, object]) -> TableModel:
             [
                 "ON" if entry.get("enabled") else "OFF",
                 str(entry.get("name") or "Route"),
-                truncate_display_value(str(route.get("selected_candidate_label") or "Unassigned"), limit=24),
+                truncate_display_value(str(entry.get("candidate_label") or route.get("selected_candidate_label") or "Unassigned"), limit=24),
+                str(entry.get("region_hint") or "-"),
+                str(entry.get("protocol") or "-"),
                 str(entry.get("listen_host") or "127.0.0.1"),
                 str(entry.get("listen_port") or "19080"),
-                "Pending",
-                "Not validated",
+                str(entry.get("port_status") or "unknown"),
+                str(entry.get("validation_status") or "draft"),
             ]
         )
     return TableModel(
-        columns=["enabled", "name", "candidate", "host", "port", "port status", "validation"],
+        columns=["enabled", "name", "candidate", "region", "protocol", "host", "port", "port status", "validation"],
         rows=table_rows,
         empty_message="No routes configured yet.",
     )

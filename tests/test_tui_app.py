@@ -229,6 +229,39 @@ def test_confirmation_body_explains_destructive_boundary() -> None:
     assert "Press Enter to confirm or Esc to cancel." in body
 
 
+def test_probe_command_preview_uses_user_data_dir_paths(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "subscriptions:",
+                "  - name: fixture",
+                "    url: https://example.invalid/subscription",
+                "    format: auto",
+                "    enabled: true",
+                "    headers: {}",
+                "user_data_dir: custom_state",
+                "filters: {include_keywords: [], exclude_keywords: [], deprioritize_keywords: []}",
+                "probe: {timeout_seconds: 5, concurrency: 1, cache_ttl_hours: 24, failure_backoff_hours: 24, allow_network_probe: false}",
+                "xray: {binary_path: /usr/local/bin/xray, runtime_dir: .runtime, local_socks_host: 127.0.0.1, local_socks_port: 19080}",
+                "output: {outbounds_path: generated/outbounds.json, routes_path: generated/routes.json, manifest_path: generated/manifest.json, history_dir: custom_state/history}",
+                "generation: {tag_prefix: scholar-, max_passed_nodes: 2, fallback_blackhole_tag: blocked, previous_output_max_age_hours: 24}",
+                "routing: {mode: dedicated_inbound, inbound_tags: [scholar-in], fail_closed: true}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    workflow = tui_app.load_workflow_state(config_path=str(config_path))
+    operations = workflow["control_plane"]["command_state"]["operations"]
+    probe_spec = next(operation for operation in operations if operation["key"] == "probe")
+    probe_command = probe_spec["command"]
+
+    assert str(tmp_path / "custom_state" / "candidates.json") in probe_command
+    assert str(tmp_path / "custom_state" / "probe_summary.json") in probe_command
+    assert str(tmp_path / "custom_state" / "passed_candidates.json") in probe_command
+
+
 def test_safe_wrapper_redacts_exception_and_journals(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("scholar_outbound_manager.tui.controller.load_control_plane_state", lambda **kwargs: _fake_control_plane_state())
     controller = tui_app.WorkflowController(loader_kwargs={}, action_journal_path=str(tmp_path / "action_journal.jsonl"))
