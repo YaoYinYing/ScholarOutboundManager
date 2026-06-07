@@ -6,10 +6,18 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from typing import Literal
 
 from scholar_outbound_manager.state.atomic_write import atomic_write_json
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_SESSION_PATH
 from scholar_outbound_manager.tui.constants import DEFAULT_TUI_UNDO_JOURNAL_PATH
+from scholar_outbound_manager.tui.path_resolver import UserDataPaths
+from scholar_outbound_manager.tui.port_check import PortCheckResult
+from scholar_outbound_manager.tui.route_model import RouteCandidateOption
+from scholar_outbound_manager.tui.route_model import RouteEntryDraft
+from scholar_outbound_manager.tui.testing_jobs import TestingJobState
+from scholar_outbound_manager.tui.testing_model import CandidateTestRow
+from scholar_outbound_manager.tui.testing_model import TestingSummary
 
 
 @dataclass(slots=True)
@@ -22,6 +30,79 @@ class TuiSessionState:
     last_step: str | None
     paths: dict[str, str]
     last_results: dict[str, dict[str, object]]
+
+
+@dataclass(frozen=True, slots=True)
+class KeyHint:
+    key: str
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class NavState:
+    active_page: Literal["home", "settings", "testing", "route", "logs"]
+
+
+@dataclass(frozen=True, slots=True)
+class StatusBarState:
+    message: str | None
+    level: Literal["info", "warning", "error", "success"] | None
+    keys: tuple[KeyHint, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ModalState:
+    kind: Literal["detail", "confirm", "error", "help"]
+    title: str
+    body_lines: tuple[str, ...]
+    action_key: str | None
+    redacted: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class TestingArtifactsState:
+    candidates_exists: bool
+    probe_summary_exists: bool
+    passed_candidates_exists: bool
+    lineage_consistent: bool
+    warnings: tuple[str, ...]
+    source_hashes: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class TestingStoreState:
+    artifacts: TestingArtifactsState
+    rows: tuple[CandidateTestRow, ...]
+    selected_index: int
+    job: TestingJobState
+    summary: TestingSummary
+    stale_warning: str | None
+    recent_events: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RouteStoreState:
+    entries: tuple[RouteEntryDraft, ...]
+    selected_index: int
+    candidate_options: tuple[RouteCandidateOption, ...]
+    validation_errors: tuple[str, ...]
+    apply_available: bool
+    stale_warning: str | None
+    port_checks: dict[str, PortCheckResult]
+
+
+@dataclass(frozen=True, slots=True)
+class AppState:
+    nav: NavState
+    settings: dict[str, object]
+    testing: TestingStoreState
+    route: RouteStoreState
+    logs: dict[str, object]
+    modal: ModalState | None
+    status_bar: StatusBarState
+    user_data_paths: UserDataPaths
+    config_path: Path
+    workflow_state: dict[str, object]
 
 
 def build_session_state(

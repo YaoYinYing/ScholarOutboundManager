@@ -9,6 +9,8 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Sequence
+from dataclasses import asdict
+from dataclasses import replace
 from pathlib import Path
 
 from scholar_outbound_manager.selection import build_selected_candidate_artifact
@@ -33,7 +35,36 @@ from scholar_outbound_manager.tui.controller import WorkbenchController as BaseW
 from scholar_outbound_manager.tui.controller import PendingAction
 from scholar_outbound_manager.tui.detail_model import build_route_detail_body
 from scholar_outbound_manager.tui.detail_model import build_testing_detail_body
+from scholar_outbound_manager.tui.effects import CreateSnapshot
+from scholar_outbound_manager.tui.effects import Effect
+from scholar_outbound_manager.tui.effects import LoadArtifacts
+from scholar_outbound_manager.tui.effects import RunAction
+from scholar_outbound_manager.tui.effects import RunPortCheck
+from scholar_outbound_manager.tui.effects import RunProbe
+from scholar_outbound_manager.tui.effects import SaveRouteDraft
+from scholar_outbound_manager.tui.events import ActionCompleted
+from scholar_outbound_manager.tui.events import ActionFailed
+from scholar_outbound_manager.tui.events import ArtifactRefresh
+from scholar_outbound_manager.tui.events import HelpRequested
+from scholar_outbound_manager.tui.events import ModalCancel
+from scholar_outbound_manager.tui.events import ModalConfirm
+from scholar_outbound_manager.tui.events import Navigate
+from scholar_outbound_manager.tui.events import ProbeCompleted
+from scholar_outbound_manager.tui.events import ProbeEventReceived
+from scholar_outbound_manager.tui.events import ProbeFailed
+from scholar_outbound_manager.tui.events import ProbeStarted
+from scholar_outbound_manager.tui.events import RefreshRequested
+from scholar_outbound_manager.tui.events import RouteCandidateChosen
+from scholar_outbound_manager.tui.events import RouteInspectSelected
+from scholar_outbound_manager.tui.events import RouteSelectRow
+from scholar_outbound_manager.tui.events import RouteTestPortRequested
+from scholar_outbound_manager.tui.events import TestingFetchRequested
+from scholar_outbound_manager.tui.events import TestingInspectSelected
+from scholar_outbound_manager.tui.events import TestingMoveCursor
+from scholar_outbound_manager.tui.events import TestingProbeRequested
+from scholar_outbound_manager.tui.events import TestingStopRequested
 from scholar_outbound_manager.tui.path_resolver import resolve_user_data_paths
+from scholar_outbound_manager.tui.reducer import reduce_app_state
 from scholar_outbound_manager.tui.route_model import add_route_entry
 from scholar_outbound_manager.tui.route_model import build_route_workbench_state
 from scholar_outbound_manager.tui.route_model import check_selected_route_port
@@ -42,7 +73,12 @@ from scholar_outbound_manager.tui.route_model import route_workbench_state_to_di
 from scholar_outbound_manager.tui.route_model import save_route_draft_state
 from scholar_outbound_manager.tui.route_model import save_route_entries_to_config_or_selected_routes
 from scholar_outbound_manager.tui.route_model import update_route_entry_candidate
+from scholar_outbound_manager.tui.route_store import build_route_store_state
 from scholar_outbound_manager.tui.screens import build_ascii_tab_strip
+from scholar_outbound_manager.tui.state import AppState
+from scholar_outbound_manager.tui.state import KeyHint
+from scholar_outbound_manager.tui.state import NavState
+from scholar_outbound_manager.tui.state import StatusBarState
 from scholar_outbound_manager.tui.state import build_session_state
 from scholar_outbound_manager.tui.state import write_session_state
 from scholar_outbound_manager.tui.testing_model import build_testing_screen_state
@@ -52,6 +88,7 @@ from scholar_outbound_manager.tui.testing_events import render_testing_event_lin
 from scholar_outbound_manager.tui.testing_jobs import TestingJobState
 from scholar_outbound_manager.tui.testing_jobs import idle_testing_job_state
 from scholar_outbound_manager.tui.testing_jobs import update_testing_job_state
+from scholar_outbound_manager.tui.testing_store import build_testing_store_state
 from scholar_outbound_manager.tui.view_model import ActivateStep
 from scholar_outbound_manager.tui.view_model import build_home_cards
 from scholar_outbound_manager.tui.view_model import build_logs_summary
@@ -490,6 +527,18 @@ def _shortcuts_for_tab(tab: str, *, pending_confirmation: bool) -> str:
     return shortcuts.get(tab, "Keys: 1-5 pages | r refresh | q quit")
 
 
+def _key_hints_for_page(page: str) -> list[KeyHint]:
+    """Build contextual key hints for one active page."""
+    mapping = {
+        "home": [("1", "Home"), ("2", "Settings"), ("3", "Testing"), ("4", "Route"), ("5", "Logs"), ("r", "Refresh"), ("q", "Quit")],
+        "settings": [("s", "Save"), ("u", "Undo"), ("d", "Diff"), ("f", "Test Fetch"), ("q", "Quit")],
+        "testing": [("f", "Fetch"), ("t", "Test Nodes"), ("x", "Stop"), ("j/k", "Move"), ("Enter", "Detail"), ("q", "Quit")],
+        "route": [("a", "Add"), ("d", "Delete"), ("c", "Choose"), ("p", "Test Port"), ("A", "Apply"), ("Enter", "Detail"), ("q", "Quit")],
+        "logs": [("c", "Artifact Check"), ("x", "Snapshot"), ("z", "Rollback"), ("q", "Quit")],
+    }
+    return [KeyHint(key=key, label=label) for key, label in mapping.get(page, [("q", "Quit")])]
+
+
 def _render_route_table(routes: list[RouteSummary]) -> list[str]:
     if not routes:
         return ["  No routes are available yet."]
@@ -692,6 +741,48 @@ def load_workflow_state(
         preferred_region_hint=preferred_region_hint,
     )
     return control_plane_state_to_workflow_dict(control_plane)
+
+
+def build_app_state(
+    *,
+    controller: WorkflowController,
+    config_path: str,
+    active_page: str = "home",
+    testing_selected_index: int | None = None,
+    route_selected_index: int = 0,
+    route_port_results: dict[str, object] | None = None,
+) -> AppState:
+    """Build one store-driven AppState from canonical artifacts plus legacy workflow data."""
+    workflow_state = _build_workflow_state(controller)
+    resolved_paths = resolve_user_data_paths(config_path)
+    testing = build_testing_store_state(
+        config_path=config_path,
+        user_data_paths=resolved_paths,
+        selected_index=testing_selected_index,
+    )
+    route = build_route_store_state(
+        config_path=config_path,
+        user_data_paths=resolved_paths,
+        selected_index=route_selected_index,
+        port_results=route_port_results if isinstance(route_port_results, dict) else None,
+    )
+    status = StatusBarState(
+        message=None,
+        level=None,
+        keys=tuple(_key_hints_for_page(active_page)),
+    )
+    return AppState(
+        nav=NavState(active_page=active_page),
+        settings=dict(workflow_state.get("settings", {})),
+        testing=testing,
+        route=route,
+        logs=dict(workflow_state.get("logs_screen", {})),
+        modal=None,
+        status_bar=status,
+        user_data_paths=resolved_paths,
+        config_path=Path(config_path),
+        workflow_state=workflow_state,
+    )
 
 
 def control_plane_state_to_workflow_dict(control_plane: ControlPlaneState) -> dict[str, object]:
@@ -1427,6 +1518,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         testing_log_lines: list[str] = []
         detail_open: bool = False
         last_notice_key: str | None = None
+        app_state: AppState | None = None
+        rendering = False
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -1459,6 +1552,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         def on_mount(self) -> None:
             self._init_tables()
+            self.app_state = build_app_state(
+                controller=controller,
+                config_path=controller._paths()["config"],
+                active_page="home",
+                testing_selected_index=self.testing_selected_index,
+                route_selected_index=self.route_selected_index,
+                route_port_results=self.route_port_results,
+            )
             self._set_page("Home")
             self._close_detail_panel()
             self._safe_refresh_ui("startup")
@@ -1566,6 +1667,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         def _set_page(self, page: str) -> None:
             self.current_page = page
             controller.selection.active_tab = page
+            if self.app_state is not None:
+                self.app_state = replace(
+                    self.app_state,
+                    nav=NavState(active_page=page.lower()),
+                    status_bar=StatusBarState(
+                        message=self.app_state.status_bar.message,
+                        level=self.app_state.status_bar.level,
+                        keys=tuple(_key_hints_for_page(page.lower())),
+                    ),
+                )
             for candidate in controller.workflow_state["tabs"]:
                 page_widget = self.query_one(f"#page-{_textual_safe_id(candidate)}", Vertical)
                 page_widget.display = candidate == page
@@ -1577,6 +1688,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         def _refresh_ui_impl(self) -> None:
             self._clear_safe_error_state()
+            if self.app_state is not None:
+                controller.workflow_state = dict(self.app_state.workflow_state)
             self.query_one("#home-summary", Static).update(render_tab_text("Home", controller.workflow_state))
             self.query_one("#settings-diff-panel", Static).update(
                 controller.workflow_state.get("settings", {}).get("redacted_diff") or "No pending redacted diff."
@@ -1594,6 +1707,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             testing_state = self._load_testing_state()
             testing = self._testing_workflow_state()
             controller.workflow_state["testing"] = testing
+            if self.app_state is not None:
+                self.app_state = replace(
+                    self.app_state,
+                    testing=build_testing_store_state(
+                        config_path=controller._paths()["config"],
+                        user_data_paths=resolve_user_data_paths(controller._paths()["config"]),
+                        selected_index=self.testing_selected_index,
+                    ),
+                    workflow_state=dict(controller.workflow_state),
+                )
             self.query_one("#testing-status", Static).update(
                 self.testing_job_state.message if self.testing_job_state.status != "idle" else (controller.action_state.status_message or testing_state.job_state.title())
             )
@@ -1665,6 +1788,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.query_one("#route-boundary", Static).update(
                 controller.workflow_state.get("route", {}).get("production_boundary") or ""
             )
+            if self.app_state is not None:
+                self.app_state = replace(
+                    self.app_state,
+                    route=build_route_store_state(
+                        config_path=controller._paths()["config"],
+                        user_data_paths=resolve_user_data_paths(controller._paths()["config"]),
+                        selected_index=self.route_selected_index,
+                        port_results=self.route_port_results,
+                    ),
+                    workflow_state=dict(controller.workflow_state),
+                )
 
             logs = build_logs_summary(controller.workflow_state)
             action_table = self.query_one("#logs-action-table", DataTable)
@@ -1742,6 +1876,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.testing_job_state = state
 
         def _apply_testing_event(self, event: TestingEvent) -> None:
+            if self.app_state is not None and self.testing_job_state.job_id is not None:
+                new_state, _ = reduce_app_state(
+                    self.app_state,
+                    ProbeEventReceived(job_id=self.testing_job_state.job_id, event=event),
+                )
+                self.app_state = new_state
             current_state = self._load_testing_state()
             rows = [dict(row) for row in testing_screen_state_to_dict(current_state)["rows"]]
             if self.testing_live_rows is not None:
@@ -1773,6 +1913,42 @@ def main(argv: Sequence[str] | None = None) -> int:
             self.testing_thread = None
             self._set_testing_job_state(idle_testing_job_state())
 
+        def dispatch_event(self, event) -> None:
+            if self.app_state is None:
+                return
+            new_state, effects = reduce_app_state(self.app_state, event)
+            self.app_state = new_state
+            self._run_effects(effects)
+            self._safe_refresh_ui("state dispatch")
+
+        def _run_effects(self, effects: Sequence[Effect]) -> None:
+            for effect in effects:
+                if isinstance(effect, LoadArtifacts):
+                    controller.reload()
+                    self.app_state = build_app_state(
+                        controller=controller,
+                        config_path=controller._paths()["config"],
+                        active_page=self.current_page.lower(),
+                        testing_selected_index=self.testing_selected_index,
+                        route_selected_index=self.route_selected_index,
+                        route_port_results=self.route_port_results,
+                    )
+                elif isinstance(effect, SaveRouteDraft):
+                    save_route_draft_state(
+                        user_data_paths=resolve_user_data_paths(controller._paths()["config"]),
+                        entries=list(self.app_state.route.entries) if self.app_state is not None else [],
+                    )
+                elif isinstance(effect, RunFetch):
+                    self._start_testing_operation("fetch", "fetching")
+                elif isinstance(effect, RunProbe):
+                    self._start_testing_operation("probe", "probing")
+                elif isinstance(effect, RunPortCheck):
+                    self._run_tui_action("Test route port", self._test_selected_route_port, notify=False)
+                elif isinstance(effect, RunAction):
+                    self._run_tui_action(effect.action_key, lambda: controller.handle_operation(effect.action_key))
+                elif isinstance(effect, CreateSnapshot):
+                    controller.create_snapshot(effect.reason)
+
         def _refresh_confirmation_panel(self) -> None:
             panel = self.query_one("#confirmation-panel", Vertical)
             pending = controller.pending_action
@@ -1801,6 +1977,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "nav-route": "Route",
                     "nav-logs": "Logs",
                 }.get(button_id, "Home")
+                self.dispatch_event(Navigate(page=page.lower()))
                 self._set_page(page)
                 return
             button_actions: dict[str, Callable[[], None]] = {
@@ -1862,35 +2039,48 @@ def main(argv: Sequence[str] | None = None) -> int:
             if getattr(event.select, "id", "") != "route-candidate-select":
                 return
             value = event.value
-            current_route = controller.workflow_state.get("route", {})
-            entries = current_route.get("entries", []) if isinstance(current_route, dict) else []
-            current_entry = entries[self.route_selected_index] if isinstance(entries, list) and entries and 0 <= self.route_selected_index < len(entries) else {}
-            current_candidate_id = current_entry.get("candidate_id") if isinstance(current_entry, dict) else None
+            entries = list(self.app_state.route.entries) if self.app_state is not None else []
+            current_entry = entries[self.route_selected_index] if entries and 0 <= self.route_selected_index < len(entries) else None
+            current_candidate_id = None
+            if isinstance(current_entry, dict):
+                current_candidate_id = current_entry.get("candidate_id")
+            elif current_entry is not None:
+                current_candidate_id = current_entry.candidate_id
             if _should_ignore_route_select_change(
                 route_form_syncing=self.route_form_syncing,
                 event_value=value,
                 current_candidate_id=current_candidate_id if isinstance(current_candidate_id, str) else None,
             ):
                 return
-            self._run_tui_action("Choose passed node", lambda: self._choose_route_candidate_id(value), notify=False)
+            route_id = ""
+            if isinstance(current_entry, dict):
+                route_id = str(current_entry.get("route_id") or "")
+            elif current_entry is not None:
+                route_id = current_entry.route_id
+            self.dispatch_event(RouteCandidateChosen(route_id=route_id, candidate_id=value))
 
         def action_open_home(self) -> None:
+            self.dispatch_event(Navigate(page="home"))
             self._set_page("Home")
 
         def action_open_settings(self) -> None:
+            self.dispatch_event(Navigate(page="settings"))
             self._set_page("Settings")
 
         def action_open_testing(self) -> None:
+            self.dispatch_event(Navigate(page="testing"))
             self._set_page("Testing")
 
         def action_open_route(self) -> None:
+            self.dispatch_event(Navigate(page="route"))
             self._set_page("Route")
 
         def action_open_logs(self) -> None:
+            self.dispatch_event(Navigate(page="logs"))
             self._set_page("Logs")
 
         def action_reload_state(self) -> None:
-            self._run_tui_action("Reload state", lambda: (controller.reload(), str(controller.action_state.status_message))[1])
+            self.dispatch_event(RefreshRequested())
 
         def action_save_draft(self) -> None:
             self._run_tui_action("Save config draft", lambda: controller.save_config().message)
@@ -1910,19 +2100,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         def action_cursor_down(self) -> None:
             if self.current_page == "Testing":
-                self._run_tui_action("Move selection", lambda: self._move_testing_selection(1))
+                self.dispatch_event(TestingMoveCursor(delta=1))
                 return
             if self.current_page == "Route":
-                self._run_tui_action("Move route selection", lambda: self._move_route_selection(1))
+                if self.app_state is not None and self.app_state.route.entries:
+                    next_index = min(len(self.app_state.route.entries) - 1, self.app_state.route.selected_index + 1)
+                    self.dispatch_event(RouteSelectRow(index=next_index))
                 return
             self._run_tui_action("Move selection", lambda: (controller.move_candidate(1), "Selection moved down.")[1])
 
         def action_cursor_up(self) -> None:
             if self.current_page == "Testing":
-                self._run_tui_action("Move selection", lambda: self._move_testing_selection(-1))
+                self.dispatch_event(TestingMoveCursor(delta=-1))
                 return
             if self.current_page == "Route":
-                self._run_tui_action("Move route selection", lambda: self._move_route_selection(-1))
+                if self.app_state is not None:
+                    next_index = max(0, self.app_state.route.selected_index - 1)
+                    self.dispatch_event(RouteSelectRow(index=next_index))
                 return
             self._run_tui_action("Move selection", lambda: (controller.move_candidate(-1), "Selection moved up.")[1])
 
@@ -1933,7 +2127,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     self._confirm_pending_action,
                 )
                 return
-            self.action_open_detail()
+            if self.current_page == "Testing":
+                self.dispatch_event(TestingInspectSelected())
+            elif self.current_page == "Route":
+                self.dispatch_event(RouteInspectSelected())
+            else:
+                self.action_open_detail()
 
         def action_open_detail(self) -> None:
             title, body = self._build_current_detail()
@@ -1946,13 +2145,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             self._run_tui_action(
                 "Cancel pending action",
                 lambda: (setattr(self, "pending_action_handler", None), controller.clear_pending_action(), "Pending action cleared.")[2],
+                notify=False,
             )
 
         def action_run_fetch(self) -> None:
-            self._start_testing_operation("fetch", "fetching")
+            self.dispatch_event(TestingFetchRequested())
 
         def action_run_probe(self) -> None:
-            self._start_testing_operation("probe", "probing")
+            self.dispatch_event(TestingProbeRequested())
 
         def action_run_retest_failed(self) -> None:
             self._run_tui_action(
@@ -1964,9 +2164,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if self.testing_job_state.status not in {"fetching", "probing"}:
                 self._run_tui_action("Stop testing job", lambda: "No running fetch/probe worker is attached in this phase.", notify=False)
                 return
-            self._set_testing_job_state(update_testing_job_state(self.testing_job_state, status="cancelling", can_cancel=False, message="Cancelling Testing job..."))
-            controller.action_state.status_message = "Cancelling Testing job..."
-            self._safe_refresh_ui("testing cancel request")
+            self.dispatch_event(TestingStopRequested())
 
         def action_run_artifact_check(self) -> None:
             self._run_tui_action("Run artifact check", lambda: controller.handle_operation("artifact_check"))
@@ -2035,7 +2233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             self._run_tui_action("Rollback latest snapshot", lambda: self._request_confirmation("rollback_snapshot"))
 
         def action_show_help(self) -> None:
-            self._open_detail_panel("Help", _shortcuts_for_tab(self.current_page, pending_confirmation=bool(controller.pending_action)))
+            self.dispatch_event(HelpRequested())
 
         def _start_testing_operation(self, action_key: str, status: str) -> None:
             if self.testing_thread is not None and self.testing_thread.is_alive():
@@ -2124,7 +2322,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             fresh_state = self._load_testing_state()
             rows = [asdict(row) for row in fresh_state.rows]
             self.testing_live_rows = rows
-            self.testing_log_lines = [*(self.testing_log_lines or []), redact_text(result_message)][-10:]
+            safe_message = redact_text(result_message)
+            self.testing_log_lines = [*(self.testing_log_lines or []), safe_message][-10:]
             final_status = "completed" if succeeded else "failed"
             self._set_testing_job_state(
                 update_testing_job_state(
@@ -2135,11 +2334,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     passed=fresh_state.summary.passed_count,
                     failed=fresh_state.summary.failed_count,
                     skipped=sum(1 for row in rows if str(row.get("status_icon")) == "SKIP"),
-                    message=redact_text(result_message),
+                    message=safe_message,
                     can_cancel=False,
                     redacted_log_tail=list(self.testing_log_lines),
                 )
             )
+            if self.app_state is not None and self.testing_job_state.job_id is not None:
+                event = ProbeCompleted(job_id=self.testing_job_state.job_id, message=safe_message) if succeeded else ProbeFailed(job_id=self.testing_job_state.job_id, error=safe_message)
+                new_state, effects = reduce_app_state(self.app_state, event)
+                self.app_state = new_state
+                self._run_effects(effects)
             self._safe_refresh_ui(f"{action_key} finalize")
 
         def _load_testing_state(self):
