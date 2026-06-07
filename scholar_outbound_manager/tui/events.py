@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 from scholar_outbound_manager.tui.port_check import PortCheckResult
+from scholar_outbound_manager.tui.state import AppState
 from scholar_outbound_manager.tui.testing_events import TestingEvent
 
 
@@ -220,6 +221,18 @@ class ActionFailed:
 
 
 @dataclass(frozen=True, slots=True)
+class EffectFailed:
+    effect_name: str
+    message: str
+    recoverable: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AppStateReloaded:
+    state: AppState
+
+
+@dataclass(frozen=True, slots=True)
 class ArtifactRefresh:
     kind: ArtifactKind
 
@@ -265,6 +278,8 @@ BackendEvent = (
     | PortCheckCompleted
     | ActionCompleted
     | ActionFailed
+    | EffectFailed
+    | AppStateReloaded
 )
 
 AppEvent = UserIntent | BackendEvent | ArtifactRefresh
@@ -273,7 +288,9 @@ AppEvent = UserIntent | BackendEvent | ArtifactRefresh
 __all__ = [
     "ActionCompleted",
     "ActionFailed",
+    "AppStateReloaded",
     "AppEvent",
+    "EffectFailed",
     "ArtifactRefresh",
     "FetchCompleted",
     "FetchFailed",

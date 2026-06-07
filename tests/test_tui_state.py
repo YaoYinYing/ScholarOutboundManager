@@ -36,7 +36,6 @@ def test_app_state_holds_single_runtime_shape(tmp_path: Path) -> None:
         status_bar=_StatusBarState(message=None, level=None, keys=(_KeyHint("q", "Quit"),)),
         user_data_paths=paths,
         config_path=config_path,
-        workflow_state={},
     )
 
     assert state.nav.active_page == "home"

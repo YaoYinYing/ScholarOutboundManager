@@ -102,7 +102,6 @@ class AppState:
     status_bar: StatusBarState
     user_data_paths: UserDataPaths
     config_path: Path
-    workflow_state: dict[str, object]
 
 
 def build_session_state(

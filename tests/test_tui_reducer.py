@@ -108,7 +108,7 @@ def test_route_candidate_chosen_updates_state_and_emits_save(tmp_path: Path) -> 
     )
 
     assert new_state.route.entries[0].candidate_id == "candidate-001"
-    assert SaveRouteDraft() in effects
+    assert effects == (SaveRouteDraft(entries=tuple(new_state.route.entries)),)
 
 
 def _state(tmp_path: Path) -> _AppState:
@@ -147,5 +147,4 @@ def _state(tmp_path: Path) -> _AppState:
         status_bar=_StatusBarState(message=None, level=None, keys=(_KeyHint("q", "Quit"),)),
         user_data_paths=paths,
         config_path=config_path,
-        workflow_state={},
     )

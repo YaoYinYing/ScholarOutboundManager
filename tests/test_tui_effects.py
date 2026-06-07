@@ -11,10 +11,9 @@ def test_effects_are_hashable_value_objects() -> None:
         CreateSnapshot(reason="testing_probe"),
         RunFetch(),
         RunProbe(),
-        SaveRouteDraft(),
+        SaveRouteDraft(entries=()),
     }
 
     assert CreateSnapshot(reason="testing_probe") in effects
     assert RunFetch() in effects
     assert len(effects) == 4
-

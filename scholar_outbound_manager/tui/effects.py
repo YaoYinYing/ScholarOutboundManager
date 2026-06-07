@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from scholar_outbound_manager.tui.route_model import RouteEntryDraft
+
 
 @dataclass(frozen=True, slots=True)
 class LoadArtifacts:
@@ -12,7 +14,7 @@ class LoadArtifacts:
 
 @dataclass(frozen=True, slots=True)
 class SaveRouteDraft:
-    pass
+    entries: tuple[RouteEntryDraft, ...]
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,11 +14,14 @@ from scholar_outbound_manager.tui.effects import SaveRouteDraft
 from scholar_outbound_manager.tui.events import ActionCompleted
 from scholar_outbound_manager.tui.events import ActionFailed
 from scholar_outbound_manager.tui.events import AppEvent
+from scholar_outbound_manager.tui.events import AppStateReloaded
 from scholar_outbound_manager.tui.events import ArtifactRefresh
+from scholar_outbound_manager.tui.events import EffectFailed
 from scholar_outbound_manager.tui.events import HelpRequested
 from scholar_outbound_manager.tui.events import ModalCancel
 from scholar_outbound_manager.tui.events import ModalConfirm
 from scholar_outbound_manager.tui.events import Navigate
+from scholar_outbound_manager.tui.events import PortCheckCompleted
 from scholar_outbound_manager.tui.events import ProbeCompleted
 from scholar_outbound_manager.tui.events import ProbeEventReceived
 from scholar_outbound_manager.tui.events import ProbeFailed
@@ -47,6 +50,17 @@ def reduce_app_state(state: AppState, event: AppEvent) -> tuple[AppState, tuple[
     """Reduce one event into a new AppState and follow-up effects."""
     if isinstance(event, Navigate):
         return replace(state, nav=NavState(active_page=event.page), status_bar=_context_status(state, message=None)), ()
+    if isinstance(event, AppStateReloaded):
+        return replace(
+            event.state,
+            nav=state.nav,
+            modal=state.modal,
+            status_bar=StatusBarState(
+                message=state.status_bar.message,
+                level=state.status_bar.level,
+                keys=state.status_bar.keys,
+            ),
+        ), ()
     if isinstance(event, RefreshRequested):
         return state, (LoadArtifacts(reason="user_refresh"),)
     if isinstance(event, HelpRequested):
@@ -138,10 +152,40 @@ def reduce_app_state(state: AppState, event: AppEvent) -> tuple[AppState, tuple[
                 route=updated_route,
                 status_bar=_context_status(state, message=f"{route_name} candidate set to {label}.", level="success"),
             ),
-            (SaveRouteDraft(),),
+            (SaveRouteDraft(entries=tuple(updated_route.entries)),),
         )
     if isinstance(event, RouteTestPortRequested):
         return state, (RunPortCheck(route_id=event.route_id),)
+    if isinstance(event, PortCheckCompleted):
+        port_checks = dict(state.route.port_checks)
+        port_checks[event.route_id] = event.result
+        entries = []
+        validation_errors = list(state.route.validation_errors)
+        for entry in state.route.entries:
+            if entry.route_id == event.route_id:
+                entries.append(
+                    replace(
+                        entry,
+                        port_status=event.result.status,
+                        validation_status="ready" if event.result.reusable else "blocked",
+                        error=None if event.result.reusable else event.result.message,
+                    )
+                )
+            else:
+                entries.append(entry)
+        if not event.result.reusable:
+            validation_errors = [error for error in validation_errors if event.result.message not in error]
+            validation_errors.append(event.result.message)
+        return replace(
+            state,
+            route=replace(
+                state.route,
+                entries=tuple(entries),
+                port_checks=port_checks,
+                validation_errors=tuple(validation_errors),
+            ),
+            status_bar=_context_status(state, message=event.result.message, level="success" if event.result.reusable else "error"),
+        ), ()
     if isinstance(event, RouteInspectSelected):
         entry = state.route.entries[state.route.selected_index] if state.route.entries else None
         lines = ("No route selected.",) if entry is None else (
@@ -157,6 +201,17 @@ def reduce_app_state(state: AppState, event: AppEvent) -> tuple[AppState, tuple[
         return replace(state, status_bar=_context_status(state, message=event.message, level="success")), ()
     if isinstance(event, ActionFailed):
         return replace(state, status_bar=_context_status(state, message=event.error, level="error")), ()
+    if isinstance(event, EffectFailed):
+        return replace(
+            state,
+            modal=ModalState(
+                kind="error",
+                title=f"{event.effect_name} failed",
+                body_lines=(event.message,),
+                action_key=None,
+            ),
+            status_bar=_context_status(state, message=f"Effect failed: {event.message}", level="error"),
+        ), ()
     return state, ()
 
 
