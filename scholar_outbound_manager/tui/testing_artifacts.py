@@ -25,6 +25,12 @@ class TestingArtifacts:
     passed_ids: set[str]
     warnings: list[str]
     source_hashes: dict[str, str]
+    attempted_count: int
+    passed_count: int
+    failed_count: int
+    skipped_count: int
+    parallel_workers: int | None
+    keep_all_passed: bool | None
 
 
 def load_testing_artifacts(user_data_paths: UserDataPaths) -> TestingArtifacts:
@@ -72,6 +78,12 @@ def load_testing_artifacts(user_data_paths: UserDataPaths) -> TestingArtifacts:
             "probe_summary": probe_hash,
             "passed_candidates": passed_hash,
         },
+        attempted_count=_coerce_optional_int(probe_payload.get("attempted_count")) or 0,
+        passed_count=_coerce_optional_int(probe_payload.get("passed_count")) or len(passed_ids),
+        failed_count=_coerce_optional_int(probe_payload.get("failed_count")) or 0,
+        skipped_count=_coerce_optional_int(probe_payload.get("skipped_count")) or 0,
+        parallel_workers=_coerce_optional_int(probe_payload.get("parallel_workers")),
+        keep_all_passed=_coerce_optional_bool(probe_payload.get("keep_all_passed")),
     )
 
 
@@ -133,3 +145,11 @@ def _read_json_mapping(path: str | Path) -> dict[str, object]:
     except json.JSONDecodeError:
         return {}
     return {str(key): value for key, value in payload.items()} if isinstance(payload, dict) else {}
+
+
+def _coerce_optional_int(value: object) -> int | None:
+    return int(value) if isinstance(value, int) else None
+
+
+def _coerce_optional_bool(value: object) -> bool | None:
+    return bool(value) if isinstance(value, bool) else None

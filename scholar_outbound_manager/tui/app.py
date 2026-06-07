@@ -50,7 +50,7 @@ from scholar_outbound_manager.tui.events import HelpRequested
 from scholar_outbound_manager.tui.events import ModalCancel
 from scholar_outbound_manager.tui.events import ModalConfirm
 from scholar_outbound_manager.tui.events import Navigate
-from scholar_outbound_manager.tui.events import ProbeCompleted
+from scholar_outbound_manager.tui.events import ProbeProcessCompleted
 from scholar_outbound_manager.tui.events import ProbeEventReceived
 from scholar_outbound_manager.tui.events import ProbeFailed
 from scholar_outbound_manager.tui.events import ProbeStarted
@@ -88,8 +88,6 @@ from scholar_outbound_manager.tui.testing_model import testing_screen_state_to_d
 from scholar_outbound_manager.tui.testing_events import TestingEvent
 from scholar_outbound_manager.tui.testing_events import render_testing_event_line
 from scholar_outbound_manager.tui.testing_jobs import TestingJobState
-from scholar_outbound_manager.tui.testing_jobs import idle_testing_job_state
-from scholar_outbound_manager.tui.testing_jobs import update_testing_job_state
 from scholar_outbound_manager.tui.testing_store import build_testing_store_state
 from scholar_outbound_manager.tui.view_model import ActivateStep
 from scholar_outbound_manager.tui.view_model import build_home_cards
@@ -410,14 +408,10 @@ def _find_operation(workflow_state: dict[str, object], key: str) -> dict[str, ob
 def _render_testing_summary_lines(testing_state: dict[str, object]) -> list[str]:
     summary = testing_state.get("summary", {}) if isinstance(testing_state.get("summary"), dict) else {}
     return [
-        f"Subscription: {'configured' if summary.get('subscription_configured') else 'missing'}",
-        f"Fetched: {summary.get('last_fetch_status') or 'missing'}",
-        f"Candidates: {summary.get('candidate_count') or 0}",
-        f"Supported: {summary.get('supported_count') or 0}",
-        f"Experimental-disabled: {summary.get('experimental_disabled_count') or 0}",
-        f"Tested: {summary.get('attempted_count') or 0} / {summary.get('supported_count') or 0}",
-        f"Passed: {summary.get('passed_count') or 0}",
-        f"Failed: {summary.get('failed_count') or 0}",
+        f"Catalog: Total {summary.get('total_candidates') or 0} | Testable {summary.get('testable_candidates') or 0} | Visible {summary.get('visible_rows') or 0}",
+        f"Probe: Tested {summary.get('attempted') or 0} / {summary.get('testable_candidates') or 0} | Passed {summary.get('passed') or 0} | Failed {summary.get('failed') or 0} | Skipped {summary.get('skipped') or 0}",
+        f"Rows: Pending {summary.get('pending') or 0} | Running {summary.get('running') or 0} | Stale {summary.get('stale') or 0} | Experimental disabled {summary.get('experimental_disabled') or 0}",
+        f"Table: {str(summary.get('table_scope') or 'all_candidates').replace('_', ' ')}",
     ]
 
 
@@ -470,6 +464,7 @@ def _testing_banner_text(artifact_warning: str | None) -> str:
         "Fetch/Test are live network operations.",
         "They write local artifacts under user_data_dir.",
         "They do not modify production Xray/XrayR/x-ui.",
+        "Progress may be phase-level only when per-candidate streaming is unavailable.",
     ]
     if artifact_warning:
         lines.extend(["", artifact_warning])
@@ -800,6 +795,7 @@ def _build_settings_state(config_summary, control_plane: ControlPlaneState) -> d
         "fail_closed": config_summary.fail_closed,
         "experimental_hysteria2": config_summary.experimental_hysteria2,
         "service_name": config_summary.service_name,
+        "probe_concurrency": config_summary.probe_concurrency,
         "undo_available": control_plane.config_state.undo_available,
         "redacted_diff": control_plane.config_state.redacted_diff,
         "service_active": control_plane.sidecar_state.service_active,
@@ -1556,16 +1552,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         """Task-oriented config-centered TUI."""
 
         BINDINGS = list(TUI_KEY_BINDINGS)
+        DEFAULT_CSS = """
+        #tui-root { height: 1fr; }
+        #nav-rail { width: 24; min-width: 24; }
+        #main-column { width: 1fr; height: 1fr; }
+        #page-testing { height: 1fr; }
+        #testing-runtime-header { height: auto; }
+        #testing-summary { height: auto; }
+        #testing-table { height: 1fr; width: 1fr; }
+        #testing-log { height: 8; }
+        """
         current_page = "Home"
         testing_selected_index: int | None = None
         route_selected_index: int = 0
         route_port_results: dict[str, object] = {}
         route_form_syncing = False
         pending_action_handler: Callable[[], str] | None = None
-        testing_job_state: TestingJobState = idle_testing_job_state()
         testing_thread: threading.Thread | None = None
-        testing_live_rows: list[dict[str, object]] | None = None
-        testing_log_lines: list[str] = []
         detail_open: bool = False
         last_notice_key: str | None = None
         app_state: AppState | None = None
@@ -1658,12 +1661,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "They do not modify production Xray/XrayR/x-ui.",
                     id="testing-banner",
                 )
+                yield Static("", id="testing-runtime-header")
                 with Horizontal(id="testing-actions"):
                     yield Button("Fetch Subscription", id="testing-fetch")
                     yield Button("Test Nodes", id="testing-probe")
                     yield Button("Retest Failed", id="testing-retest")
                     yield Button("Stop", id="testing-stop", disabled=True)
-                yield Static("", id="testing-status")
                 yield ProgressBar(total=100, id="testing-progress")
                 yield Static("", id="testing-summary")
                 yield DataTable(id="testing-table")
@@ -1813,13 +1816,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         def _render_testing_page_state(self, state: AppState) -> None:
             self.testing_selected_index = state.testing.selected_index
             testing_model = build_testing_table_model(self._build_app_render_model(state))
-            self.query_one("#testing-status", Static).update(
-                self.testing_job_state.message if self.testing_job_state.status != "idle" else state.testing.job.message
+            self.query_one("#testing-runtime-header", Static).update(
+                "\n".join(
+                    [
+                        "Testing nodes",
+                        f"Phase: {state.testing.runtime.phase}",
+                        f"Progress: {state.testing.runtime.progress_mode.replace('_', ' ')}",
+                        f"Parallel workers: {state.testing.runtime.parallel_workers or state.settings.get('probe_concurrency') or 'unknown'}",
+                        f"Current candidate: {state.testing.runtime.current_candidate_label or '-'}",
+                        f"Status: {state.testing.job.message}",
+                    ]
+                )
             )
             progress = self.query_one("#testing-progress", ProgressBar)
             progress.update(
-                total=self.testing_job_state.total or max(state.testing.summary.supported_count, 1),
-                progress=self.testing_job_state.current if self.testing_job_state.status != "idle" else state.testing.job.current,
+                total=max(state.testing.runtime.total, 1),
+                progress=state.testing.runtime.current,
             )
             self.query_one("#testing-summary", Static).update("\n".join(_render_testing_summary_lines({"summary": asdict(state.testing.summary)})))
             self.query_one("#testing-banner", Static).update(_testing_banner_text(state.testing.stale_warning))
@@ -1829,12 +1841,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 testing_table.add_row(*row)
             testing_log = self.query_one("#testing-log", RichLog)
             testing_log.clear()
-            for line in (self.testing_log_lines or list(state.testing.recent_events)):
+            for line in state.testing.recent_events:
                 testing_log.write(line)
             self.query_one("#testing-fetch", Button).disabled = not bool(state.settings.get("subscription_url_configured"))
             self.query_one("#testing-probe", Button).disabled = state.testing.summary.candidate_count <= 0
             self.query_one("#testing-retest", Button).disabled = state.testing.summary.failed_count <= 0
-            self.query_one("#testing-stop", Button).disabled = not self.testing_job_state.can_cancel
+            self.query_one("#testing-stop", Button).disabled = not state.testing.job.can_cancel
 
         def _render_route_page_state(self, state: AppState) -> None:
             self.route_selected_index = state.route.selected_index
@@ -1887,6 +1899,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "testing": {
                     "summary": asdict(state.testing.summary),
                     "rows": [asdict(row) for row in state.testing.rows],
+                    "runtime": asdict(state.testing.runtime),
+                    "job": asdict(state.testing.job),
+                    "recent_events": list(state.testing.recent_events),
                 },
                 "route": {
                     "entries": [asdict(entry) for entry in state.route.entries],
@@ -1954,47 +1969,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"Latest action: {(self.app_state.logs.get('last_action') or {}).get('summary') if isinstance(self.app_state.logs.get('last_action'), dict) else 'none'}"
                 )
             return "Details", "No additional detail is available for this page."
-
-        def _set_testing_job_state(self, state: TestingJobState) -> None:
-            self.testing_job_state = state
-
-        def _apply_testing_event(self, event: TestingEvent) -> None:
-            if self.app_state is not None and self.testing_job_state.job_id is not None:
-                new_state, _ = reduce_app_state(
-                    self.app_state,
-                    ProbeEventReceived(job_id=self.testing_job_state.job_id, event=event),
-                )
-                self.app_state = new_state
-            current_state = self._load_testing_state()
-            rows = [dict(row) for row in testing_screen_state_to_dict(current_state)["rows"]]
-            if self.testing_live_rows is not None:
-                rows = [dict(row) for row in self.testing_live_rows]
-            rows = _apply_testing_event_to_rows(rows, event)
-            self.testing_live_rows = rows
-            next_log = [*self.testing_log_lines, render_testing_event_line(event)][-10:]
-            self.testing_log_lines = next_log
-            job_state = self.testing_job_state
-            passed = sum(1 for row in rows if row.get("status_icon") == "PASS")
-            failed = sum(1 for row in rows if row.get("status_icon") == "FAIL")
-            skipped = sum(1 for row in rows if row.get("status_icon") == "SKIP")
-            self._set_testing_job_state(
-                update_testing_job_state(
-                    job_state,
-                    current=event.current if event.current is not None else job_state.current,
-                    total=event.total if event.total is not None else job_state.total,
-                    passed=passed,
-                    failed=failed,
-                    skipped=skipped,
-                    message=event.message,
-                    redacted_log_tail=next_log,
-                )
-            )
-
-        def _reset_testing_live_state(self) -> None:
-            self.testing_live_rows = None
-            self.testing_log_lines = []
-            self.testing_thread = None
-            self._set_testing_job_state(idle_testing_job_state())
 
         def dispatch_event(self, event) -> None:
             if self.app_state is None:
@@ -2259,7 +2233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         def action_stop_testing_job(self) -> None:
-            if self.testing_job_state.status not in {"fetching", "probing"}:
+            if self.app_state is None or self.app_state.testing.job.status not in {"fetching", "probing", "finalizing"}:
                 self._run_tui_action("Stop testing job", lambda: "No running fetch/probe worker is attached in this phase.", notify=False)
                 return
             self.dispatch_event(TestingStopRequested())
@@ -2337,113 +2311,52 @@ def main(argv: Sequence[str] | None = None) -> int:
             if self.testing_thread is not None and self.testing_thread.is_alive():
                 self._notify_user("A Testing job is already running.", key="testing-job-running")
                 return
-            state = self._load_testing_state()
-            total = max(state.summary.supported_count, len(state.rows), 1)
-            message = "Fetching subscription..." if action_key == "fetch" else "Probing candidates..."
-            self.testing_live_rows = [asdict(row) for row in state.rows]
-            self.testing_log_lines = [message]
-            self._set_testing_job_state(
-                TestingJobState(
-                    job_id=f"{action_key}-{int(time.time())}",
-                    kind=action_key,
-                    status=status,
-                    started_at=None,
-                    finished_at=None,
-                    current=0,
-                    total=total,
-                    passed=0,
-                    failed=0,
-                    skipped=0,
-                    message=message,
-                    can_cancel=True,
-                    redacted_log_tail=list(self.testing_log_lines),
+            if self.app_state is None:
+                return
+            job_id = f"{action_key}-{int(time.time())}"
+            total = max(self.app_state.testing.summary.testable_candidates, 1)
+            if action_key == "probe":
+                self.dispatch_event(
+                    ProbeStarted(
+                        job_id=job_id,
+                        total=total,
+                        parallel_workers=int(self.app_state.settings.get("probe_concurrency") or 1),
+                        progress_mode="phase_only",
+                    )
                 )
-            )
-            self._safe_refresh_ui(f"{action_key} start")
 
             def run_job() -> None:
                 try:
-                    result_message = controller.handle_operation(action_key)
-                    self.call_from_thread(self._finalize_testing_operation, action_key, result_message, True)
+                    controller.handle_operation(action_key)
+                    result = controller.action_state.last_result
+                    if action_key == "probe":
+                        if result is not None and result.succeeded:
+                            self.call_from_thread(
+                                self.dispatch_event,
+                                ProbeProcessCompleted(job_id=job_id, exit_code=result.exit_code or 0),
+                            )
+                        else:
+                            failure_message = "Probe failed."
+                            exit_code = None
+                            if result is not None:
+                                exit_code = result.exit_code
+                                failure_message = redact_text(result.summary or result.redacted_stderr or result.redacted_stdout or failure_message)
+                            self.call_from_thread(
+                                self.dispatch_event,
+                                ProbeFailed(job_id=job_id, error=failure_message, exit_code=exit_code),
+                            )
+                    else:
+                        self.call_from_thread(self.dispatch_event, RefreshRequested())
                 except Exception as exc:  # pragma: no cover - safe wrapper covers UI path
                     safe_message = redact_exception_message(str(exc))
-                    self.call_from_thread(self._finalize_testing_operation, action_key, safe_message, False)
-
-            def poll_job() -> None:
-                last_seen: dict[str, str] = {}
-                while self.testing_thread is not None and self.testing_thread.is_alive():
-                    try:
-                        current_state = build_testing_screen_state(
-                            config_path=controller._paths()["config"],
-                            user_data_paths=resolve_user_data_paths(controller._paths()["config"]),
-                            selected_index=self.testing_selected_index,
-                        )
-                        rows = [asdict(row) for row in current_state.rows]
-                        total_supported = max(current_state.summary.supported_count, len(rows), 1)
-                        current_count = 0
-                        for row in rows:
-                            row_id = str(row.get("candidate_id") or "")
-                            status_icon = str(row.get("status_icon") or "")
-                            if status_icon in {"PASS", "FAIL", "SKIP", "EXP", "UNSUP", "STALE"}:
-                                current_count += 1
-                            if last_seen.get(row_id) != status_icon and status_icon not in {"PEND", ""}:
-                                last_seen[row_id] = status_icon
-                                self.call_from_thread(
-                                    self._apply_testing_event,
-                                    TestingEvent(
-                                        event_type="candidate_result",
-                                        candidate_id=row_id,
-                                        index=row.get("index") if isinstance(row.get("index"), int) else None,
-                                        label=str(row.get("label") or ""),
-                                        region_hint=str(row.get("region_hint") or "") or None,
-                                        protocol=str(row.get("protocol") or "") or None,
-                                        status=status_icon,
-                                        home_status=row.get("home_status") if isinstance(row.get("home_status"), int) else None,
-                                        query_status=row.get("query_status") if isinstance(row.get("query_status"), int) else None,
-                                        stage=str(row.get("stage") or "") or None,
-                                        markers=tuple(row.get("markers") or ()),
-                                        latency_ms=row.get("latency_ms") if isinstance(row.get("latency_ms"), int) else None,
-                                        current=current_count,
-                                        total=total_supported,
-                                        message=f"{row.get('label') or row_id} -> {status_icon}",
-                                    ),
-                                )
-                    except Exception:
-                        pass
-                    time.sleep(0.3)
+                    if action_key == "probe":
+                        self.call_from_thread(self.dispatch_event, ProbeFailed(job_id=job_id, error=safe_message))
 
             self.testing_thread = threading.Thread(target=run_job, daemon=True)
             self.testing_thread.start()
-            threading.Thread(target=poll_job, daemon=True).start()
-
-        def _finalize_testing_operation(self, action_key: str, result_message: str, succeeded: bool) -> None:
-            fresh_state = self._load_testing_state()
-            rows = [asdict(row) for row in fresh_state.rows]
-            self.testing_live_rows = rows
-            safe_message = redact_text(result_message)
-            self.testing_log_lines = [*(self.testing_log_lines or []), safe_message][-10:]
-            final_status = "completed" if succeeded else "failed"
-            self._set_testing_job_state(
-                update_testing_job_state(
-                    self.testing_job_state,
-                    status=final_status,
-                    current=sum(1 for row in rows if str(row.get("status_icon")) in {"PASS", "FAIL", "SKIP", "EXP", "UNSUP", "STALE"}),
-                    total=max(fresh_state.summary.supported_count, len(rows), 1),
-                    passed=fresh_state.summary.passed_count,
-                    failed=fresh_state.summary.failed_count,
-                    skipped=sum(1 for row in rows if str(row.get("status_icon")) == "SKIP"),
-                    message=safe_message,
-                    can_cancel=False,
-                    redacted_log_tail=list(self.testing_log_lines),
-                )
-            )
-            if self.app_state is not None and self.testing_job_state.job_id is not None:
-                event = ProbeCompleted(job_id=self.testing_job_state.job_id, message=safe_message) if succeeded else ProbeFailed(job_id=self.testing_job_state.job_id, error=safe_message)
-                self.dispatch_event(event)
-            self._safe_refresh_ui(f"{action_key} finalize")
 
         def _load_testing_state(self):
-            state = build_testing_screen_state(
+            state = build_testing_store_state(
                 config_path=controller._paths()["config"],
                 user_data_paths=resolve_user_data_paths(controller._paths()["config"]),
                 selected_index=self.testing_selected_index,
@@ -2452,21 +2365,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return state
 
         def _testing_workflow_state(self) -> dict[str, object]:
+            if self.app_state is not None:
+                return self._build_app_render_model(self.app_state).get("testing", {})
             state = self._load_testing_state()
-            testing = testing_screen_state_to_dict(state)
-            if self.testing_live_rows is not None:
-                testing["rows"] = [dict(row) for row in self.testing_live_rows]
-            if self.testing_job_state.status != "idle":
-                testing["job_state"] = self.testing_job_state.status
-                testing["progress_current"] = self.testing_job_state.current
-                testing["progress_total"] = self.testing_job_state.total
-                testing["log_lines"] = list(self.testing_log_lines or testing.get("log_lines", []))
-                summary = dict(testing.get("summary", {}))
-                summary["attempted_count"] = self.testing_job_state.current or summary.get("attempted_count", 0)
-                summary["passed_count"] = self.testing_job_state.passed
-                summary["failed_count"] = self.testing_job_state.failed
-                testing["summary"] = summary
-            return testing
+            return {
+                "summary": asdict(state.summary),
+                "rows": [asdict(row) for row in state.rows],
+            }
 
         def _run_port_check_for_route(self, route_id: str):
             entry = next((entry for entry in self.app_state.route.entries if entry.route_id == route_id), None) if self.app_state is not None else None

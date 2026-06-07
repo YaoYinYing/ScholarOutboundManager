@@ -47,6 +47,7 @@ class ConfigCenteredSummary:
     experimental_hysteria2: bool
     service_name: str
     selected_ports: list[int]
+    probe_concurrency: int
 
 
 def build_first_run_wizard_state(config_path: str | Path) -> FirstRunWizardState:
@@ -220,6 +221,10 @@ def summarize_config_centered_state(config_path: str | Path) -> ConfigCenteredSu
         service_name = str(sidecar["service_name"])
 
     route_entries = _extract_route_entries(raw)
+    probe = raw.get("probe")
+    probe_concurrency = 4
+    if isinstance(probe, dict) and isinstance(probe.get("concurrency"), int) and int(probe.get("concurrency")) > 0:
+        probe_concurrency = int(probe["concurrency"])
     selected_ports = [
         int(entry["listen_port"])
         for entry in route_entries
@@ -237,6 +242,7 @@ def summarize_config_centered_state(config_path: str | Path) -> ConfigCenteredSu
         experimental_hysteria2=experimental_hysteria2,
         service_name=service_name,
         selected_ports=selected_ports,
+        probe_concurrency=probe_concurrency,
     )
 
 

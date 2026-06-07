@@ -358,6 +358,12 @@ def load_control_plane_state(
         candidates_path=candidates_path,
         summary_output=probe_summary_path,
         passed_candidates_output=passed_candidates_path,
+        parallel_workers=(
+            parsed_config.probe.concurrency
+            if parsed_config is not None and parsed_config.probe.concurrency > 0
+            else 4
+        ),
+        keep_all_passed=True,
     )
     select_command = build_select_command(
         candidates_path=passed_candidates_path,

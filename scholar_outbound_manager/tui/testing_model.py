@@ -16,24 +16,7 @@ from scholar_outbound_manager.tui.testing_artifacts import TestingArtifacts
 from scholar_outbound_manager.tui.testing_artifacts import load_testing_artifacts
 from scholar_outbound_manager.tui.testing_jobs import TestingJobState
 from scholar_outbound_manager.tui.testing_jobs import idle_testing_job_state
-
-
-@dataclass(slots=True, frozen=True)
-class TestingSummary:
-    subscription_configured: bool
-    fetched_count: int
-    candidate_count: int
-    supported_count: int
-    unsupported_count: int
-    experimental_disabled_count: int
-    attempted_count: int
-    passed_count: int
-    failed_count: int
-    full_access_count: int
-    query_blocked_count: int
-    transport_failed_count: int
-    last_fetch_status: str | None
-    last_probe_status: str | None
+from scholar_outbound_manager.tui.testing_runtime import TestingSummary
 
 
 @dataclass(slots=True, frozen=True)
@@ -345,6 +328,11 @@ def _build_testing_summary(
     full_access_count = sum(1 for row in rows if row.stage == "full_access")
     query_blocked_count = sum(1 for row in rows if row.stage == "query_blocked")
     transport_failed_count = sum(1 for row in rows if row.stage == "transport_failed")
+    skipped_count = sum(1 for row in rows if row.status_icon == "SKIP")
+    pending_count = sum(1 for row in rows if row.status_icon == "PEND")
+    running_count = sum(1 for row in rows if row.status_icon == "RUN")
+    stale_count = sum(1 for row in rows if row.status_icon == "STALE")
+    testable_count = sum(1 for row in rows if row.supported and not row.experimental)
     return TestingSummary(
         subscription_configured=subscription_configured,
         fetched_count=candidate_count,
@@ -360,6 +348,20 @@ def _build_testing_summary(
         transport_failed_count=transport_failed_count,
         last_fetch_status="ready" if artifacts.candidates_exists else "missing",
         last_probe_status="stale" if artifacts.probe_summary_exists and not artifacts.lineage_consistent else ("ready" if artifacts.probe_summary_exists else "not_tested"),
+        total_candidates=candidate_count,
+        supported_candidates=supported_count,
+        unsupported_candidates=unsupported_count,
+        experimental_disabled=experimental_disabled_count,
+        testable_candidates=testable_count,
+        visible_rows=candidate_count,
+        attempted=attempted_count,
+        passed=passed_count,
+        failed=failed_count,
+        skipped=skipped_count,
+        pending=pending_count,
+        running=running_count,
+        stale=stale_count,
+        table_scope="all_candidates",
     )
 
 

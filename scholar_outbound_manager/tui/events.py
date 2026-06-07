@@ -176,6 +176,8 @@ class FetchFailed:
 class ProbeStarted:
     job_id: str
     total: int
+    parallel_workers: int | None = None
+    progress_mode: Literal["none", "phase_only", "live_candidate_stream"] = "phase_only"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,15 +187,26 @@ class ProbeEventReceived:
 
 
 @dataclass(frozen=True, slots=True)
-class ProbeCompleted:
+class ProbeProcessCompleted:
     job_id: str
-    message: str
+    exit_code: int
 
 
 @dataclass(frozen=True, slots=True)
 class ProbeFailed:
     job_id: str
     error: str
+    exit_code: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactLoaded:
+    state: AppState
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactLoadFailed:
+    message: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,8 +285,10 @@ BackendEvent = (
     | FetchFailed
     | ProbeStarted
     | ProbeEventReceived
-    | ProbeCompleted
+    | ProbeProcessCompleted
     | ProbeFailed
+    | ArtifactLoaded
+    | ArtifactLoadFailed
     | JobCancelled
     | PortCheckCompleted
     | ActionCompleted

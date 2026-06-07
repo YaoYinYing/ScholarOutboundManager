@@ -17,7 +17,8 @@ from scholar_outbound_manager.tui.route_model import RouteCandidateOption
 from scholar_outbound_manager.tui.route_model import RouteEntryDraft
 from scholar_outbound_manager.tui.testing_jobs import TestingJobState
 from scholar_outbound_manager.tui.testing_model import CandidateTestRow
-from scholar_outbound_manager.tui.testing_model import TestingSummary
+from scholar_outbound_manager.tui.testing_runtime import TestingRuntimeState
+from scholar_outbound_manager.tui.testing_runtime import TestingSummary
 
 
 @dataclass(slots=True)
@@ -75,6 +76,7 @@ class TestingStoreState:
     rows: tuple[CandidateTestRow, ...]
     selected_index: int
     job: TestingJobState
+    runtime: TestingRuntimeState
     summary: TestingSummary
     stale_warning: str | None
     recent_events: tuple[str, ...]

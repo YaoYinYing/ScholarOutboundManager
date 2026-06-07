@@ -11,6 +11,7 @@ from scholar_outbound_manager.tui.state import StatusBarState as _StatusBarState
 from scholar_outbound_manager.tui.state import TestingArtifactsState as _TestingArtifactsState
 from scholar_outbound_manager.tui.state import TestingStoreState as _TestingStoreState
 from scholar_outbound_manager.tui.testing_jobs import idle_testing_job_state
+from scholar_outbound_manager.tui.testing_runtime import idle_testing_runtime
 from scholar_outbound_manager.tui.testing_model import TestingSummary as _TestingSummary
 
 
@@ -26,7 +27,8 @@ def test_app_state_holds_single_runtime_shape(tmp_path: Path) -> None:
             rows=(),
             selected_index=0,
             job=idle_testing_job_state(),
-            summary=_TestingSummary(True, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "missing", "not_tested"),
+            runtime=idle_testing_runtime(),
+            summary=_TestingSummary(True, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "missing", "not_tested", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "all_candidates"),
             stale_warning=None,
             recent_events=(),
         ),

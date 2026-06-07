@@ -15,6 +15,8 @@ from scholar_outbound_manager.tui.events import ActionCompleted
 from scholar_outbound_manager.tui.events import ActionFailed
 from scholar_outbound_manager.tui.events import AppEvent
 from scholar_outbound_manager.tui.events import AppStateReloaded
+from scholar_outbound_manager.tui.events import ArtifactLoaded
+from scholar_outbound_manager.tui.events import ArtifactLoadFailed
 from scholar_outbound_manager.tui.events import ArtifactRefresh
 from scholar_outbound_manager.tui.events import EffectFailed
 from scholar_outbound_manager.tui.events import HelpRequested
@@ -22,7 +24,7 @@ from scholar_outbound_manager.tui.events import ModalCancel
 from scholar_outbound_manager.tui.events import ModalConfirm
 from scholar_outbound_manager.tui.events import Navigate
 from scholar_outbound_manager.tui.events import PortCheckCompleted
-from scholar_outbound_manager.tui.events import ProbeCompleted
+from scholar_outbound_manager.tui.events import ProbeProcessCompleted
 from scholar_outbound_manager.tui.events import ProbeEventReceived
 from scholar_outbound_manager.tui.events import ProbeFailed
 from scholar_outbound_manager.tui.events import ProbeStarted
@@ -44,6 +46,7 @@ from scholar_outbound_manager.tui.state import NavState
 from scholar_outbound_manager.tui.state import StatusBarState
 from scholar_outbound_manager.tui.testing_jobs import update_testing_job_state
 from scholar_outbound_manager.tui.testing_store import apply_testing_event
+from scholar_outbound_manager.tui.testing_store import build_testing_store_state
 
 
 def reduce_app_state(state: AppState, event: AppEvent) -> tuple[AppState, tuple[Effect, ...]]:
@@ -99,36 +102,112 @@ def reduce_app_state(state: AppState, event: AppEvent) -> tuple[AppState, tuple[
             state.testing.job,
             status="probing",
             current=0,
-            total=max(state.testing.summary.supported_count, len(state.testing.rows), 1),
+            total=max(state.testing.summary.testable_candidates, 1),
             passed=0,
             failed=0,
             skipped=0,
-            message="Probe started.",
+            message="Running probe. Live per-candidate progress is not available for this backend yet.",
             can_cancel=True,
         )
         return (
             replace(
                 state,
-                testing=replace(state.testing, job=job),
-                status_bar=_context_status(state, message="Probe started.", level="info"),
+                testing=replace(
+                    state.testing,
+                    job=job,
+                    runtime=replace(
+                        state.testing.runtime,
+                        phase="probing",
+                        progress_mode="phase_only",
+                        current=0,
+                        total=max(state.testing.summary.testable_candidates, 1),
+                        process_exit_code=None,
+                        process_completed=False,
+                        artifacts_loaded=False,
+                        completion_message=None,
+                        warning_message=None,
+                        failure_message=None,
+                    ),
+                ),
+                status_bar=_context_status(state, message="Testing nodes...", level="info"),
             ),
             (CreateSnapshot(reason="testing_probe"), RunProbe()),
         )
     if isinstance(event, ProbeStarted):
-        job = update_testing_job_state(state.testing.job, status="probing", total=event.total, message="Probe started.", can_cancel=True)
-        return replace(state, testing=replace(state.testing, job=job)), ()
+        job = update_testing_job_state(
+            state.testing.job,
+            status="probing",
+            total=event.total,
+            message="Testing nodes...",
+            can_cancel=True,
+        )
+        return replace(
+            state,
+            testing=replace(
+                state.testing,
+                job=job,
+                runtime=replace(
+                    state.testing.runtime,
+                    phase="probing",
+                    progress_mode=event.progress_mode,
+                    total=event.total,
+                    parallel_workers=event.parallel_workers,
+                ),
+            ),
+        ), ()
     if isinstance(event, ProbeEventReceived):
         testing = apply_testing_event(state.testing, event.event)
         return replace(state, testing=testing), ()
-    if isinstance(event, ProbeCompleted):
-        job = update_testing_job_state(state.testing.job, status="completed", message=event.message, can_cancel=False)
-        return replace(state, testing=replace(state.testing, job=job), status_bar=_context_status(state, message=event.message, level="success")), (LoadArtifacts(reason="probe_completed"),)
+    if isinstance(event, ProbeProcessCompleted):
+        job = update_testing_job_state(
+            state.testing.job,
+            status="finalizing",
+            message="Probe process exited; loading artifacts...",
+            can_cancel=False,
+        )
+        return replace(
+            state,
+            testing=replace(
+                state.testing,
+                job=job,
+                runtime=replace(
+                    state.testing.runtime,
+                    phase="finalizing",
+                    process_completed=True,
+                    process_exit_code=event.exit_code,
+                    completion_message=None,
+                    warning_message=None,
+                    failure_message=None,
+                ),
+            ),
+            status_bar=_context_status(state, message="Probe process exited; loading artifacts...", level="info"),
+        ), (LoadArtifacts(reason="probe_process_completed"),)
     if isinstance(event, ProbeFailed):
         job = update_testing_job_state(state.testing.job, status="failed", message=event.error, can_cancel=False)
-        return replace(state, testing=replace(state.testing, job=job), status_bar=_context_status(state, message=event.error, level="error")), ()
+        return replace(
+            state,
+            testing=replace(
+                state.testing,
+                job=job,
+                runtime=replace(
+                    state.testing.runtime,
+                    phase="failed",
+                    process_completed=True,
+                    process_exit_code=event.exit_code,
+                    failure_message=event.error,
+                    completion_message=None,
+                    warning_message=None,
+                ),
+            ),
+            status_bar=_context_status(state, message=event.error, level="error"),
+        ), ()
     if isinstance(event, TestingStopRequested):
         job = update_testing_job_state(state.testing.job, status="cancelling", message="Cancelling Testing job...", can_cancel=False)
-        return replace(state, testing=replace(state.testing, job=job), status_bar=_context_status(state, message=job.message, level="warning")), ()
+        return replace(
+            state,
+            testing=replace(state.testing, job=job, runtime=replace(state.testing.runtime, phase="cancelled", warning_message="Testing job was cancelled.")),
+            status_bar=_context_status(state, message=job.message, level="warning"),
+        ), ()
     if isinstance(event, TestingMoveCursor):
         next_index = 0
         if state.testing.rows:
@@ -217,3 +296,45 @@ def reduce_app_state(state: AppState, event: AppEvent) -> tuple[AppState, tuple[
 
 def _context_status(state: AppState, *, message: str | None, level: str | None = None) -> StatusBarState:
     return StatusBarState(message=message, level=level, keys=state.status_bar.keys)
+    if isinstance(event, ArtifactLoaded):
+        loaded = event.state
+        testing = build_testing_store_state(
+            config_path=str(loaded.config_path),
+            user_data_paths=loaded.user_data_paths,
+            selected_index=state.testing.selected_index,
+            previous_runtime=state.testing.runtime,
+            recent_events=state.testing.recent_events,
+        )
+        job_status = testing.runtime.phase if testing.runtime.phase not in {"catalog_ready", "idle"} else "idle"
+        loaded_job = update_testing_job_state(
+            testing.job,
+            status=job_status,
+            current=testing.summary.attempted,
+            total=max(testing.summary.testable_candidates, 1),
+            passed=testing.summary.passed,
+            failed=testing.summary.failed,
+            skipped=testing.summary.skipped,
+            message=testing.runtime.completion_message or testing.runtime.warning_message or testing.runtime.failure_message or testing.job.message,
+            can_cancel=False,
+        )
+        return replace(
+            loaded,
+            nav=state.nav,
+            modal=state.modal,
+            status_bar=_context_status(
+                state,
+                message=testing.runtime.completion_message or testing.runtime.warning_message or state.status_bar.message,
+                level="success" if testing.runtime.phase == "completed" else ("warning" if testing.runtime.phase in {"warning", "stale"} else state.status_bar.level),
+            ),
+            testing=replace(testing, job=loaded_job),
+        ), ()
+    if isinstance(event, ArtifactLoadFailed):
+        return replace(
+            state,
+            testing=replace(
+                state.testing,
+                runtime=replace(state.testing.runtime, phase="warning", warning_message=event.message),
+                stale_warning=event.message,
+            ),
+            status_bar=_context_status(state, message=event.message, level="warning"),
+        ), ()

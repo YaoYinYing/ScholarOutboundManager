@@ -17,7 +17,7 @@ from scholar_outbound_manager.tui.effects import RunProbe
 from scholar_outbound_manager.tui.effects import SaveRouteDraft
 from scholar_outbound_manager.tui.events import ActionCompleted
 from scholar_outbound_manager.tui.events import AppEvent
-from scholar_outbound_manager.tui.events import AppStateReloaded
+from scholar_outbound_manager.tui.events import ArtifactLoaded
 from scholar_outbound_manager.tui.events import EffectFailed
 from scholar_outbound_manager.tui.events import PortCheckCompleted
 from scholar_outbound_manager.tui.view_model import redact_text
@@ -87,7 +87,7 @@ class EffectRunner:
 
     def _handle_load_artifacts(self, effect: object) -> list[AppEvent]:
         assert isinstance(effect, LoadArtifacts)
-        return [AppStateReloaded(state=self._backend.reload_app_state())]
+        return [ArtifactLoaded(state=self._backend.reload_app_state())]
 
     def _handle_run_action(self, effect: object) -> list[AppEvent]:
         assert isinstance(effect, RunAction)
