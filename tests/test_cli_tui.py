@@ -6,8 +6,6 @@ import builtins
 from pathlib import Path
 
 from scholar_outbound_manager import cli
-from scholar_outbound_manager.tui import app as tui_app
-from scholar_outbound_manager.tui.config_centered import write_config_template
 
 
 def test_cli_tui_missing_textual_gives_install_hint(capsys, monkeypatch) -> None:
@@ -42,21 +40,41 @@ def test_cli_tui_accepts_custom_positional_config() -> None:
     assert args.config == "/tmp/custom.yaml"
 
 
-def test_tui_template_writer_includes_subscription_and_user_data_dir(tmp_path: Path) -> None:
+def test_tui_app_build_parser() -> None:
+    from scholar_outbound_manager.tui.app import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args([])
+    assert args.config == "config.yaml"
+
+    args = parser.parse_args(["custom.yaml"])
+    assert args.config == "custom.yaml"
+
+
+def test_services_snapshot_loads_without_textual(tmp_path: Path) -> None:
+    """SessionServices.snapshot() works without Textual installed."""
+    import yaml
+    from scholar_outbound_manager.tui.services import SessionServices
+
     config_path = tmp_path / "config.yaml"
-    write_config_template(config_path)
+    config_path.write_text(
+        yaml.dump({
+            "user_data_dir": str(tmp_path / "state_data"),
+            "subscriptions": [{"name": "test", "url": "https://example.invalid/sub", "format": "auto", "enabled": True, "headers": {}}],
+            "filters": {"include_keywords": [], "exclude_keywords": [], "deprioritize_keywords": []},
+            "probe": {"timeout_seconds": 15, "concurrency": 1, "cache_ttl_hours": 24, "failure_backoff_hours": 48, "allow_network_probe": False},
+            "xray": {"binary_path": "/fake/xray", "runtime_dir": ".runtime", "local_socks_host": "127.0.0.1", "local_socks_port": 0},
+            "output": {"outbounds_path": "generated/o.json", "routes_path": "generated/r.json", "manifest_path": "generated/m.json", "history_dir": "state_data/history"},
+            "generation": {"tag_prefix": "test-", "max_passed_nodes": 3, "fallback_blackhole_tag": "test-blackhole", "previous_output_max_age_hours": 168},
+            "routing": {"mode": "dedicated_inbound", "inbound_tags": ["test-in"], "fail_closed": True},
+        }),
+        encoding="utf-8",
+    )
 
-    rendered = config_path.read_text(encoding="utf-8")
-    assert "subscription:" in rendered
-    assert "url: ''" in rendered or 'url: ""' in rendered
-    assert "user_data_dir: state_data" in rendered
+    services = SessionServices(config_path)
+    state = services.snapshot()
 
-
-def test_load_workflow_state_uses_config_centered_tabs_and_first_run_state(tmp_path: Path) -> None:
-    config_path = tmp_path / "missing.yaml"
-
-    state = tui_app.load_workflow_state(config_path=str(config_path))
-
-    assert state["tabs"] == ["Home", "Settings", "Testing", "Route", "Logs"]
-    assert state["wizard"]["active"] is True
-    assert state["wizard"]["steps"] == ["Config path", "Subscription", "User data dir", "Runtime", "Save"]
+    assert state.config_loaded is True
+    assert state.config_valid is True
+    assert state.subscription_url_configured is True
+    assert state.subscription_url_masked != ""

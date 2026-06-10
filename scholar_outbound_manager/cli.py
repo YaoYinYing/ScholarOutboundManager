@@ -1473,24 +1473,7 @@ def _handle_tui(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    tui_argv = [args.config, "--strategy", args.strategy, "--prefer-geo" if args.prefer_geo else "--no-prefer-geo"]
-    optional_pairs = (
-        ("--candidates", args.candidates),
-        ("--probe-summary", args.probe_summary),
-        ("--passed-candidates", args.passed_candidates),
-        ("--selected-candidate", args.selected_candidate),
-        ("--pool-plan", args.pool_plan),
-        ("--session", args.session),
-        ("--output", args.output),
-        ("--geo-cache", args.geo_cache),
-        ("--host-geo", args.host_geo),
-    )
-    for flag, value in optional_pairs:
-        if value:
-            tui_argv.extend([flag, value])
-    if args.preferred_region_hint:
-        tui_argv.extend(["--preferred-region-hint", args.preferred_region_hint])
-    return int(tui_main(tui_argv))
+    return int(tui_main([args.config]))
 
 
 def _handle_web_serve(args: argparse.Namespace) -> int:
